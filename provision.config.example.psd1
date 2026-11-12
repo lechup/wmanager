@@ -1,34 +1,34 @@
-﻿# Konfiguracja wmanager. Skopiuj jako provision.config.psd1 i uzupełnij.
-# Prawdziwy plik (z tokenami) NIE trafia do repo, leży obok skryptu na pendrivie lub udziale.
+﻿# wmanager configuration. Copy to provision.config.psd1 and fill it in.
+# The real file (with tokens) does NOT go into the repo; it sits next to the script on the USB drive or share.
 @{
-    # --- Lista paczek -------------------------------------------------------
-    # Źródła choco-reqs.txt sprawdzane po kolei; pierwsze dostępne wygrywa.
-    # Ścieżka względna liczy się od folderu, w którym leży skrypt.
+    # --- Package list -------------------------------------------------------
+    # Sources of choco-reqs.txt, checked in order; the first available one wins.
+    # A relative path is resolved from the script's folder.
     ReqsSources = @(
         # 'https://raw.githubusercontent.com/lechup/wmanager/main/choco-reqs.txt'
-        # '\\serwer\udzial\wmanager\choco-reqs.txt'
+        # '\\server\share\wmanager\choco-reqs.txt'
         'choco-reqs.txt'
     )
 
     # --- Chocolatey -----------------------------------------------------------
     ChocolateyInstallUrl = 'https://community.chocolatey.org/install.ps1'
 
-    # Priority: 1 = sprawdzane pierwsze, 2 = drugie..., 0 = bez priorytetu (na końcu).
+    # Priority: 1 = checked first, 2 = second..., 0 = no priority (checked last).
     ChocolateySources = @(
         @{ Name = 'chocolatey'; Url = 'https://community.chocolatey.org/api/v2/'; Priority = 0; Enabled = $true }
-        # Własne repo na później:
-        # @{ Name = 'firma'; Url = 'https://nexus.example.pl/repository/choco/'; Priority = 1; Enabled = $true; User = ''; Password = '' }
+        # Your own repository, for later:
+        # @{ Name = 'company'; Url = 'https://nexus.example.com/repository/choco/'; Priority = 1; Enabled = $true; User = ''; Password = '' }
     )
 
-    # --- Cotygodniowa aktualizacja -------------------------------------------
-    UpdateDays = @('Monday')       # Monday, Tuesday, ... (można kilka)
-    UpdateTime = '12:00'           # HH:mm, czas lokalny
+    # --- Weekly update -------------------------------------------------------
+    UpdateDays = @('Monday')       # Monday, Tuesday, ... (several allowed)
+    UpdateTime = '12:00'           # HH:mm, local time
 
-    # Pomijaj paczkę, której program właśnie działa; spróbuj przy następnym logowaniu.
+    # Skip a package whose program is running right now; retry at the next sign-in.
     SkipRunningPackages = $true
 
-    # Procesy, po których rozpoznajemy, że program z paczki działa.
-    # Paczki spoza tej mapy: sprawdzana jest nazwa procesu równa nazwie paczki.
+    # Processes that show a package's program is running.
+    # Packages not in this map: a process named like the package is checked.
     RunningProcessMap = @{
         'googlechrome'      = @('chrome')
         'libreoffice-fresh' = @('soffice', 'soffice.bin')
@@ -41,25 +41,25 @@
         'firefox'           = @('firefox')
     }
 
-    # Uruchamiaj debloat i ustawienia prywatności także co tydzień
-    # (duże aktualizacje Windows potrafią przywrócić aplikacje).
+    # Also run debloat and the privacy settings every week
+    # (major Windows updates can bring apps back).
     RerunDebloatWeekly = $true
 
     # --- Debloat ---------------------------------------------------------------
     Debloat = @{
-        RemoveApps = $true    # usuwanie pakietów z listy RemoveAppx
-        OneDrive   = $true    # odinstalowanie i blokada OneDrive
-        Policies   = $true    # zasady: Teams, Copilot, Recall, Widgets, Cortana, Phone Link, Game Bar
-        Edge       = $true    # wyciszenie Edge (pasek boczny, zakupy, Startup Boost)
+        RemoveApps = $true    # remove the packages listed in RemoveAppx
+        OneDrive   = $true    # uninstall and block OneDrive
+        Policies   = $true    # policies: Teams, Copilot, Recall, Widgets, Cortana, Phone Link, Game Bar
+        Edge       = $true    # tone down Edge (sidebar, shopping, Startup Boost)
     }
-    Privacy = $true           # telemetria, reklamy, sugestie, Bing w wyszukiwarce
+    Privacy = $true           # telemetry, ads, suggestions, Bing in search
 
-    # Pakiety Appx do usunięcia (wzorce -like). Dopisz/usuń według potrzeb.
+    # Appx packages to remove (-like patterns). Add or remove as needed.
     RemoveAppx = @(
         # Teams
         'MSTeams'
         'MicrosoftTeams'
-        # Copilot i Microsoft 365
+        # Copilot and Microsoft 365
         'Microsoft.Copilot'
         'Microsoft.Windows.Ai.Copilot.Provider'
         'Microsoft.MicrosoftOfficeHub'
@@ -68,7 +68,7 @@
         'Microsoft.BingNews'
         'Microsoft.BingWeather'
         'Microsoft.BingSearch'
-        # Xbox i gry
+        # Xbox and games
         'Microsoft.GamingApp'
         'Microsoft.XboxApp'
         'Microsoft.Xbox.TCUI'
@@ -77,44 +77,44 @@
         'Microsoft.XboxIdentityProvider'
         'Microsoft.XboxSpeechToTextOverlay'
         'Microsoft.MicrosoftSolitaireCollection'
-        # Pozostałe
+        # Other
         'Clipchamp.Clipchamp'
         'Microsoft.YourPhone'
         'Microsoft.549981C3F5F10'                     # Cortana
         'Microsoft.OutlookForWindows'
-        'microsoft.windowscommunicationsapps'         # Poczta i Kalendarz
+        'microsoft.windowscommunicationsapps'         # Mail and Calendar
         'Microsoft.Todos'
         'MicrosoftCorporationII.MicrosoftFamily'
         'Microsoft.WindowsFeedbackHub'
         'Microsoft.GetHelp'
-        'Microsoft.Getstarted'                        # Wskazówki
+        'Microsoft.Getstarted'                        # Tips
         'Microsoft.PowerAutomateDesktop'
         'Microsoft.WindowsMaps'
         'Microsoft.Windows.DevHome'
-        'MicrosoftCorporationII.QuickAssist'          # Pomoc zdalna
+        'MicrosoftCorporationII.QuickAssist'          # Quick Assist
     )
 
-    # --- Domyślna przeglądarka -------------------------------------------------
+    # --- Default browser -------------------------------------------------------
     DefaultBrowser = @{
         Package = 'googlechrome'
         Name    = 'Google Chrome'
         ProgId  = 'ChromeHTML'
     }
 
-    # --- Nazwa komputera ---------------------------------------------------------
-    # Pytaj o nazwę, gdy nie podano -ComputerName (Enter = bez zmian).
+    # --- Computer name -----------------------------------------------------------
+    # Ask for the name when -ComputerName is not given (Enter = keep current).
     PromptComputerName = $true
 
-    # --- Logi i monitoring ----------------------------------------------------
+    # --- Logs and monitoring --------------------------------------------------
     LogRetentionDays = 90
 
-    # Grafana Cloud Loki (push HTTP). Puste = nie wysyłaj.
-    LokiUrl   = ''   # np. https://logs-prod-012.grafana.net
-    LokiUser  = ''   # numeryczny User z Grafana Cloud
-    LokiToken = ''   # token z uprawnieniem tylko logs:write
+    # Grafana Cloud Loki (HTTP push). Empty = don't send.
+    LokiUrl   = ''   # e.g. https://logs-prod-012.grafana.net
+    LokiUser  = ''   # numeric User from Grafana Cloud
+    LokiToken = ''   # token with the logs:write scope only
 
-    # Healthchecks.io. Pusty klucz = nie pinguj.
+    # Healthchecks.io. Empty key = don't ping.
     HealthchecksBaseUrl    = 'https://hc-ping.com'
     HealthchecksPingKey    = ''
-    HealthchecksSlugPrefix = ''   # np. 'wm-' -> check "wm-biuro-01"
+    HealthchecksSlugPrefix = ''   # e.g. 'wm-' -> check "wm-office-01"
 }

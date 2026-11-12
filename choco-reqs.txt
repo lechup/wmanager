@@ -1,17 +1,17 @@
-# Lista paczek Chocolatey dla wmanager
+# Chocolatey package list for wmanager
 #
-# Format (jedna paczka na linię):
-#   nazwa                     najnowsza wersja, aktualizowana co tydzień
-#   nazwa@latest              to samo, zapisane jawnie
-#   nazwa@1.2.3               przypięta wersja: instalowana dokładnie ta, bez aktualizacji
-#   nazwa !noupdate           instaluj najnowszą, ale nie aktualizuj (program aktualizuje się sam)
-#   nazwa | --params "/X"     dodatkowe parametry dla choco install/upgrade
-# Komentarz zaczyna się od # (na początku linii albo po spacji).
+# Format (one package per line):
+#   name                      latest version, updated weekly
+#   name@latest               same thing, written explicitly
+#   name@1.2.3                pinned version: installs exactly this one, never updated
+#   name !noupdate            installs the latest but doesn't update it (the program updates itself)
+#   name | --params "/X"      extra parameters for choco install/upgrade
+# A comment starts with # (at the start of a line or after a space).
 
-# Przeglądarka (domyślna); Chrome aktualizuje się sam
+# Browser (default); Chrome updates itself
 googlechrome !noupdate
 
-# Biuro
+# Office
 libreoffice-fresh
 sumatrapdf
 7zip
@@ -19,8 +19,8 @@ sumatrapdf
 # Multimedia
 vlc
 
-# Zdalna pomoc (zamiast usuniętej Pomocy zdalnej)
+# Remote support (replaces the removed Quick Assist)
 rustdesk
 
-# Narzędzia
+# Tools
 notepadplusplus

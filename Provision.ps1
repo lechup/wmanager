@@ -1,24 +1,24 @@
 ﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    wmanager: provisioning Windows 11 do pracy biurowej.
+    wmanager: Windows 11 provisioning for office work.
 
 .DESCRIPTION
-    Usuwa bloatware i usługi Microsoftu, wyłącza telemetrię i reklamy, instaluje Chocolatey
-    i paczki z choco-reqs.txt, rejestruje cotygodniową aktualizację. Można uruchamiać
-    wielokrotnie: kolejny przebieg doprowadza komputer do stanu z konfiguracji.
+    Removes Microsoft bloatware and services, turns off telemetry and ads, installs Chocolatey
+    and the packages from choco-reqs.txt, and registers a weekly update. Safe to run
+    repeatedly: every run brings the computer to the state defined in the configuration.
 
 .PARAMETER ComputerName
-    Nowa nazwa komputera. Bez parametru skrypt pyta (Enter = bez zmian);
-    bez konsoli pytanie jest pomijane i nazwa zostaje.
+    New computer name. Without it the script asks (Enter = keep current);
+    without a console the question is skipped and the name stays.
 
 .PARAMETER ConfigPath
-    Ścieżka do pliku konfiguracji. Domyślnie provision.config.psd1 obok skryptu.
+    Path to the configuration file. Defaults to provision.config.psd1 next to the script.
 
 .EXAMPLE
     .\Provision.ps1
 .EXAMPLE
-    .\Provision.ps1 -ComputerName BIURO-03
+    .\Provision.ps1 -ComputerName OFFICE-03
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +36,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Task.ps1')
 
 # ---------------------------------------------------------------------------
-# Kroki pomocnicze
+# Helper steps
 # ---------------------------------------------------------------------------
 
 function Test-WmInteractive {
@@ -48,7 +48,7 @@ function Test-WmInteractive {
 
 function Test-WmComputerName {
     param([string]$Name)
-    # NetBIOS: 1-15 znaków, litery/cyfry/myślnik, nie same cyfry, bez myślnika na początku i końcu
+    # NetBIOS: 1-15 characters, letters/digits/hyphen, not all digits, no hyphen at the start or end
     return ($Name -match '^(?![0-9]+$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?$')
 }
 
@@ -73,11 +73,11 @@ function Resolve-WmComputerName {
 function New-WmRestorePoint {
     try {
         Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
-        # Windows pozwala na jeden punkt na 24 h; na czas provisioningu znosimy limit
+        # Windows allows one restore point per 24 h; lift the limit for the duration of provisioning
         $sr = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
         $old = (Get-ItemProperty -LiteralPath $sr -Name 'SystemRestorePointCreationFrequency' -ErrorAction SilentlyContinue).SystemRestorePointCreationFrequency
         Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' 0 | Out-Null
-        Checkpoint-Computer -Description 'wmanager: przed provisioningiem' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+        Checkpoint-Computer -Description 'wmanager: before provisioning' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
         if ($null -eq $old) { Remove-WmRegValue $sr 'SystemRestorePointCreationFrequency' } else { Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' $old | Out-Null }
         Write-WmLog 'Utworzono punkt przywracania systemu.'
     } catch {
@@ -105,7 +105,7 @@ function Install-WmFiles {
 
 function Write-WmPublicState {
     param([hashtable]$Config)
-    # Ustawienia bez sekretów, czytelne dla Notify-User.ps1 (konto użytkownika nie czyta konfiguracji)
+    # Settings without secrets, readable by Notify-User.ps1 (the user account can't read the configuration)
     $b = Get-WmSetting $Config 'DefaultBrowser' @{}
     $json = '{"DefaultBrowserProgId":' + (ConvertTo-WmJsonString ([string]$b.ProgId)) +
             ',"DefaultBrowserName":' + (ConvertTo-WmJsonString ([string]$b.Name)) + '}'

@@ -1,2 +1,2 @@
-# Prawdziwa konfiguracja zawiera tokeny Loki i klucz Healthchecks
+# The real config holds the Loki token and the Healthchecks key
 provision.config.psd1

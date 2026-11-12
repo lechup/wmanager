@@ -1,5 +1,5 @@
-﻿# Cotygodniowa aktualizacja paczek (zadanie wmanager-Update, konto SYSTEM).
-# Z -OnlyIfPending (zadanie wmanager-Retry przy logowaniu): działa tylko, gdy coś odłożono.
+﻿# Weekly package update (wmanager-Update task, SYSTEM account).
+# With -OnlyIfPending (wmanager-Retry task at sign-in): runs only when something was deferred.
 [CmdletBinding()]
 param([switch]$OnlyIfPending)
 

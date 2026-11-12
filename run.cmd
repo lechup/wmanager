@@ -1,6 +1,6 @@
 @echo off
-rem Uruchamia Provision.ps1 jako administrator. Parametry przekazuje dalej,
-rem np.:  run.cmd -ComputerName BIURO-01
+rem Runs Provision.ps1 as administrator and passes parameters through,
+rem e.g.:  run.cmd -ComputerName OFFICE-01
 setlocal
 
 net session >nul 2>&1

@@ -1,4 +1,4 @@
-﻿# Testy parsera choco-reqs.txt. Uruchomienie (Pester 5):
+﻿# Tests for the choco-reqs.txt parser. To run (Pester 5):
 #   Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser
 #   Invoke-Pester .\tests
 
@@ -9,7 +9,7 @@ BeforeAll {
 }
 
 Describe 'ConvertFrom-WmRequirements' {
-    It 'czyta nazwę bez wersji jako najnowszą' {
+    It 'reads a name without a version as latest' {
         $r = ConvertFrom-WmRequirements -Text 'googlechrome'
         $r.Count | Should -Be 1
         $r[0].Name | Should -Be 'googlechrome'
@@ -18,55 +18,55 @@ Describe 'ConvertFrom-WmRequirements' {
         $r[0].NoUpdate | Should -BeFalse
     }
 
-    It 'traktuje @latest jak brak wersji' {
+    It 'treats @latest as no version' {
         $r = ConvertFrom-WmRequirements -Text 'libreoffice-fresh@latest'
         $r[0].Version | Should -BeNullOrEmpty
         $r[0].Pinned | Should -BeFalse
     }
 
-    It 'przypina wersję podaną po @' {
+    It 'pins the version given after @' {
         $r = ConvertFrom-WmRequirements -Text '7zip@24.8.0'
         $r[0].Name | Should -Be '7zip'
         $r[0].Version | Should -Be '24.8.0'
         $r[0].Pinned | Should -BeTrue
     }
 
-    It 'rozpoznaje !noupdate' {
+    It 'recognizes !noupdate' {
         $r = ConvertFrom-WmRequirements -Text 'firefox !noupdate'
         $r[0].NoUpdate | Should -BeTrue
     }
 
-    It 'pomija komentarze i puste linie' {
-        $text = "# nagłówek`r`n`r`nvlc   # odtwarzacz`n  `n7zip"
+    It 'skips comments and empty lines' {
+        $text = "# header`r`n`r`nvlc   # player`n  `n7zip"
         $r = ConvertFrom-WmRequirements -Text $text
         $r.Count | Should -Be 2
         $r[0].Name | Should -Be 'vlc'
         $r[1].Name | Should -Be '7zip'
     }
 
-    It 'przekazuje parametry po znaku | bez zewnętrznych cudzysłowów' {
+    It 'passes parameters after | without the outer quotes' {
         $r = ConvertFrom-WmRequirements -Text 'vlc | --params "/NoDesktopShortcut /Language:pl"'
         $r[0].ExtraArgs | Should -Be @('--params', '/NoDesktopShortcut /Language:pl')
     }
 
-    It 'zwraca pustą listę dla pustego pliku' {
+    It 'returns an empty list for an empty file' {
         $r = ConvertFrom-WmRequirements -Text "# tylko komentarz`n"
         $r.Count | Should -Be 0
     }
 
-    It 'odrzuca nieznaną opcję' {
+    It 'rejects an unknown option' {
         { ConvertFrom-WmRequirements -Text 'vlc !cos' } | Should -Throw
     }
 
-    It 'odrzuca zduplikowaną paczkę' {
+    It 'rejects a duplicate package' {
         { ConvertFrom-WmRequirements -Text "vlc`nVLC@3.0.21" } | Should -Throw
     }
 
-    It 'odrzuca niepoprawną wersję' {
+    It 'rejects an invalid version' {
         { ConvertFrom-WmRequirements -Text 'vlc@abc' } | Should -Throw
     }
 
-    It 'czyta dołączony choco-reqs.txt bez błędów' {
+    It 'reads the bundled choco-reqs.txt without errors' {
         $text = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'choco-reqs.txt') -Raw -Encoding UTF8
         $r = ConvertFrom-WmRequirements -Text $text
         $r.Count | Should -BeGreaterThan 0
@@ -75,7 +75,7 @@ Describe 'ConvertFrom-WmRequirements' {
 }
 
 Describe 'ConvertTo-WmJsonString' {
-    It 'escapuje cudzysłowy, backslash i nowe linie' {
+    It 'escapes quotes, backslashes and newlines' {
         ConvertTo-WmJsonString ('a"b\c' + "`n") | Should -Be '"a\"b\\c\n"'
     }
 }

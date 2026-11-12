@@ -1,4 +1,4 @@
-﻿# Debloat: usuwanie aplikacji, OneDrive, zasady blokujące ich powrót, wyciszenie Edge.
+﻿# Debloat: app removal, OneDrive, policies that keep them from coming back, toning down Edge.
 
 function Remove-WmAppxPackages {
     param([string[]]$Patterns)
@@ -28,7 +28,7 @@ function Remove-WmAppxPackages {
     }
 }
 
-# Zwraca listę profili, w których Pulpit/Dokumenty/Obrazy wskazują na OneDrive.
+# Returns the profiles whose Desktop/Documents/Pictures point to OneDrive.
 function Get-WmOneDriveRedirectedProfiles {
     $script:WmOdRedirected = @()
     Invoke-WmForEachUserHive {
@@ -57,14 +57,14 @@ function Remove-WmOneDrive {
 
     Get-Process -Name 'OneDrive' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-    # Instalacja systemowa
+    # System-wide installation
     foreach ($setup in @("$env:SystemRoot\System32\OneDriveSetup.exe", "$env:SystemRoot\SysWOW64\OneDriveSetup.exe")) {
         if (Test-Path -LiteralPath $setup) {
             $p = Start-Process -FilePath $setup -ArgumentList '/uninstall' -Wait -PassThru -WindowStyle Hidden
             Write-WmLog "OneDriveSetup /uninstall ($setup) zakończony kodem $($p.ExitCode)"
         }
     }
-    # Instalacja per-machine (Program Files)
+    # Per-machine installation (Program Files)
     foreach ($base in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
         Get-ChildItem -LiteralPath $base -ErrorAction SilentlyContinue | ForEach-Object {
             $u = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
@@ -79,14 +79,14 @@ function Remove-WmOneDrive {
         }
     }
 
-    # Instalacje per-user: usuń autostart i instalator z profili (zasada niżej blokuje synchronizację)
+    # Per-user installations: remove the autostart entry and installer from profiles (the policy below blocks sync)
     Invoke-WmForEachUserHive {
         param($root, $name)
         Remove-WmRegValue -Path "$root\Software\Microsoft\Windows\CurrentVersion\Run" -Name 'OneDrive'
         Remove-WmRegValue -Path "$root\Software\Microsoft\Windows\CurrentVersion\Run" -Name 'OneDriveSetup'
     }
 
-    # Blokada synchronizacji i ukrycie w Eksploratorze
+    # Block sync and hide it in Explorer
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive' 'DisableFileSyncNGSC' 1 | Out-Null
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive' 'DisableFileSync' 1 | Out-Null
     foreach ($clsid in @('HKLM:\SOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}',
@@ -97,9 +97,9 @@ function Remove-WmOneDrive {
 }
 
 function Set-WmDebloatPolicies {
-    # Teams: czat systemowy i automatyczna instalacja
+    # Teams: built-in chat and automatic installation
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Chat' 'ChatIcon' 3 | Out-Null
-    # Ten klucz bywa chroniony przez TrustedInstaller; brak dostępu nie jest błędem krytycznym
+    # This key is sometimes protected by TrustedInstaller; access denied is not a critical error
     try {
         $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications'
         if (-not (Test-Path -LiteralPath $k)) { New-Item -Path $k -Force -ErrorAction Stop | Out-Null }
@@ -108,7 +108,7 @@ function Set-WmDebloatPolicies {
         Write-WmLog 'Brak dostępu do ConfigureChatAutoInstall (chroniony klucz), pomijam.'
     }
 
-    # Copilot i Recall
+    # Copilot and Recall
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 | Out-Null
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis' 1 | Out-Null
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' 'AllowRecallEnablement' 0 | Out-Null
@@ -122,19 +122,19 @@ function Set-WmDebloatPolicies {
     # Phone Link
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' 'EnableMmx' 0 | Out-Null
 
-    # Game Bar / nagrywanie gier
+    # Game Bar / game recording
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR' 'AllowGameDVR' 0 | Out-Null
 
-    # Ustawienia per użytkownik (wszystkie profile + profil domyślny)
+    # Per-user settings (all profiles + the default profile)
     Invoke-WmForEachUserHive {
         param($root, $name)
         Set-WmRegValue "$root\Software\Policies\Microsoft\Windows\WindowsCopilot" 'TurnOffWindowsCopilot' 1 | Out-Null
         Set-WmRegValue "$root\Software\Microsoft\Windows\CurrentVersion\GameDVR" 'AppCaptureEnabled' 0 | Out-Null
         Set-WmRegValue "$root\System\GameConfigStore" 'GameDVR_Enabled' 0 | Out-Null
         $adv = "$root\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        Set-WmRegValue $adv 'TaskbarMn' 0 | Out-Null            # ikona czatu Teams
+        Set-WmRegValue $adv 'TaskbarMn' 0 | Out-Null            # Teams chat icon
         Set-WmRegValue $adv 'ShowCopilotButton' 0 | Out-Null
-        # TaskbarDa (Widgets) bywa chroniony w nowszych wersjach; zasada AllowNewsAndInterests i tak go wyłącza
+        # TaskbarDa (Widgets) is sometimes protected in newer builds; the AllowNewsAndInterests policy turns it off anyway
         try {
             if (-not (Test-Path -LiteralPath $adv)) { New-Item -Path $adv -Force -ErrorAction Stop | Out-Null }
             New-ItemProperty -LiteralPath $adv -Name 'TaskbarDa' -Value 0 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
@@ -145,14 +145,14 @@ function Set-WmDebloatPolicies {
 
 function Set-WmEdgePolicies {
     $edge = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
-    Set-WmRegValue $edge 'HubsSidebarEnabled' 0 | Out-Null             # pasek boczny (w tym Copilot)
-    Set-WmRegValue $edge 'EdgeShoppingAssistantEnabled' 0 | Out-Null   # zakupy
+    Set-WmRegValue $edge 'HubsSidebarEnabled' 0 | Out-Null             # sidebar (including Copilot)
+    Set-WmRegValue $edge 'EdgeShoppingAssistantEnabled' 0 | Out-Null   # shopping
     Set-WmRegValue $edge 'StartupBoostEnabled' 0 | Out-Null
     Set-WmRegValue $edge 'BackgroundModeEnabled' 0 | Out-Null
     Set-WmRegValue $edge 'HideFirstRunExperience' 1 | Out-Null
     Set-WmRegValue $edge 'ShowRecommendationsEnabled' 0 | Out-Null
     Set-WmRegValue $edge 'PersonalizationReportingEnabled' 0 | Out-Null
-    Set-WmRegValue $edge 'DefaultBrowserSettingEnabled' 0 | Out-Null   # nie proś o bycie domyślną
+    Set-WmRegValue $edge 'DefaultBrowserSettingEnabled' 0 | Out-Null   # don't ask to be the default
     Write-WmLog 'Edge wyciszony zasadami.'
 }
 

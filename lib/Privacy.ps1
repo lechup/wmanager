@@ -1,7 +1,7 @@
-﻿# Prywatność: telemetria, reklamy, sugestie, Bing w wyszukiwarce. Tylko rejestr (Home nie ma gpedit).
+﻿# Privacy: telemetry, ads, suggestions, Bing in search. Registry only (Home has no gpedit).
 
 function Get-WmEditionTelemetryLevel {
-    # Poziom 0 (Security) działa tylko w Enterprise/Education; w Home/Pro najniższy jest 1 (Required).
+    # Level 0 (Security) works only in Enterprise/Education; in Home/Pro the lowest is 1 (Required).
     $caption = (Get-CimInstance -ClassName Win32_OperatingSystem).Caption
     if ($caption -match 'Enterprise|Education') { return 0 }
     return 1
@@ -33,7 +33,7 @@ function Invoke-WmPrivacy {
         }
     }
 
-    # Reklamy i treści "konsumenckie" (część działa tylko w Enterprise/Education, ale nie szkodzi)
+    # Ads and "consumer" content (some of this works only in Enterprise/Education, but it does no harm)
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo' 'DisabledByGroupPolicy' 1 | Out-Null
     $cc = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'
     Set-WmRegValue $cc 'DisableWindowsConsumerFeatures' 1 | Out-Null
@@ -41,20 +41,20 @@ function Invoke-WmPrivacy {
     Set-WmRegValue $cc 'DisableCloudOptimizedContent' 1 | Out-Null
     Set-WmRegValue $cc 'DisableConsumerAccountStateContent' 1 | Out-Null
 
-    # Historia aktywności
+    # Activity history
     $sys = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
     Set-WmRegValue $sys 'EnableActivityFeed' 0 | Out-Null
     Set-WmRegValue $sys 'PublishUserActivities' 0 | Out-Null
     Set-WmRegValue $sys 'UploadUserActivities' 0 | Out-Null
 
-    # Wyszukiwarka tylko lokalna
+    # Local-only search
     $ws = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'
     Set-WmRegValue $ws 'AllowCloudSearch' 0 | Out-Null
     Set-WmRegValue $ws 'ConnectedSearchUseWeb' 0 | Out-Null
     Set-WmRegValue $ws 'DisableWebSearch' 1 | Out-Null
     Set-WmRegValue $ws 'EnableDynamicContentInWSB' 0 | Out-Null
 
-    # Personalizacja pisania
+    # Typing personalization
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\InputPersonalization' 'AllowInputPersonalization' 0 | Out-Null
 
     Invoke-WmForEachUserHive {
@@ -78,9 +78,9 @@ function Invoke-WmPrivacy {
         Set-WmRegValue "$root\Software\Microsoft\Siuf\Rules" 'NumberOfSIUFInPeriod' 0 | Out-Null
 
         $adv = "$root\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        Set-WmRegValue $adv 'Start_IrisRecommendations' 0 | Out-Null       # rekomendacje w menu Start
+        Set-WmRegValue $adv 'Start_IrisRecommendations' 0 | Out-Null       # recommendations in the Start menu
         Set-WmRegValue $adv 'Start_AccountNotifications' 0 | Out-Null
-        Set-WmRegValue $adv 'ShowSyncProviderNotifications' 0 | Out-Null   # reklamy w Eksploratorze
+        Set-WmRegValue $adv 'ShowSyncProviderNotifications' 0 | Out-Null   # ads in Explorer
 
         $search = "$root\Software\Microsoft\Windows\CurrentVersion\Search"
         Set-WmRegValue $search 'BingSearchEnabled' 0 | Out-Null

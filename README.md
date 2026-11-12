@@ -1,133 +1,135 @@
 # wmanager
 
-Provisioning Windows 11 (Home i Pro) do pracy biurowej:
+Provisioning for Windows 11 (Home and Pro) office computers:
 
-- usuwa bloatware i usługi Microsoftu (Teams, OneDrive, Copilot, Widgets, Xbox, Outlook (new) i inne),
-- wyłącza telemetrię (do minimum dozwolonego w edycji), reklamy, sugestie i Binga w wyszukiwarce,
-- instaluje Chocolatey i paczki z `choco-reqs.txt`,
-- rejestruje cotygodniową aktualizację paczek (domyślnie poniedziałek 12:00),
-- wysyła logi do Grafana Cloud Loki i pinguje Healthchecks.io.
+- removes Microsoft bloatware and services (Teams, OneDrive, Copilot, Widgets, Xbox, Outlook (new) and more),
+- turns off telemetry (down to the minimum the edition allows), ads, suggestions and Bing in search,
+- installs Chocolatey and the packages from `choco-reqs.txt`,
+- registers a weekly package update (Monday 12:00 by default),
+- sends logs to Grafana Cloud Loki and pings Healthchecks.io.
 
-Skrypt można uruchamiać wielokrotnie: każdy przebieg doprowadza komputer do stanu z konfiguracji.
-Microsoft Store, Edge, Defender i Windows Update zostają.
+The script is safe to run repeatedly: every run brings the computer to the state defined in the configuration.
+Microsoft Store, Edge, Defender and Windows Update stay.
 
-## Szybki start
+## Quick start
 
-1. Skopiuj `provision.config.example.psd1` jako `provision.config.psd1` i uzupełnij (Loki, Healthchecks, źródła listy).
-2. Wgraj cały folder na pendrive albo udział sieciowy.
-3. Na komputerze uruchom `run.cmd` (sam poprosi o uprawnienia administratora).
-4. Podaj nazwę komputera albo naciśnij Enter, żeby zostawić obecną.
-5. Po zakończeniu uruchom komputer ponownie.
+1. Copy `provision.config.example.psd1` to `provision.config.psd1` and fill it in (Loki, Healthchecks, list sources).
+2. Put the whole folder on a USB drive or a network share.
+3. On the computer, run `run.cmd` (it asks for administrator rights by itself).
+4. Enter a computer name, or press Enter to keep the current one.
+5. Restart the computer when it finishes.
 
-Nazwę można też podać z góry: `run.cmd -ComputerName BIURO-03`.
-Bez konsoli (np. autounattend) pytanie jest pomijane i nazwa zostaje bez zmian.
+You can also pass the name up front: `run.cmd -ComputerName OFFICE-03`.
+Without a console (e.g. autounattend) the question is skipped and the name stays as it is.
 
-## Pliki
+## Files
 
-| Plik | Rola |
+| File | Role |
 | --- | --- |
-| `run.cmd` | Uruchamianie dwuklikiem, podnosi uprawnienia, przekazuje parametry |
-| `Provision.ps1` | Główny skrypt |
-| `Update-Packages.ps1` | Cotygodniowa aktualizacja (zadanie `wmanager-Update`) i ponowienie przy logowaniu (`wmanager-Retry`) |
-| `Notify-User.ps1` | Powiadomienie o restarcie i jednorazowa prośba o ustawienie domyślnej przeglądarki (`wmanager-Notify`) |
-| `provision.config.example.psd1` | Wzór konfiguracji; prawdziwy `provision.config.psd1` nie trafia do repo |
-| `choco-reqs.txt` | Lista paczek |
-| `lib\*.ps1` | Etapy: wspólne funkcje, debloat, prywatność, Chocolatey, zadania |
-| `tests\` | Testy Pester parsera listy |
+| `run.cmd` | Double-click launcher; elevates and passes parameters through |
+| `Provision.ps1` | Main script |
+| `Update-Packages.ps1` | Weekly update (`wmanager-Update` task) and retry at sign-in (`wmanager-Retry`) |
+| `Notify-User.ps1` | Restart notification and a one-time prompt to set the default browser (`wmanager-Notify`) |
+| `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
+| `choco-reqs.txt` | Package list |
+| `lib\*.ps1` | Stages: shared functions, debloat, privacy, Chocolatey, scheduled tasks |
+| `tests\` | Pester tests for the list parser |
 
-Na komputerze wszystko ląduje w `C:\ProgramData\wmanager`:
-zapis tylko dla Administrators i SYSTEM, a `provision.config.psd1` (z tokenami) mogą czytać tylko oni.
+On the computer everything lands in `C:\ProgramData\wmanager`:
+only Administrators and SYSTEM can write there, and only they can read `provision.config.psd1` (which holds the tokens).
 
-## Przebieg provisioningu
+## Provisioning steps
 
-1. Sprawdzenie Windows 11 i uprawnień, ustalenie nazwy komputera.
-2. Punkt przywracania systemu.
-3. Kopiowanie plików do `C:\ProgramData\wmanager` i ustawienie uprawnień.
-4. Zmiana nazwy komputera (jeśli podana; działa po restarcie).
-5. Debloat: aplikacje z listy `RemoveAppx` (dla wszystkich użytkowników i z obrazu), OneDrive, zasady, Edge.
-6. Prywatność: telemetria, usługi `DiagTrack` i `dmwappushservice`, reklamy, sugestie, wyszukiwanie tylko lokalne.
-7. Chocolatey, źródła paczek, instalacja paczek z listy.
-8. Chrome jako domyślna przeglądarka dla nowych kont (DISM); obecni użytkownicy dostają jednorazowo stronę Ustawień.
-9. Rejestracja zadań w Harmonogramie (folder `\wmanager\`).
+1. Check for Windows 11 and administrator rights, determine the computer name.
+2. System restore point.
+3. Copy files to `C:\ProgramData\wmanager` and set permissions.
+4. Rename the computer (if a name was given; takes effect after a restart).
+5. Debloat: apps from the `RemoveAppx` list (for all users and from the system image), OneDrive, policies, Edge.
+6. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
+7. Chocolatey, package sources, installing the packages from the list.
+8. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
+9. Register the scheduled tasks (folder `\wmanager\`).
 
-Ustawienia użytkownika trafiają do wszystkich istniejących profili i do profilu domyślnego (nowe konta).
+User settings are applied to every existing profile and to the default profile (new accounts).
 
 ### OneDrive
 
-Jeśli w którymś profilu Pulpit, Dokumenty lub Obrazy są przekierowane do OneDrive,
-skrypt **nie usuwa** OneDrive na tym komputerze i zapisuje ostrzeżenie w logu.
+If Desktop, Documents or Pictures are redirected to OneDrive in any profile,
+the script **does not remove** OneDrive on that computer and writes a warning to the log.
 
 ## choco-reqs.txt
 
 ```
-googlechrome !noupdate        # instaluj najnowszą, nie aktualizuj (aktualizuje się sama)
-libreoffice-fresh             # najnowsza, aktualizowana co tydzień
-libreoffice-fresh@latest      # to samo, zapisane jawnie
-7zip@24.8.0                   # przypięta wersja (choco pin), bez aktualizacji
-vlc | --params "/NoDesktopShortcut"   # dodatkowe parametry choco
+googlechrome !noupdate        # install the latest, don't update (it updates itself)
+libreoffice-fresh             # latest, updated weekly
+libreoffice-fresh@latest      # same thing, written explicitly
+7zip@24.8.0                   # pinned version (choco pin), never updated
+vlc | --params "/NoDesktopShortcut"   # extra choco parameters
 ```
 
-- Wersję przypiętą wpisuj dokładnie tak, jak pokazuje ją `choco list` (np. `24.8.0`).
-- Zmiana numeru wersji w liście zmienia wersję przy najbliższym przebiegu (także w dół).
-- Nowa paczka na liście instaluje się przy najbliższym przebiegu. Paczek usuniętych z listy skrypt nie odinstalowuje.
-- Lista jest sprawdzana przed użyciem; błędna linia (nieznana opcja, duplikat) odrzuca całe źródło i skrypt bierze następne.
+- Write a pinned version exactly as `choco list` shows it (e.g. `24.8.0`).
+- Changing the version number in the list changes the installed version on the next run (downgrades too).
+- A new package on the list is installed on the next run. Packages removed from the list are not uninstalled.
+- The list is validated before use; an invalid line (unknown option, duplicate) rejects the whole source and the script moves on to the next one.
 
-Źródła listy (`ReqsSources`) są sprawdzane po kolei: URL, udział, plik obok skryptu.
-Ostatnia poprawna kopia leży w `C:\ProgramData\wmanager\state\choco-reqs.cache.txt` i jest używana, gdy żadne źródło nie odpowiada.
+The list sources (`ReqsSources`) are tried in order: URL, share, file next to the script.
+The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.txt` and is used when no source responds.
 
-> Kto może zmienić listę pod URL-em, ten instaluje programy jako SYSTEM na wszystkich komputerach.
-> Używaj tylko HTTPS i repo z ograniczonym prawem zapisu.
+> Anyone who can change the list behind the URL can install programs as SYSTEM on every computer.
+> Use HTTPS only, and a repository with restricted write access.
 
-## Cotygodniowa aktualizacja
+## Weekly update
 
-- `wmanager-Update` (SYSTEM): termin z `UpdateDays` i `UpdateTime`; po pominiętym terminie rusza zaraz po starcie komputera.
-  Pobiera listę, doinstalowuje nowe paczki, aktualizuje paczki bez przypięcia i bez `!noupdate`,
-  ponownie uruchamia debloat (`RerunDebloatWeekly`) i poprawia termin, jeśli zmienił się w konfiguracji.
-- Paczka, której program działa (`RunningProcessMap`), jest odkładana; `wmanager-Retry` próbuje ponownie 2 minuty po zalogowaniu.
-- Gdy potrzebny jest restart, `wmanager-Notify` pokazuje użytkownikowi powiadomienie. Komputer nigdy nie restartuje się sam.
+- `wmanager-Update` (SYSTEM): scheduled by `UpdateDays` and `UpdateTime`; after a missed run it starts right after boot.
+  It fetches the list, installs new packages, upgrades packages that are neither pinned nor `!noupdate`,
+  reruns debloat (`RerunDebloatWeekly`) and updates its own schedule if the configuration changed.
+- A package whose program is running (`RunningProcessMap`) is deferred; `wmanager-Retry` tries again 2 minutes after sign-in.
+- When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.
 
-Ręczne uruchomienie: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Update'`.
+Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Update'`.
 
-## Logi i monitoring
+## Logs and monitoring
 
-- Lokalnie: `C:\ProgramData\wmanager\logs\<provision|update|retry>-RRRR-MM-DD_GGMM.log`, kasowane po `LogRetentionDays` (90 dni).
-  Pełne wyjście Chocolatey jest tylko w logu lokalnym (i w `C:\ProgramData\chocolatey\logs`).
-- **Grafana Cloud Loki**: na końcu przebiegu skrypt wysyła wpisy przez HTTP (`/loki/api/v1/push`), bez agenta.
-  Etykiety: `service_name="wmanager"`, `host`, `job` (`provision`, `update`, `retry`), `level`.
-  Gdy Grafana nie odpowiada, partia czeka w `logs\outbox` i idzie przy następnym przebiegu.
-  Przykładowe zapytanie: `{service_name="wmanager", level="error"}`.
-- **Healthchecks.io**: ping `/start` na początku i sukces albo `/fail` (z końcówką logu) na końcu provisioningu i cotygodniowej aktualizacji.
-  Check tworzy się sam przy pierwszym pingu (`?create=1`), nazwa = nazwa komputera (z opcjonalnym `HealthchecksSlugPrefix`).
+- Locally: `C:\ProgramData\wmanager\logs\<provision|update|retry>-YYYY-MM-DD_HHMM.log`, deleted after `LogRetentionDays` (90 days).
+  The full Chocolatey output is only in the local log (and in `C:\ProgramData\chocolatey\logs`).
+- **Grafana Cloud Loki**: at the end of a run the script pushes the entries over HTTP (`/loki/api/v1/push`), with no agent.
+  Labels: `service_name="wmanager"`, `host`, `job` (`provision`, `update`, `retry`), `level`.
+  When Grafana doesn't respond, the batch waits in `logs\outbox` and is sent on the next run.
+  Example query: `{service_name="wmanager", level="error"}`.
+- **Healthchecks.io**: a `/start` ping at the beginning, and success or `/fail` (with the tail of the log) at the end of provisioning and of the weekly update.
+  The check is created on the first ping (`?create=1`); its name is the computer name (with an optional `HealthchecksSlugPrefix`).
 
-### Konfiguracja Grafana Cloud
+Log messages, console output and user notifications are in Polish.
 
-1. Grafana Cloud → Connections → Loki: zapisz URL (np. `https://logs-prod-012.grafana.net`) i numeryczny User.
-2. Administration → Cloud access policies: utwórz politykę tylko z zakresem `logs:write` i wygeneruj token.
-3. Wpisz `LokiUrl`, `LokiUser`, `LokiToken` w `provision.config.psd1`.
+### Grafana Cloud setup
 
-### Konfiguracja Healthchecks.io
+1. Grafana Cloud → Connections → Loki: note the URL (e.g. `https://logs-prod-012.grafana.net`) and the numeric User.
+2. Administration → Cloud access policies: create a policy with only the `logs:write` scope and generate a token.
+3. Put `LokiUrl`, `LokiUser` and `LokiToken` in `provision.config.psd1`.
 
-1. Utwórz projekt, w ustawieniach projektu wygeneruj **Ping key**.
-2. Wpisz go jako `HealthchecksPingKey`.
-3. Po pierwszym provisioningu każdy komputer ma swój check. Ustaw w nim **Period 7 dni** i **Grace 2 dni**
-   (automatycznie utworzony check ma okres 1 dnia) i podłącz powiadomienie e-mail.
+### Healthchecks.io setup
 
-## Testy
+1. Create a project and generate a **Ping key** in its settings.
+2. Put it in `HealthchecksPingKey`.
+3. After the first provisioning every computer has its own check. Set its **Period to 7 days** and **Grace to 2 days**
+   (an auto-created check has a 1-day period) and connect an e-mail notification.
 
-Na Windowsie z Pester 5:
+## Tests
+
+On Windows with Pester 5:
 
 ```powershell
 Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser
 Invoke-Pester .\tests
 ```
 
-Przed wdrożeniem na komputery: maszyny wirtualne z Windows 11 Home i Pro (z migawką), dwukrotne uruchomienie
-(drugi przebieg nie może zgłosić błędów), ręczne uruchomienie zadania, pominięty termin, powiadomienie o restarcie,
-potem jeden komputer pilotażowy przez tydzień.
+Before rolling out to computers: Windows 11 Home and Pro virtual machines (with a snapshot), two consecutive runs
+(the second run must not report errors), a manual run of the task, a missed schedule, the restart notification,
+then one pilot computer for a week.
 
-## Ograniczenia
+## Limitations
 
-- W Home i Pro telemetria schodzi najniżej do poziomu „Wymagane” (1); poziom 0 działa tylko w Enterprise/Education.
-- Blokada „doinstalowywania” aplikacji przez system działa tylko w Enterprise/Education, dlatego debloat powtarza się co tydzień.
-- Windows 11 nie pozwala skryptem ustawić domyślnej przeglądarki istniejącym użytkownikom; dostają jednorazowo stronę Ustawień.
-- Wymaga Chocolatey 2.x (instalowany automatycznie).
+- In Home and Pro, telemetry goes no lower than "Required" (1); level 0 works only in Enterprise/Education.
+- Blocking the system from reinstalling apps works only in Enterprise/Education, so debloat repeats every week.
+- Windows 11 doesn't let a script set the default browser for existing users; they get the Settings page once.
+- Requires Chocolatey 2.x (installed automatically).

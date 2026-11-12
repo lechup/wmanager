@@ -1,10 +1,10 @@
-﻿# Chocolatey: instalacja, źródła, lista choco-reqs.txt i synchronizacja paczek.
+﻿# Chocolatey: installation, sources, the choco-reqs.txt list and package sync.
 
 $script:WmChocoExe = Join-Path $env:ProgramData 'chocolatey\bin\choco.exe'
 $script:WmReqsCache = Join-Path $script:WmStateDir 'choco-reqs.cache.txt'
 
 # ---------------------------------------------------------------------------
-# Parser listy (bez zależności od systemu, testowany w tests\Requirements.Tests.ps1)
+# List parser (no system dependencies, tested in tests\Requirements.Tests.ps1)
 # ---------------------------------------------------------------------------
 
 function Split-WmArgumentString {
@@ -25,10 +25,10 @@ function ConvertFrom-WmRequirements {
     $items = @()
     $seen = @{}
     $lineNo = 0
-    $Text = $Text.TrimStart([char]0xFEFF)   # BOM z pliku pobranego przez HTTP
+    $Text = $Text.TrimStart([char]0xFEFF)   # BOM from a file downloaded over HTTP
     foreach ($raw in ($Text -split "\r?\n")) {
         $lineNo++
-        # komentarz: # na początku linii albo po białym znaku
+        # comment: # at the start of a line or after whitespace
         $line = ($raw -replace '(^|\s)#.*$', '').Trim()
         if (-not $line) { continue }
 
@@ -77,7 +77,7 @@ function ConvertFrom-WmRequirements {
 
         $items += [pscustomobject]@{
             Name      = $name
-            Version   = $version      # $null = najnowsza
+            Version   = $version      # $null = latest
             Pinned    = $pinned
             NoUpdate  = $noUpdate
             ExtraArgs = (Split-WmArgumentString $extra)
@@ -88,7 +88,7 @@ function ConvertFrom-WmRequirements {
 }
 
 # ---------------------------------------------------------------------------
-# Pobranie listy
+# Fetching the list
 # ---------------------------------------------------------------------------
 
 function Get-WmRequirementsText {
@@ -107,7 +107,7 @@ function Get-WmRequirementsText {
                 if (-not (Test-Path -LiteralPath $path)) { throw "brak pliku $path" }
                 $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
             }
-            $null = ConvertFrom-WmRequirements -Text $text   # walidacja przed zapisaniem kopii
+            $null = ConvertFrom-WmRequirements -Text $text   # validate before caching the copy
             New-Item -ItemType Directory -Force -Path $script:WmStateDir | Out-Null
             [IO.File]::WriteAllText($script:WmReqsCache, $text, (New-Object System.Text.UTF8Encoding($false)))
             Write-WmLog "Lista paczek pobrana z: $src"
@@ -209,7 +209,7 @@ function Get-WmPins {
 function Get-WmOutdated {
     $map = @{}
     foreach ($l in (Get-WmChocoLines @('outdated', '--limit-output', '--ignore-pinned'))) {
-        $p = $l.Split('|')   # nazwa|obecna|dostępna|przypięta
+        $p = $l.Split('|')   # name|current|available|pinned
         $map[$p[0].ToLowerInvariant()] = $p[2]
     }
     return $map
@@ -238,9 +238,9 @@ function Test-WmChocoSuccess {
     return $false
 }
 
-# Doprowadza paczki do stanu z listy. Paczek spoza listy nie rusza.
-#   -Upgrade      aktualizuje paczki bez przypięcia i bez !noupdate (cotygodniowe zadanie)
-#   -SkipRunning  pomija paczki, których program działa; zwraca je jako "odłożone"
+# Brings packages to the state in the list. Packages not on the list are left alone.
+#   -Upgrade      upgrades packages that are neither pinned nor !noupdate (weekly task)
+#   -SkipRunning  skips packages whose program is running; returns them as "deferred"
 function Sync-WmPackages {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Requirements,
@@ -282,7 +282,7 @@ function Sync-WmPackages {
             continue
         }
 
-        # Wersja nieprzypięta: zdejmij przypięcie, jeśli zostało z wcześniejszej listy
+        # Unpinned version: remove the pin if it is left over from an earlier list
         if ($pins.ContainsKey($key)) {
             Invoke-WmChoco @('pin', 'remove', '-n', $r.Name) | Out-Null
             Write-WmLog "$($r.Name): zdjęto przypięcie wersji."
@@ -311,7 +311,7 @@ function Sync-WmPackages {
 }
 
 # ---------------------------------------------------------------------------
-# Domyślna przeglądarka (dla nowych kont; obecni klikają raz w Ustawieniach)
+# Default browser (for new accounts; existing users click once in Settings)
 # ---------------------------------------------------------------------------
 
 function Set-WmDefaultBrowser {

@@ -1,5 +1,5 @@
-﻿# Wspólne funkcje: ścieżki, konfiguracja, logi, rejestr, Loki, Healthchecks.
-# Zgodne z Windows PowerShell 5.1.
+﻿# Shared functions: paths, configuration, logs, registry, Loki, Healthchecks.
+# Compatible with Windows PowerShell 5.1.
 
 $script:WmRoot       = Join-Path $env:ProgramData 'wmanager'
 $script:WmStateDir   = Join-Path $script:WmRoot 'state'
@@ -16,13 +16,13 @@ $script:WmRetryFlag   = Join-Path $script:WmStateDir 'retry-pending.flag'
 $script:WmPublicState = Join-Path $script:WmStateDir 'public.json'
 $script:WmMutexName   = 'Global\wmanager-run'
 
-# PowerShell 5.1 domyślnie nie włącza TLS 1.2
+# PowerShell 5.1 doesn't enable TLS 1.2 by default
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch { }
 
 # ---------------------------------------------------------------------------
-# Konfiguracja
+# Configuration
 # ---------------------------------------------------------------------------
 
 function Import-WmConfig {
@@ -48,7 +48,7 @@ function Get-WmSetting {
 }
 
 # ---------------------------------------------------------------------------
-# Logi
+# Logs
 # ---------------------------------------------------------------------------
 
 function Initialize-WmLog {
@@ -63,7 +63,7 @@ function Write-WmLog {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Message,
         [ValidateSet('info', 'warn', 'error')][string]$Level = 'info',
-        # Tylko do pliku lokalnego (np. pełne wyjście choco), bez wysyłki do Loki
+        # Local file only (e.g. full choco output), not sent to Loki
         [switch]$LocalOnly
     )
     $ts = Get-Date
@@ -97,7 +97,7 @@ function Get-WmLogTail {
 }
 
 # ---------------------------------------------------------------------------
-# Blokada przed równoległym uruchomieniem (provisioning i zadanie)
+# Lock against concurrent runs (provisioning and the scheduled task)
 # ---------------------------------------------------------------------------
 
 function Enter-WmLock {
@@ -105,7 +105,7 @@ function Enter-WmLock {
     try {
         if ($m.WaitOne(0)) { return $m }
     } catch [System.Threading.AbandonedMutexException] {
-        return $m   # poprzedni proces padł, ale blokada jest nasza
+        return $m   # the previous process died, but the lock is ours
     }
     $m.Dispose()
     return $null
@@ -120,7 +120,7 @@ function Exit-WmLock {
 }
 
 # ---------------------------------------------------------------------------
-# Rejestr
+# Registry
 # ---------------------------------------------------------------------------
 
 function Set-WmRegValue {
@@ -149,8 +149,8 @@ function Remove-WmRegValue {
     }
 }
 
-# Wykonuje $Action dla rejestru każdego profilu użytkownika oraz profilu domyślnego.
-# $Action dostaje korzeń w postaci 'Registry::HKEY_USERS\<...>' (odpowiednik HKCU).
+# Runs $Action against the registry of every user profile and the default profile.
+# $Action receives the root as 'Registry::HKEY_USERS\<...>' (the HKCU equivalent).
 function Invoke-WmForEachUserHive {
     param([Parameter(Mandatory = $true)][scriptblock]$Action)
 
@@ -171,7 +171,7 @@ function Invoke-WmForEachUserHive {
     foreach ($t in $targets) {
         $mount = $null
         if ($t.Sid -and (Test-Path -LiteralPath "Registry::HKEY_USERS\$($t.Sid)")) {
-            $root = "Registry::HKEY_USERS\$($t.Sid)"      # profil zalogowany, rejestr już wczytany
+            $root = "Registry::HKEY_USERS\$($t.Sid)"      # signed-in profile, hive already loaded
         } else {
             $mount = 'WM_' + ($t.Name -replace '[^A-Za-z0-9]', '_')
             & reg.exe load "HKU\$mount" "$($t.Dat)" 2>&1 | Out-Null
@@ -196,11 +196,11 @@ function Invoke-WmForEachUserHive {
 }
 
 # ---------------------------------------------------------------------------
-# Uprawnienia do folderu wmanager
+# wmanager folder permissions
 # ---------------------------------------------------------------------------
 
-# Folder: zapis tylko SYSTEM i Administrators, Users mogą czytać i uruchamiać.
-# Plik konfiguracji (tokeny): tylko SYSTEM i Administrators.
+# Folder: only SYSTEM and Administrators can write; Users can read and execute.
+# Configuration file (tokens): SYSTEM and Administrators only.
 function Set-WmFolderAcl {
     param([Parameter(Mandatory = $true)][string]$Path, [string]$ConfigFile)
     & icacls.exe "$Path" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' /T /C /Q 2>&1 | Out-Null
@@ -233,8 +233,8 @@ function Get-WmBootTime {
     return (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')
 }
 
-# Znacznik "potrzebny restart" z czasem bieżącego startu systemu.
-# Po restarcie czas startu się zmienia, więc znacznik przestaje obowiązywać.
+# "Restart needed" flag stamped with the current boot time.
+# After a restart the boot time changes, so the flag no longer applies.
 function Set-WmRebootFlag {
     New-Item -ItemType Directory -Force -Path $script:WmStateDir | Out-Null
     Set-Content -LiteralPath $script:WmRebootFlag -Value (Get-WmBootTime) -Encoding ASCII
@@ -248,7 +248,7 @@ function Clear-WmStaleRebootFlag {
 }
 
 # ---------------------------------------------------------------------------
-# JSON (ręcznie, bo ConvertTo-Json w 5.1 potrafi źle zapisać zagnieżdżone tablice)
+# JSON (built by hand, because ConvertTo-Json in 5.1 can mangle nested arrays)
 # ---------------------------------------------------------------------------
 
 function ConvertTo-WmJsonString {
@@ -274,7 +274,7 @@ function Send-WmLokiLog {
     $outbox = Join-Path $script:WmLogDir 'outbox'
     New-Item -ItemType Directory -Force -Path $outbox | Out-Null
 
-    # Bieżący przebieg -> plik w outbox (wysyłany razem z zaległymi)
+    # Current run -> a file in outbox (sent together with the backlog)
     if ($script:WmLogBuffer.Count -gt 0) {
         $hostLabel = $script:WmHostName.ToLower()
         $streams = New-Object System.Collections.Generic.List[string]
@@ -284,7 +284,7 @@ function Send-WmLokiLog {
             if ($entries.Count -eq 0) { continue }
             $values = New-Object System.Collections.Generic.List[string]
             foreach ($e in $entries) {
-                # nanosekundy; +$i zapewnia unikalność i kolejność w obrębie milisekundy
+                # nanoseconds; +$i keeps entries unique and ordered within a millisecond
                 $ns = ([DateTimeOffset]$e.Time).ToUnixTimeMilliseconds() * 1000000 + $i
                 $i++
                 $values.Add('[' + (ConvertTo-WmJsonString ([string]$ns)) + ',' + (ConvertTo-WmJsonString $e.Line) + ']')
@@ -315,7 +315,7 @@ function Send-WmLokiLog {
         }
     }
 
-    # Zaległości starsze niż 30 dni nie mają już sensu
+    # Backlog older than 30 days is no longer worth sending
     Get-ChildItem -LiteralPath $outbox -Filter '*.json' -File -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
         Remove-Item -Force -ErrorAction SilentlyContinue

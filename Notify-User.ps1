@@ -1,6 +1,6 @@
-﻿# Uruchamiany w sesji zalogowanego użytkownika (bez uprawnień administratora).
-# 1. Jeśli po aktualizacji potrzebny jest restart: powiadomienie z prośbą o restart.
-# 2. Raz na użytkownika: jeśli domyślna przeglądarka jest inna niż ustalona, otwiera Ustawienia.
+﻿# Runs in the signed-in user's session (no administrator rights).
+# 1. If a restart is needed after an update: a notification asking for a restart.
+# 2. Once per user: if the default browser differs from the configured one, opens Settings.
 
 $ErrorActionPreference = 'SilentlyContinue'
 $root       = Join-Path $env:ProgramData 'wmanager'
@@ -20,7 +20,7 @@ function Show-WmToast {
         $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
     } catch {
-        # Zapasowo zwykłe okienko, które samo zniknie po 5 minutach
+        # Fallback: a plain message box that closes itself after 5 minutes
         (New-Object -ComObject WScript.Shell).Popup($Text, 300, $Title, 64) | Out-Null
     }
 }
@@ -34,7 +34,7 @@ if (Test-Path -LiteralPath $rebootFlag) {
     }
 }
 
-# --- 2. Domyślna przeglądarka (jednorazowo) ----------------------------------
+# --- 2. Default browser (one-time) -------------------------------------------
 if (Test-Path -LiteralPath $publicFile) {
     $public = Get-Content -LiteralPath $publicFile -Raw | ConvertFrom-Json
     $progId = $public.DefaultBrowserProgId
