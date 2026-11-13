@@ -161,6 +161,13 @@ function Get-WmChocoLines {
     return @($output | Where-Object { "$_" -match '\|' } | ForEach-Object { "$_" })
 }
 
+function Get-WmChocoVersion {
+    foreach ($l in @(& $script:WmChocoExe --version 2>$null)) {
+        if ("$l" -match '^\s*(\d+)\.(\d+)') { return [version]"$($Matches[1]).$($Matches[2])" }
+    }
+    return $null
+}
+
 function Install-WmChocolatey {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     Write-WmLog '--- Chocolatey ---'
@@ -178,6 +185,16 @@ function Install-WmChocolatey {
         Write-WmLog 'Chocolatey zainstalowany.'
     }
     $env:Path = "$env:Path;$(Split-Path $script:WmChocoExe)"
+
+    # In 1.x 'choco list' shows the remote feed instead of installed packages, so 2.x is required
+    $ver = Get-WmChocoVersion
+    if (-not $ver -or $ver.Major -lt 2) {
+        Write-WmLog "Chocolatey $ver jest za stary, aktualizuję do 2.x."
+        Invoke-WmChoco @('upgrade', 'chocolatey', '-y', '--no-progress') | Out-Null
+        $ver = Get-WmChocoVersion
+        if (-not $ver -or $ver.Major -lt 2) { throw "Wymagany Chocolatey 2.x, zainstalowany jest $ver." }
+        Write-WmLog "Chocolatey zaktualizowany do $ver."
+    }
 
     Invoke-WmChoco @('feature', 'enable', '-n', 'allowGlobalConfirmation') | Out-Null
     Invoke-WmChoco @('feature', 'enable', '-n', 'useRememberedArgumentsForUpgrades') | Out-Null
