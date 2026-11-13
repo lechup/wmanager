@@ -110,14 +110,7 @@ function Set-WmDebloatPolicies {
     # Teams: built-in chat and automatic installation
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Chat' 'ChatIcon' 3 | Out-Null
     # This key is sometimes protected by TrustedInstaller; access denied is not a critical error
-    try {
-        $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications'
-        Add-WmJournalEntry -Path $k -Name 'ConfigureChatAutoInstall'
-        if (-not (Test-Path -LiteralPath $k)) { New-Item -Path $k -Force -ErrorAction Stop | Out-Null }
-        New-ItemProperty -LiteralPath $k -Name 'ConfigureChatAutoInstall' -Value 0 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
-    } catch {
-        Write-WmLog 'Brak dostępu do ConfigureChatAutoInstall (chroniony klucz), pomijam.'
-    }
+    Set-WmRegValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications' 'ConfigureChatAutoInstall' 0 -OnError info | Out-Null
 
     # Copilot and Recall
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 | Out-Null
@@ -146,10 +139,7 @@ function Set-WmDebloatPolicies {
         Set-WmRegValue $adv 'TaskbarMn' 0 | Out-Null            # Teams chat icon
         Set-WmRegValue $adv 'ShowCopilotButton' 0 | Out-Null
         # TaskbarDa (Widgets) is sometimes protected in newer builds; the AllowNewsAndInterests policy turns it off anyway
-        try {
-            if (-not (Test-Path -LiteralPath $adv)) { New-Item -Path $adv -Force -ErrorAction Stop | Out-Null }
-            New-ItemProperty -LiteralPath $adv -Name 'TaskbarDa' -Value 0 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
-        } catch { }
+        Set-WmRegValue $adv 'TaskbarDa' 0 -OnError info | Out-Null
     }
     Write-WmLog 'Zasady blokujące Teams, Copilot, Recall, Widgets, Cortana, Phone Link i Game Bar ustawione.'
 }

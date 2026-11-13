@@ -223,11 +223,7 @@ try {
     $failed = $true
     Write-WmLog "Provisioning przerwany: $($_.Exception.Message)" -Level error
 } finally {
-    try {
-        Save-WmJournal
-    } catch {
-        Write-WmLog "Nie udało się zapisać dziennika zmian (Restore-Backup.ps1 nie cofnie tego przebiegu): $($_.Exception.Message)" -Level error
-    }
+    Stop-WmJournal
     if ($script:WmErrors -gt 0) { $failed = $true }
     Write-WmLog ("Koniec: ostrzeżenia {0}, błędy {1}. Log: {2}" -f $script:WmWarnings, $script:WmErrors, $script:WmLogFile)
     Remove-WmOldLogs -Days ([int](Get-WmSetting $config 'LogRetentionDays' 90))

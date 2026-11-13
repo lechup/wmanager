@@ -4,7 +4,7 @@
     wmanager: undo the registry changes made by provisioning.
 
 .DESCRIPTION
-    Uses the undo journal (C:\ProgramData\wmanager\state\backup\journal.json): every registry value
+    Uses the undo journal (C:\ProgramData\wmanager\state\backup\journal.jsonl): every registry value
     wmanager changed during provisioning gets its previous value back, or is removed if it did not
     exist. Later changes users made in the same keys are left alone.
 
@@ -62,7 +62,7 @@ try {
     $count = @{ Ok = 0 }
 
     # --- Registry: values of the computer -----------------------------------
-    foreach ($e in $machine) { if (Restore-WmJournalEntry -Entry $e -KeyPath $e.Key) { $count.Ok++ } }
+    foreach ($e in $machine) { if (Restore-WmJournalEntry -Entry $e) { $count.Ok++ } }
 
     # --- Registry: values of each user profile (matched by SID; the default profile by name) ---
     $seenProfiles = @{}
@@ -73,7 +73,7 @@ try {
             $match = if ($e.Sid) { $e.Sid -eq $sid } else { (-not $sid) -and $e.Profile -eq $name }
             if (-not $match) { continue }
             $seenProfiles[[string]$e.Sid + '|' + $e.Profile] = $true
-            if (Restore-WmJournalEntry -Entry $e -KeyPath "$hive\$($e.Key)") { $count.Ok++ }
+            if (Restore-WmJournalEntry -Entry $e -HiveRoot $hive) { $count.Ok++ }
         }
     }
     $notFound = @($user | Where-Object { -not $seenProfiles.ContainsKey([string]$_.Sid + '|' + $_.Profile) } |

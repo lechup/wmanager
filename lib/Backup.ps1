@@ -6,7 +6,7 @@
 #   machine-NN.reg, user-<profile>-NN.reg      registry branches debloat and privacy change,
 #                                              for a person to look at (user files use HKEY_CURRENT_USER)
 #   manifest.txt                               which key went to which file, or that it did not exist
-# The undo journal state\backup\journal.json is shared by all runs: for every registry value
+# The undo journal state\backup\journal.jsonl is shared by all runs: for every registry value
 # wmanager changed, the state before the very first change (see Add-WmJournalEntry in Common.ps1).
 # Keep the key lists below in sync with lib\Debloat.ps1 and lib\Privacy.ps1.
 
@@ -101,45 +101,59 @@ function Backup-WmState {
 }
 
 # ---------------------------------------------------------------------------
-# Undo journal
+# Undo journal (entries are written by Add-WmJournalEntry in Common.ps1)
 # ---------------------------------------------------------------------------
 
+# Reads journal.jsonl. Refuses a file not owned by SYSTEM/Administrators (it drives registry writes
+# with admin rights); skips a damaged line (e.g. the last one after a crash).
 function Read-WmJournal {
     if (-not (Test-Path -LiteralPath $script:WmJournalFile)) { return }
-    $json = [IO.File]::ReadAllText($script:WmJournalFile)
-    if (-not $json.Trim()) { return }
-    $parsed = ConvertFrom-Json -InputObject $json
-    return $parsed
-}
-
-# Starts recording; entries from earlier runs are kept, so the journal always holds
-# the state from before wmanager touched each value for the first time.
-function Start-WmJournal {
-    $existing = @(Read-WmJournal)
-    $script:WmJournal = New-Object 'System.Collections.Generic.List[object]'
-    $script:WmJournalSeen = @{}
-    foreach ($e in $existing) {
-        $script:WmJournalSeen[(Get-WmJournalId $e.Scope $e.Sid $e.Profile $e.Key $e.Name)] = $true
-        $script:WmJournal.Add($e)
+    $owner = (Get-Acl -LiteralPath $script:WmJournalFile).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    if ($script:WmAdminSids -notcontains $owner) { throw "Dziennik zmian $($script:WmJournalFile) ma obcego właściciela ($owner)." }
+    foreach ($line in [IO.File]::ReadAllLines($script:WmJournalFile)) {
+        if (-not $line.Trim()) { continue }
+        try { ConvertFrom-Json -InputObject $line }
+        catch { Write-WmLog 'Dziennik zmian: pomijam uszkodzoną linię.' -Level warn }
     }
 }
 
-function Save-WmJournal {
-    if ($null -eq $script:WmJournal) { return }
+# Starts recording. Entries from earlier runs stay, so the journal always holds the state
+# from before wmanager touched each value (and each key) for the first time.
+function Start-WmJournal {
+    $script:WmJournalSeen = @{}
+    $script:WmJournalKeys = @{}
+    foreach ($e in @(Read-WmJournal)) {
+        $script:WmJournalSeen[(Get-WmJournalId $e.Scope $e.Sid $e.Profile $e.Key $e.Name)] = $true
+        $keyId = Get-WmJournalId $e.Scope $e.Sid $e.Profile $e.Key ''
+        if (-not $script:WmJournalKeys.ContainsKey($keyId)) {
+            $script:WmJournalKeys[$keyId] = @{ Existed = [bool]$e.KeyExisted; Ancestor = [string]$e.Ancestor }
+        }
+    }
     New-Item -ItemType Directory -Force -Path $script:WmBackupDir -ErrorAction Stop | Out-Null
-    $json = ConvertTo-Json -InputObject @($script:WmJournal.ToArray()) -Depth 4
-    [IO.File]::WriteAllText($script:WmJournalFile, $json, (New-Object System.Text.UTF8Encoding($false)))
-    $script:WmJournal = $null
+    if (-not (Test-Path -LiteralPath $script:WmJournalFile)) { [IO.File]::WriteAllText($script:WmJournalFile, '') }
+    & icacls.exe "$($script:WmJournalFile)" /setowner '*S-1-5-32-544' /Q 2>&1 | Out-Null
+    $script:WmJournalOn = $true
 }
 
-# Puts one journal entry back at $KeyPath: the old value, or no value if there was none.
-# A key that wmanager created is removed if nothing else is in it. Returns $true on success.
+function Stop-WmJournal {
+    $script:WmJournalOn = $false
+}
+
+# Puts one journal entry back: the old value, or no value if there was none. Keys wmanager created
+# are removed while empty, up to the nearest key that existed before. $HiveRoot (HKEY_USERS\<id>)
+# is the hive of the profile for user entries. Returns $true on success.
 function Restore-WmJournalEntry {
-    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)][string]$KeyPath)
+    param([Parameter(Mandatory = $true)]$Entry, [string]$HiveRoot = '')
+    $keyPath = [string]$Entry.Key
+    $stopAt = [string]$Entry.Ancestor
+    if ($HiveRoot) {
+        $keyPath = "$HiveRoot\$keyPath"
+        $stopAt = if ($stopAt) { "$HiveRoot\$stopAt" } else { $HiveRoot }
+    }
     $k = $null
     try {
         if ($Entry.Existed) {
-            $k = Open-WmRegKey -Path $KeyPath -Create
+            $k = Open-WmRegKey -Path $keyPath -Create
             $kind = [Microsoft.Win32.RegistryValueKind]$Entry.Kind
             if ($kind -eq 'DWord') { $value = [int]::Parse([string]$Entry.Value) }
             elseif ($kind -eq 'QWord') { $value = [long]::Parse([string]$Entry.Value) }
@@ -149,22 +163,29 @@ function Restore-WmJournalEntry {
             $k.SetValue($Entry.Name, $value, $kind)
             return $true
         }
-        $k = Open-WmRegKey -Path $KeyPath -Writable
-        if (-not $k) { return $true }
-        if ($k.GetValueNames() -contains $Entry.Name) { $k.DeleteValue($Entry.Name, $false) }
-        $empty = ($k.ValueCount -eq 0 -and $k.SubKeyCount -eq 0)
-        $k.Close(); $k = $null
-        if ($empty -and -not $Entry.KeyExisted) {
-            $native = ConvertTo-WmRegNativePath $KeyPath
-            $cut = $native.LastIndexOf('\')
-            $parent = Open-WmRegKey -Path $native.Substring(0, $cut) -Writable
-            if ($parent) {
-                try { $parent.DeleteSubKey($native.Substring($cut + 1), $false) } finally { $parent.Close() }
+        $k = Open-WmRegKey -Path $keyPath -Writable
+        if ($k) {
+            if ($k.GetValueNames() -contains $Entry.Name) { $k.DeleteValue($Entry.Name, $false) }
+            $k.Close(); $k = $null
+        }
+        if (-not $Entry.KeyExisted -and $stopAt) {
+            $path = ConvertTo-WmRegNativePath $keyPath
+            while ($path.StartsWith($stopAt + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                $cut = $path.LastIndexOf('\')
+                $node = Open-WmRegKey -Path $path
+                if ($node) {
+                    $empty = ($node.ValueCount -eq 0 -and $node.SubKeyCount -eq 0)
+                    $node.Close()
+                    if (-not $empty) { break }
+                    $parent = Open-WmRegKey -Path $path.Substring(0, $cut) -Writable
+                    if ($parent) { try { $parent.DeleteSubKey($path.Substring($cut + 1), $false) } finally { $parent.Close() } }
+                }
+                $path = $path.Substring(0, $cut)
             }
         }
         return $true
     } catch {
-        Write-WmLog "Nie udało się przywrócić $KeyPath\$($Entry.Name) : $($_.Exception.Message)" -Level warn
+        Write-WmLog "Nie udało się przywrócić $keyPath\$($Entry.Name) : $($_.Exception.Message)" -Level warn
         return $false
     } finally {
         if ($k) { $k.Close() }

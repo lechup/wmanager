@@ -76,8 +76,9 @@ Before changing anything, provisioning writes a backup to `C:\ProgramData\wmanag
 | `machine-NN.reg`, `user-<profile>-NN.reg` | Registry branches that debloat and privacy change; user files use `HKEY_CURRENT_USER`, so that user can import them |
 | `manifest.txt` | Which key went to which file, and which keys did not exist |
 
-The undo journal `state\backup\journal.json` records, for every registry value wmanager changes during provisioning,
-its state before the very first change (old value and type, or "did not exist"). It is shared by all provisioning runs.
+The undo journal `state\backup\journal.jsonl` records, for every registry value wmanager changes during provisioning,
+its state before the very first change (old value and type, or "did not exist"). Each entry is written the moment the
+value changes, so an interrupted run loses nothing. It is shared by all provisioning runs.
 
 To undo, run on the computer as administrator:
 

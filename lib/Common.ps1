@@ -17,9 +17,10 @@ $script:WmPublicState = Join-Path $script:WmStateDir 'public.json'
 $script:WmMutexName   = 'Global\wmanager-run'
 
 $script:WmBackupDir   = Join-Path $script:WmStateDir 'backup'
-$script:WmJournalFile = Join-Path $script:WmBackupDir 'journal.json'
-$script:WmJournal     = $null   # undo journal, active only during provisioning (see lib\Backup.ps1)
-$script:WmJournalSeen = @{}
+$script:WmJournalFile = Join-Path $script:WmBackupDir 'journal.jsonl'
+$script:WmJournalOn   = $false  # undo journal records only during provisioning (see lib\Backup.ps1)
+$script:WmJournalSeen = @{}     # value id -> $true
+$script:WmJournalKeys = @{}     # key id -> state of the key before wmanager first touched it
 $script:WmHiveContext = $null   # the user hive Invoke-WmForEachUserHive is working on
 
 # PowerShell 5.1 doesn't enable TLS 1.2 by default
@@ -173,57 +174,86 @@ function Get-WmJournalId {
     return ('{0}|{1}|{2}|{3}' -f $Scope, $who, $Key, $Name).ToLowerInvariant()
 }
 
+# The nearest existing parent of a key that does not exist (native path).
+function Get-WmExistingAncestor {
+    param([Parameter(Mandatory = $true)][string]$NativePath)
+    $p = $NativePath
+    while ($p.LastIndexOf('\') -gt 0) {
+        $p = $p.Substring(0, $p.LastIndexOf('\'))
+        if ($p.IndexOf('\') -lt 0) { break }   # hive root
+        $k = Open-WmRegKey -Path $p
+        if ($k) { $k.Close(); return $p }
+    }
+    return $p
+}
+
 # Undo journal: before wmanager changes a registry value for the first time, the previous state
-# (value and type, or "did not exist") is recorded, so Restore-Backup.ps1 can undo exactly that.
-# Values in user hives are stored relative to the hive, with the profile's SID and path.
+# (value and type, or "did not exist") is appended to journal.jsonl right away, one JSON line per
+# value, so an interrupted run loses nothing. Values in user hives are stored relative to the hive,
+# with the profile's SID and path. For a key that did not exist, Ancestor is its nearest existing
+# parent: Restore-Backup.ps1 removes the keys wmanager created up to there, if they are empty.
+# If the old state can't be read, no entry is written (a wrong entry would make restore delete data).
 function Add-WmJournalEntry {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Name)
-    if ($null -eq $script:WmJournal) { return }
+    if (-not $script:WmJournalOn) { return }
     $native = ConvertTo-WmRegNativePath $Path
-    $scope = 'machine'; $sid = ''; $profileName = ''; $key = $native
+    $scope = 'machine'; $sid = ''; $profileName = ''; $key = $native; $hiveRoot = ''
     $ctx = $script:WmHiveContext
     if ($ctx) {
-        $hiveRoot = ConvertTo-WmRegNativePath $ctx.Root
-        if ($native.StartsWith($hiveRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
-            $scope = 'user'; $sid = [string]$ctx.Sid; $profileName = [string]$ctx.Profile
-            $key = $native.Substring($hiveRoot.Length + 1)
+        $root = ConvertTo-WmRegNativePath $ctx.Root
+        if ($native.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            $scope = 'user'; $sid = [string]$ctx.Sid; $profileName = [string]$ctx.Profile; $hiveRoot = $root
+            $key = $native.Substring($root.Length + 1)
         }
     }
     $id = Get-WmJournalId $scope $sid $profileName $key $Name
     if ($script:WmJournalSeen.ContainsKey($id)) { return }
-    $script:WmJournalSeen[$id] = $true
+    $keyId = Get-WmJournalId $scope $sid $profileName $key ''
 
     $entry = [ordered]@{ Scope = $scope; Sid = $sid; Profile = $profileName; Key = $key; Name = $Name
-                         KeyExisted = $false; Existed = $false; Kind = ''; Value = $null }
+                         KeyExisted = $true; Ancestor = ''; Existed = $false; Kind = ''; Value = $null }
     $k = $null
     try {
         $k = Open-WmRegKey -Path $native
-        if ($k) {
-            $entry.KeyExisted = $true
-            if ($k.GetValueNames() -contains $Name) {
-                $kind = $k.GetValueKind($Name)
-                $raw = $k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-                $entry.Existed = $true
-                $entry.Kind = [string]$kind
-                if ($kind -eq 'Binary') { $entry.Value = [Convert]::ToBase64String([byte[]]$raw) }
-                elseif ($kind -eq 'MultiString') { $entry.Value = [string[]]$raw }
-                else { $entry.Value = [string]$raw }
+        # The key's state is taken once, before wmanager's first change in it
+        if (-not $script:WmJournalKeys.ContainsKey($keyId)) {
+            $state = @{ Existed = [bool]$k; Ancestor = '' }
+            if (-not $k) {
+                $anc = Get-WmExistingAncestor $native
+                if ($hiveRoot) { $anc = $anc.Substring([Math]::Min($anc.Length, $hiveRoot.Length)).TrimStart('\') }
+                $state.Ancestor = $anc
             }
+            $script:WmJournalKeys[$keyId] = $state
         }
+        $entry.KeyExisted = $script:WmJournalKeys[$keyId].Existed
+        $entry.Ancestor = $script:WmJournalKeys[$keyId].Ancestor
+        if ($k -and ($k.GetValueNames() -contains $Name)) {
+            $kind = $k.GetValueKind($Name)
+            $raw = $k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $entry.Existed = $true
+            $entry.Kind = [string]$kind
+            if ($kind -eq 'Binary') { $entry.Value = [Convert]::ToBase64String([byte[]]$raw) }
+            elseif ($kind -eq 'MultiString') { $entry.Value = [string[]]$raw }
+            else { $entry.Value = [string]$raw }
+        }
+        $line = ConvertTo-Json -InputObject ([pscustomobject]$entry) -Compress -Depth 4
+        [IO.File]::AppendAllText($script:WmJournalFile, $line + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+        $script:WmJournalSeen[$id] = $true
     } catch {
-        Write-WmLog "Dziennik zmian: nie mogę odczytać $native\$Name : $($_.Exception.Message)" -Level warn
+        Write-WmLog "Dziennik zmian: nie zapisano stanu $native\$Name (przywracanie go nie cofnie): $($_.Exception.Message)" -Level warn
     } finally {
         if ($k) { $k.Close() }
     }
-    $script:WmJournal.Add([pscustomobject]$entry)
 }
 
+# -OnError info: for keys that are sometimes protected, where access denied is expected.
 function Set-WmRegValue {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)]$Value,
-        [ValidateSet('DWord', 'QWord', 'String', 'ExpandString')][string]$Type = 'DWord'
+        [ValidateSet('DWord', 'QWord', 'String', 'ExpandString')][string]$Type = 'DWord',
+        [ValidateSet('warn', 'info')][string]$OnError = 'warn'
     )
     Add-WmJournalEntry -Path $Path -Name $Name
     try {
@@ -233,7 +263,7 @@ function Set-WmRegValue {
         New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType $Type -Force -ErrorAction Stop | Out-Null
         return $true
     } catch {
-        Write-WmLog "Nie udało się ustawić $Path\$Name : $($_.Exception.Message)" -Level warn
+        Write-WmLog "Nie udało się ustawić $Path\$Name : $($_.Exception.Message)" -Level $OnError
         return $false
     }
 }
