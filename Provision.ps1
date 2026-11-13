@@ -155,6 +155,19 @@ $failed = $false
 $hcStarted = $false
 
 try {
+    # Internet for Chocolatey and the package list, checked before anything changes.
+    # Without it the person at the console decides; the weekly task installs the programs later.
+    $offline = $false
+    $unreachable = @(Get-WmUnreachableHosts -Config $config)
+    if ($unreachable.Count -gt 0) {
+        Write-WmLog "Brak połączenia z: $($unreachable -join ', ')" -Level warn
+        if (-not (Confirm-WmContinue 'Brak internetu. Kontynuować bez instalacji programów (doinstaluje je cotygodniowe zadanie)?')) {
+            throw 'Brak internetu; provisioning przerwany przed zmianami.'
+        }
+        $offline = $true
+        Write-WmLog 'Kontynuuję bez internetu: Chocolatey i programy zostaną pominięte.' -Level warn
+    }
+
     # Nothing is changed before this point. Without a restore point the person at the console decides.
     if ($SkipRestorePoint) {
         Write-WmLog 'Punkt przywracania pominięty (-SkipRestorePoint).'
@@ -211,7 +224,9 @@ try {
     $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
     if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
 
-    if (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
+    if ($offline) {
+        Write-WmLog 'Pomijam Chocolatey i programy (brak internetu); zainstaluje je cotygodniowe zadanie.' -Level warn
+    } elseif (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
         $null = Invoke-WmStep 'Paczki' {
             $reqs = ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $config -BaseDir $here)
             $null = Sync-WmPackages -Requirements $reqs -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})

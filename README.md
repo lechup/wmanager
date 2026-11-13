@@ -46,17 +46,19 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 ## Provisioning steps
 
 1. Check for Windows 11 and administrator rights, determine the computer name.
-2. System restore point. If it can't be created, the script asks whether to go on without it (Enter = stop, nothing changed yet).
+2. Check that the Chocolatey and package-list servers answer. Without internet the script asks whether to go on
+   without installing programs (Enter = stop, nothing changed yet); the weekly task installs them later.
+3. System restore point. If it can't be created, the script asks whether to go on without it (Enter = stop).
    `run.cmd -SkipRestorePoint` skips the restore point and the question.
-3. Backup of Store apps and the registry, and the start of the undo journal (see [Backup and restore](#backup-and-restore)).
+4. Backup of Store apps and the registry, and the start of the undo journal (see [Backup and restore](#backup-and-restore)).
    If it fails, the script asks the same way.
-4. Copy files to `C:\ProgramData\wmanager` and set permissions.
-5. Rename the computer (if a name was given; takes effect after a restart).
-6. Debloat: apps from the `RemoveAppx` list (for all users and from the system image), OneDrive, policies, Edge.
-7. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
-8. Chocolatey, package sources, installing the packages from the list.
-9. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
-10. Register the scheduled tasks (folder `\wmanager\`).
+5. Copy files to `C:\ProgramData\wmanager` and set permissions.
+6. Rename the computer (if a name was given; takes effect after a restart).
+7. Debloat: apps from the `RemoveAppx` list (for all users and from the system image), OneDrive, policies, Edge.
+8. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
+9. Chocolatey, package sources, installing the packages from the list.
+10. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
+11. Register the scheduled tasks (folder `\wmanager\`).
 
 User settings are applied to every existing profile and to the default profile (new accounts).
 
@@ -128,6 +130,8 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
 - A package whose program is running (`RunningProcessMap`) is deferred; `wmanager-Retry` tries again 2 minutes after sign-in.
   An empty process list (as for `rustdesk`, which always runs as a service) means the package is never deferred.
 - When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.
+- Without internet (the Chocolatey and package-list servers don't answer) the weekly run changes nothing and reports
+  nothing; `wmanager-Retry` does the full weekly run at the next sign-in.
 
 Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Update'`.
 

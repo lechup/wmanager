@@ -11,19 +11,44 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Choco.ps1')
 . (Join-Path $here 'lib\Task.ps1')
 
-if ($OnlyIfPending -and -not (Test-Path -LiteralPath $script:WmRetryFlag)) { exit 0 }
+# A weekly run skipped for lack of internet leaves 'offline' in the retry flag,
+# so the retry at the next sign-in does the full weekly run.
+$fullRun = -not $OnlyIfPending
+if ($OnlyIfPending) {
+    if (-not (Test-Path -LiteralPath $script:WmRetryFlag)) { exit 0 }
+    if (@(Get-Content -LiteralPath $script:WmRetryFlag -ErrorAction SilentlyContinue) -contains 'offline') { $fullRun = $true }
+}
 
 $config = Import-WmConfig (Join-Path $here 'provision.config.psd1')
 $job = 'update'
-if ($OnlyIfPending) { $job = 'retry' }
+if (-not $fullRun) { $job = 'retry' }
 
 $lock = Enter-WmLock
 if (-not $lock) { Write-Host 'Inny przebieg wmanager już trwa, kończę.'; exit 0 }
 
 Initialize-WmLog $job
 Write-WmLog "wmanager $job na $($script:WmHostName)"
+
+# Without internet: change nothing, report nothing, try again at the next sign-in (wmanager-Retry)
+$unreachable = @(Get-WmUnreachableHosts -Config $config)
+if ($unreachable.Count -gt 0) {
+    Write-WmLog "Brak połączenia z: $($unreachable -join ', '). Pomijam przebieg, ponowię przy następnym logowaniu."
+    if ($fullRun) {
+        try {
+            New-Item -ItemType Directory -Force -Path $script:WmStateDir -ErrorAction Stop | Out-Null
+            if (@(Get-Content -LiteralPath $script:WmRetryFlag -ErrorAction SilentlyContinue) -notcontains 'offline') {
+                Add-Content -LiteralPath $script:WmRetryFlag -Value 'offline' -Encoding ASCII -ErrorAction Stop
+            }
+        } catch {
+            Write-WmLog "Nie mogę zapisać znacznika ponowienia: $($_.Exception.Message)" -Level warn
+        }
+    }
+    Exit-WmLock $lock
+    exit 0
+}
+
 $failed = $false
-if (-not $OnlyIfPending) { Send-WmHealthcheck -Config $config -Signal start }
+if ($fullRun) { Send-WmHealthcheck -Config $config -Signal start }
 
 try {
     # Stages run independently (see Invoke-WmStep). Install-WmChocolatey also repairs a machine
@@ -49,7 +74,7 @@ try {
         }
     }
 
-    if (-not $OnlyIfPending) {
+    if ($fullRun) {
         if (Get-WmSetting $config 'RerunDebloatWeekly' $true) {
             $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
             if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
@@ -70,7 +95,7 @@ try {
     Write-WmLog ("Koniec: ostrzeżenia {0}, błędy {1}." -f $script:WmWarnings, $script:WmErrors)
     Remove-WmOldLogs -Days ([int](Get-WmSetting $config 'LogRetentionDays' 90))
     Send-WmLokiLog -Config $config
-    if (-not $OnlyIfPending) {
+    if ($fullRun) {
         $signal = 'success'
         if ($failed) { $signal = 'fail' }
         Send-WmHealthcheck -Config $config -Signal $signal -Body (Get-WmLogTail 60)

@@ -104,6 +104,38 @@ function Get-WmLogTail {
 }
 
 # ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+
+# Servers the run needs: the Chocolatey install script, the enabled package sources and package-list
+# URLs. Returns the hosts that did not answer at all (empty = online). Any HTTP answer, even an
+# error status, counts as reachable.
+function Get-WmUnreachableHosts {
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    $urls = @(Get-WmSetting $Config 'ChocolateyInstallUrl' 'https://community.chocolatey.org/install.ps1')
+    foreach ($s in @(Get-WmSetting $Config 'ChocolateySources' @())) {
+        if ($s.Url -and $s.Enabled -ne $false) { $urls += $s.Url }
+    }
+    foreach ($s in @(Get-WmSetting $Config 'ReqsSources' @())) {
+        if ($s -match '^https?://') { $urls += $s }
+    }
+    $bad = @()
+    $checked = @{}
+    foreach ($u in $urls) {
+        try { $uri = [uri]$u } catch { continue }
+        $origin = $uri.GetLeftPart([UriPartial]::Authority)
+        if ($checked.ContainsKey($origin)) { continue }
+        $checked[$origin] = $true
+        try {
+            Invoke-WebRequest -Uri $origin -Method Head -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop | Out-Null
+        } catch {
+            if (-not $_.Exception.Response) { $bad += $uri.Host }
+        }
+    }
+    return $bad
+}
+
+# ---------------------------------------------------------------------------
 # Stages
 # ---------------------------------------------------------------------------
 
