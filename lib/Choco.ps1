@@ -128,9 +128,24 @@ function Get-WmRequirementsText {
 # Chocolatey
 # ---------------------------------------------------------------------------
 
+# The command line for the log, with secret values (passwords, keys) replaced by ***.
+function Format-WmChocoArgs {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments)
+    $secretFlags = @('-p', '--password', '--cp', '--certpassword', '-k', '--key', '--apikey', '--api-key')
+    $out = @()
+    $maskNext = $false
+    foreach ($a in $Arguments) {
+        if ($maskNext) { $out += '***'; $maskNext = $false; continue }
+        if ($a -match '^(-{1,2}[A-Za-z-]+)[=:]' -and $secretFlags -contains $Matches[1]) { $out += "$($Matches[1])=***"; continue }
+        $out += $a
+        if ($secretFlags -contains $a) { $maskNext = $true }
+    }
+    return ($out -join ' ')
+}
+
 function Invoke-WmChoco {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
-    Write-WmLog ('choco ' + ($Arguments -join ' ')) -LocalOnly
+    Write-WmLog ('choco ' + (Format-WmChocoArgs $Arguments)) -LocalOnly
     $output = & $script:WmChocoExe @Arguments 2>&1
     $code = $LASTEXITCODE
     foreach ($l in $output) {

@@ -74,6 +74,21 @@ Describe 'ConvertFrom-WmRequirements' {
     }
 }
 
+Describe 'Format-WmChocoArgs' {
+    It 'masks the value after -p and --password' {
+        Format-WmChocoArgs @('source', 'add', '-n', 'company', '-u', 'bob', '-p', 'S3cret') | Should -Be 'source add -n company -u bob -p ***'
+        Format-WmChocoArgs @('source', 'add', '--password', 'S3cret') | Should -Be 'source add --password ***'
+    }
+
+    It 'masks the value in the --flag=value form' {
+        Format-WmChocoArgs @('apikey', '--api-key=abc123') | Should -Be 'apikey --api-key=***'
+    }
+
+    It 'leaves other arguments unchanged' {
+        Format-WmChocoArgs @('upgrade', 'vlc', '--version', '3.0.21', '-y') | Should -Be 'upgrade vlc --version 3.0.21 -y'
+    }
+}
+
 Describe 'ConvertTo-WmJsonString' {
     It 'escapes quotes, backslashes and newlines' {
         ConvertTo-WmJsonString ('a"b\c' + "`n") | Should -Be '"a\"b\\c\n"'
