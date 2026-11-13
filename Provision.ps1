@@ -95,9 +95,15 @@ function Install-WmFiles {
             if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force -ErrorAction Stop }
         }
         Copy-Item -Path (Join-Path $src 'lib\*.ps1') -Destination (Join-Path $dst 'lib') -Force -ErrorAction Stop
-        Copy-Item -LiteralPath $ConfigFile -Destination (Join-Path $dst 'provision.config.psd1') -Force -ErrorAction Stop
         Get-ChildItem -LiteralPath $dst -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
         Write-WmLog "Pliki skopiowane do $dst"
+    }
+    # The config is copied whenever it comes from elsewhere, also when running from $dst itself with -ConfigPath
+    $dstConfig = Join-Path $dst 'provision.config.psd1'
+    $srcConfig = (Resolve-Path -LiteralPath $ConfigFile).Path
+    if ($srcConfig -ne $dstConfig) {
+        Copy-Item -LiteralPath $srcConfig -Destination $dstConfig -Force -ErrorAction Stop
+        Write-WmLog "Konfiguracja skopiowana z $srcConfig"
     }
     Set-WmFolderAcl -Path $dst -ConfigFile (Join-Path $dst 'provision.config.psd1')
 }
