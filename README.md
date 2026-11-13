@@ -43,7 +43,8 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 ## Provisioning steps
 
 1. Check for Windows 11 and administrator rights, determine the computer name.
-2. System restore point.
+2. System restore point. If it can't be created, the script asks whether to go on without it (Enter = stop, nothing changed yet).
+   `run.cmd -SkipRestorePoint` skips the restore point and the question.
 3. Copy files to `C:\ProgramData\wmanager` and set permissions.
 4. Rename the computer (if a name was given; takes effect after a restart).
 5. Debloat: apps from the `RemoveAppx` list (for all users and from the system image), OneDrive, policies, Edge.

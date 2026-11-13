@@ -15,6 +15,10 @@
 .PARAMETER ConfigPath
     Path to the configuration file. Defaults to provision.config.psd1 next to the script.
 
+.PARAMETER SkipRestorePoint
+    Don't create a system restore point. Without it, a failed restore point stops provisioning
+    unless the person at the console confirms going on without one.
+
 .EXAMPLE
     .\Provision.ps1
 .EXAMPLE
@@ -70,19 +74,31 @@ function Resolve-WmComputerName {
     }
 }
 
+# Returns $true when the restore point was created.
 function New-WmRestorePoint {
+    $sr = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+    $old = (Get-ItemProperty -LiteralPath $sr -Name 'SystemRestorePointCreationFrequency' -ErrorAction SilentlyContinue).SystemRestorePointCreationFrequency
     try {
         Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
         # Windows allows one restore point per 24 h; lift the limit for the duration of provisioning
-        $sr = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
-        $old = (Get-ItemProperty -LiteralPath $sr -Name 'SystemRestorePointCreationFrequency' -ErrorAction SilentlyContinue).SystemRestorePointCreationFrequency
         Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' 0 | Out-Null
         Checkpoint-Computer -Description 'wmanager: before provisioning' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
-        if ($null -eq $old) { Remove-WmRegValue $sr 'SystemRestorePointCreationFrequency' } else { Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' $old | Out-Null }
         Write-WmLog 'Utworzono punkt przywracania systemu.'
+        return $true
     } catch {
         Write-WmLog "Nie udało się utworzyć punktu przywracania: $($_.Exception.Message)" -Level warn
+        return $false
+    } finally {
+        if ($null -eq $old) { Remove-WmRegValue $sr 'SystemRestorePointCreationFrequency' } else { Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' $old | Out-Null }
     }
+}
+
+# Asks at the console whether to go on after a failed safety step. Without a console the answer is no.
+function Confirm-WmContinue {
+    param([Parameter(Mandatory = $true)][string]$Question)
+    if (-not (Test-WmInteractive)) { return $false }
+    $answer = (Read-Host "$Question [t/N]").Trim()
+    return ($answer -match '^(t|tak|y|yes)$')
 }
 
 function Install-WmFiles {
@@ -152,7 +168,15 @@ Write-WmLog "wmanager provisioning: $($os.Caption) build $($os.BuildNumber), kom
 $failed = $false
 
 try {
-    if (-not $SkipRestorePoint) { New-WmRestorePoint }
+    # Nothing is changed before this point. Without a restore point the person at the console decides.
+    if ($SkipRestorePoint) {
+        Write-WmLog 'Punkt przywracania pominięty (-SkipRestorePoint).'
+    } elseif (-not (New-WmRestorePoint)) {
+        if (-not (Confirm-WmContinue 'Nie udało się utworzyć punktu przywracania. Kontynuować bez niego?')) {
+            throw 'Brak punktu przywracania; provisioning przerwany przed zmianami.'
+        }
+        Write-WmLog 'Kontynuuję bez punktu przywracania (potwierdzone w konsoli).' -Level warn
+    }
 
     # The scheduled tasks run the copied files, so if copying fails the run stops here
     Install-WmFiles -ConfigFile $ConfigPath
