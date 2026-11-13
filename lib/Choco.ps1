@@ -300,7 +300,10 @@ function Sync-WmPackages {
                     $deferred += $r.Name
                     continue
                 }
-                if ($pins.ContainsKey($key)) { Invoke-WmChoco @('pin', 'remove', '-n', $r.Name) | Out-Null }
+                if ($pins.ContainsKey($key)) {
+                    Invoke-WmChoco @('pin', 'remove', '-n', $r.Name) | Out-Null
+                    $pins.Remove($key)   # so the pin is added back below, even if it had the same version
+                }
                 $code = Invoke-WmChoco (@('upgrade', $r.Name, '--version', $r.Version, '--allow-downgrade', '-y', '--no-progress') + $extra)
                 if (Test-WmChocoSuccess $code $r.Name "instalacja wersji $($r.Version)") {
                     Write-WmLog "$($r.Name): ustawiona wersja $($r.Version)."
