@@ -62,8 +62,12 @@ function Remove-WmOneDrive {
     # System-wide installation
     foreach ($setup in @("$env:SystemRoot\System32\OneDriveSetup.exe", "$env:SystemRoot\SysWOW64\OneDriveSetup.exe")) {
         if (Test-Path -LiteralPath $setup) {
-            $p = Start-Process -FilePath $setup -ArgumentList '/uninstall' -Wait -PassThru -WindowStyle Hidden
-            Write-WmLog "OneDriveSetup /uninstall ($setup) zakończony kodem $($p.ExitCode)"
+            try {
+                $p = Start-Process -FilePath $setup -ArgumentList '/uninstall' -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                Write-WmLog "OneDriveSetup /uninstall ($setup) zakończony kodem $($p.ExitCode)"
+            } catch {
+                Write-WmLog "Nie udało się uruchomić $setup /uninstall: $($_.Exception.Message)" -Level warn
+            }
         }
     }
     # Per-machine installation (Program Files)
@@ -75,8 +79,12 @@ function Remove-WmOneDrive {
                 if ($cmd -match '^"([^"]+)"\s*(.*)$') { $exe = $Matches[1]; $argStr = $Matches[2] }
                 else { $exe = ($cmd -split ' ', 2)[0]; $argStr = ($cmd -split ' ', 2)[1] }
                 if ($argStr -notmatch '/silent') { $argStr = "$argStr /silent" }
-                $p = Start-Process -FilePath $exe -ArgumentList $argStr.Trim() -Wait -PassThru -WindowStyle Hidden
-                Write-WmLog "Odinstalowanie $($u.DisplayName) zakończone kodem $($p.ExitCode)"
+                try {
+                    $p = Start-Process -FilePath $exe -ArgumentList $argStr.Trim() -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                    Write-WmLog "Odinstalowanie $($u.DisplayName) zakończone kodem $($p.ExitCode)"
+                } catch {
+                    Write-WmLog "Nie udało się odinstalować $($u.DisplayName): $($_.Exception.Message)" -Level warn
+                }
             }
         }
     }

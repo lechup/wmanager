@@ -92,10 +92,10 @@ function Install-WmFiles {
     if ($src -ne $dst) {
         foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Notify-User.ps1', 'run.cmd', 'choco-reqs.txt')) {
             $p = Join-Path $src $f
-            if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force }
+            if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force -ErrorAction Stop }
         }
-        Copy-Item -Path (Join-Path $src 'lib\*.ps1') -Destination (Join-Path $dst 'lib') -Force
-        Copy-Item -LiteralPath $ConfigFile -Destination (Join-Path $dst 'provision.config.psd1') -Force
+        Copy-Item -Path (Join-Path $src 'lib\*.ps1') -Destination (Join-Path $dst 'lib') -Force -ErrorAction Stop
+        Copy-Item -LiteralPath $ConfigFile -Destination (Join-Path $dst 'provision.config.psd1') -Force -ErrorAction Stop
         Get-ChildItem -LiteralPath $dst -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
         Write-WmLog "Pliki skopiowane do $dst"
     }

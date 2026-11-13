@@ -40,7 +40,7 @@ function Register-WmTasks {
     $s1 = New-ScheduledTaskSettingsSet -StartWhenAvailable -RunOnlyIfNetworkAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -Action $a1 -Trigger (New-WmUpdateTrigger $Config) `
-        -Settings $s1 -Principal $system -Description 'wmanager: weekly update of packages from choco-reqs.txt' -Force | Out-Null
+        -Settings $s1 -Principal $system -Description 'wmanager: weekly update of packages from choco-reqs.txt' -Force -ErrorAction Stop | Out-Null
 
     # 2. Retry deferred updates at sign-in (runs only when something was deferred)
     $a2 = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$update`" -OnlyIfPending"
@@ -49,7 +49,7 @@ function Register-WmTasks {
     $s2 = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskRetry -Action $a2 -Trigger $t2 `
-        -Settings $s2 -Principal $system -Description 'wmanager: retry of deferred updates' -Force | Out-Null
+        -Settings $s2 -Principal $system -Description 'wmanager: retry of deferred updates' -Force -ErrorAction Stop | Out-Null
 
     # 3. Notification in the signed-in user's session (Users group)
     $a3 = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$notify`""
@@ -58,7 +58,7 @@ function Register-WmTasks {
     $users = New-ScheduledTaskPrincipal -GroupId (Get-WmUsersGroupName) -RunLevel Limited
     $s3 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskNotify -Action $a3 -Trigger $t3 `
-        -Settings $s3 -Principal $users -Description 'wmanager: restart prompt and default browser setup' -Force | Out-Null
+        -Settings $s3 -Principal $users -Description 'wmanager: restart prompt and default browser setup' -Force -ErrorAction Stop | Out-Null
 
     $days = (@(Get-WmSetting $Config 'UpdateDays' @('Monday')) -join ', ')
     Write-WmLog "Zadania zarejestrowane; aktualizacja: $days o $(Get-WmSetting $Config 'UpdateTime' '12:00')."
@@ -77,7 +77,7 @@ function Update-WmTaskSchedule {
     $wantMask = Get-WmDaysMask @(Get-WmSetting $Config 'UpdateDays' @('Monday'))
     $haveMask = [int]$have.DaysOfWeek
     if ($wantTime -ne $haveTime -or $wantMask -ne $haveMask) {
-        Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -Trigger $want | Out-Null
+        Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -Trigger $want -ErrorAction Stop | Out-Null
         Write-WmLog "Zmieniono termin aktualizacji na: $((@(Get-WmSetting $Config 'UpdateDays' @('Monday'))) -join ', ') $wantTime."
     }
 }

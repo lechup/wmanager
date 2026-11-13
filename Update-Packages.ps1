@@ -43,8 +43,8 @@ try {
     # Without a package result the retry flag stays as it was
     if ($null -ne $script:WmDeferred) {
         if ($script:WmDeferred.Count -gt 0) {
-            New-Item -ItemType Directory -Force -Path $script:WmStateDir | Out-Null
-            Set-Content -LiteralPath $script:WmRetryFlag -Value ($script:WmDeferred -join "`r`n") -Encoding ASCII
+            New-Item -ItemType Directory -Force -Path $script:WmStateDir -ErrorAction Stop | Out-Null
+            Set-Content -LiteralPath $script:WmRetryFlag -Value ($script:WmDeferred -join "`r`n") -Encoding ASCII -ErrorAction Stop
             Write-WmLog "Odłożone do następnego logowania: $($script:WmDeferred -join ', ')" -Level warn
         } else {
             Remove-Item -LiteralPath $script:WmRetryFlag -Force -ErrorAction SilentlyContinue

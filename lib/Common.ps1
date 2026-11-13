@@ -333,8 +333,8 @@ function Get-WmBootTime {
 # "Restart needed" flag stamped with the current boot time.
 # After a restart the boot time changes, so the flag no longer applies.
 function Set-WmRebootFlag {
-    New-Item -ItemType Directory -Force -Path $script:WmStateDir | Out-Null
-    Set-Content -LiteralPath $script:WmRebootFlag -Value (Get-WmBootTime) -Encoding ASCII
+    New-Item -ItemType Directory -Force -Path $script:WmStateDir -ErrorAction Stop | Out-Null
+    Set-Content -LiteralPath $script:WmRebootFlag -Value (Get-WmBootTime) -Encoding ASCII -ErrorAction Stop
 }
 
 function Clear-WmStaleRebootFlag {
