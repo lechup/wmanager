@@ -239,12 +239,42 @@ function Get-WmUnexpectedAclSids {
              ForEach-Object { $_.IdentityReference.Value } | Select-Object -Unique)
 }
 
-# Folder: only SYSTEM and Administrators can write; Users can read and execute.
+# Prepares C:\ProgramData\wmanager before anything is written there. Any user can create folders
+# in ProgramData, so an existing folder that is a link or is not owned by SYSTEM/Administrators
+# may have been planted (its owner can always change the ACL); it is moved aside, not reused.
+function Initialize-WmRoot {
+    if (Test-Path -LiteralPath $script:WmRoot) {
+        $item = Get-Item -LiteralPath $script:WmRoot -Force
+        $reason = $null
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { $reason = 'jest dowiązaniem' }
+        elseif (-not $item.PSIsContainer) { $reason = 'nie jest folderem' }
+        else {
+            $owner = (Get-Acl -LiteralPath $script:WmRoot).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+            if ($script:WmAdminSids -notcontains $owner) { $reason = "ma obcego właściciela ($owner)" }
+        }
+        if ($reason) {
+            $aside = '{0}.untrusted-{1}' -f $script:WmRoot, (Get-Date -Format 'yyyyMMddHHmmss')
+            Write-WmLog "$($script:WmRoot) $reason; przenoszę do $aside i tworzę od nowa." -Level warn
+            Move-Item -LiteralPath $script:WmRoot -Destination $aside -ErrorAction Stop
+        }
+    }
+    New-Item -ItemType Directory -Force -Path $script:WmRoot, $script:WmStateDir, $script:WmLogDir, (Join-Path $script:WmRoot 'lib') -ErrorAction Stop | Out-Null
+}
+
+# Folder: owned by Administrators; only SYSTEM and Administrators can write; Users can read and execute.
+# Everything inside only inherits the folder's ACL (explicit entries are removed).
 # Configuration file (tokens): SYSTEM and Administrators only. Checked after setting; a failure is an error.
 function Set-WmFolderAcl {
     param([Parameter(Mandatory = $true)][string]$Path, [string]$ConfigFile)
-    & icacls.exe "$Path" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' /T /C /Q 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls zwrócił $LASTEXITCODE dla $Path" -Level warn }
+    & icacls.exe "$Path" /setowner '*S-1-5-32-544' /T /C /Q 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls /setowner zwrócił $LASTEXITCODE dla $Path" -Level warn }
+    try {
+        Set-WmExplicitAcl -Path $Path -ReadExecute @($script:WmUsersSid)
+    } catch {
+        Write-WmLog "Nie udało się ustawić uprawnień $Path : $($_.Exception.Message)" -Level error
+    }
+    & icacls.exe (Join-Path $Path '*') /reset /T /C /Q 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls /reset zwrócił $LASTEXITCODE dla $Path" -Level warn }
     if ($ConfigFile -and (Test-Path -LiteralPath $ConfigFile)) {
         try {
             Set-WmExplicitAcl -Path $ConfigFile

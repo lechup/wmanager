@@ -37,6 +37,8 @@ Without a console (e.g. autounattend) the question is skipped and the name stays
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
 only Administrators and SYSTEM can write there, and only they can read `provision.config.psd1` (which holds the tokens).
+If that folder already exists but is a link or is not owned by Administrators or SYSTEM (any user can create folders
+in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timestamp>` and starts with a fresh one.
 
 ## Provisioning steps
 

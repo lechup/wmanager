@@ -87,7 +87,6 @@ function New-WmRestorePoint {
 
 function Install-WmFiles {
     param([string]$ConfigFile)
-    New-Item -ItemType Directory -Force -Path $script:WmRoot, $script:WmStateDir, $script:WmLogDir, (Join-Path $script:WmRoot 'lib') | Out-Null
     $src = (Resolve-Path -LiteralPath $here).Path.TrimEnd('\')
     $dst = (Resolve-Path -LiteralPath $script:WmRoot).Path.TrimEnd('\')
     if ($src -ne $dst) {
@@ -135,7 +134,13 @@ $newName = Resolve-WmComputerName -Requested $ComputerName -Prompt ([bool](Get-W
 $lock = Enter-WmLock
 if (-not $lock) { Write-Host 'Inny przebieg wmanager już trwa. Spróbuj za chwilę.' -ForegroundColor Red; exit 3 }
 
-New-Item -ItemType Directory -Force -Path $script:WmLogDir | Out-Null
+try {
+    Initialize-WmRoot
+} catch {
+    Write-Host "Nie mogę przygotować $($script:WmRoot): $($_.Exception.Message)" -ForegroundColor Red
+    Exit-WmLock $lock
+    exit 4
+}
 Initialize-WmLog 'provision'
 if ($newName -ne $env:COMPUTERNAME) { $script:WmHostName = $newName }
 Write-WmLog "wmanager provisioning: $($os.Caption) build $($os.BuildNumber), komputer $env:COMPUTERNAME"
