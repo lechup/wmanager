@@ -148,9 +148,7 @@ try {
     exit 4
 }
 Initialize-WmLog 'provision'
-if ($newName -ne $env:COMPUTERNAME) { $script:WmHostName = $newName }
 Write-WmLog "wmanager provisioning: $($os.Caption) build $($os.BuildNumber), komputer $env:COMPUTERNAME"
-Send-WmHealthcheck -Config $config -Signal start
 $failed = $false
 
 try {
@@ -163,14 +161,16 @@ try {
     if ($newName -ne $env:COMPUTERNAME) {
         try {
             Rename-Computer -NewName $newName -Force -ErrorAction Stop
+            $script:WmHostName = $newName
             Write-WmLog "Nazwa komputera zmieniona: $env:COMPUTERNAME -> $newName (działa po restarcie)."
         } catch {
-            $script:WmHostName = $env:COMPUTERNAME
             Write-WmLog "Nie udało się zmienić nazwy na $newName : $($_.Exception.Message)" -Level error
         }
     } else {
         Write-WmLog "Nazwa komputera bez zmian: $env:COMPUTERNAME"
     }
+    # Pinged only once the final name is known, so start and end go to the same check
+    Send-WmHealthcheck -Config $config -Signal start
 
     # Each stage on its own: a failure (e.g. no network for Chocolatey) is logged as an error,
     # but the scheduled tasks still get registered, so the weekly run can finish the job.
