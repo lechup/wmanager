@@ -84,7 +84,7 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
 ## Weekly update
 
 - `wmanager-Update` (SYSTEM): scheduled by `UpdateDays` and `UpdateTime`; after a missed run it starts right after boot.
-  It fetches the list, installs new packages, upgrades packages that are neither pinned nor `!noupdate`,
+  It installs Chocolatey if it is missing, fetches the list, installs new packages, upgrades packages that are neither pinned nor `!noupdate`,
   reruns debloat (`RerunDebloatWeekly`) and updates its own schedule if the configuration changed.
 - A package whose program is running (`RunningProcessMap`) is deferred; `wmanager-Retry` tries again 2 minutes after sign-in.
 - When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.

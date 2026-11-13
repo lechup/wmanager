@@ -97,6 +97,23 @@ function Get-WmLogTail {
 }
 
 # ---------------------------------------------------------------------------
+# Stages
+# ---------------------------------------------------------------------------
+
+# Runs one stage. An exception is logged as an error (so the run reports a failure),
+# but the stages after it still run. Returns $true when the stage finished without one.
+function Invoke-WmStep {
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][scriptblock]$Action)
+    try {
+        $null = & $Action
+        return $true
+    } catch {
+        Write-WmLog "Etap '$Name' przerwany: $($_.Exception.Message)" -Level error
+        return $false
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Lock against concurrent runs (provisioning and the scheduled task)
 # ---------------------------------------------------------------------------
 

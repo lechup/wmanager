@@ -28,25 +28,35 @@ if (-not $OnlyIfPending) { Send-WmHealthcheck -Config $config -Signal start }
 try {
     Clear-WmStaleRebootFlag
 
-    $reqs = ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $config -BaseDir $here)
-    $deferred = Sync-WmPackages -Requirements $reqs -Upgrade `
-                    -SkipRunning:([bool](Get-WmSetting $config 'SkipRunningPackages' $true)) `
-                    -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
+    # Stages run independently (see Invoke-WmStep). Install-WmChocolatey also repairs a machine
+    # where provisioning could not install Chocolatey, and applies changed package sources.
+    $script:WmDeferred = $null
+    if (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
+        $null = Invoke-WmStep 'Paczki' {
+            $reqs = ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $config -BaseDir $here)
+            $script:WmDeferred = Sync-WmPackages -Requirements $reqs -Upgrade `
+                                    -SkipRunning:([bool](Get-WmSetting $config 'SkipRunningPackages' $true)) `
+                                    -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
+        }
+    }
 
-    if ($deferred.Count -gt 0) {
-        New-Item -ItemType Directory -Force -Path $script:WmStateDir | Out-Null
-        Set-Content -LiteralPath $script:WmRetryFlag -Value ($deferred -join "`r`n") -Encoding ASCII
-        Write-WmLog "Odłożone do następnego logowania: $($deferred -join ', ')" -Level warn
-    } else {
-        Remove-Item -LiteralPath $script:WmRetryFlag -Force -ErrorAction SilentlyContinue
+    # Without a package result the retry flag stays as it was
+    if ($null -ne $script:WmDeferred) {
+        if ($script:WmDeferred.Count -gt 0) {
+            New-Item -ItemType Directory -Force -Path $script:WmStateDir | Out-Null
+            Set-Content -LiteralPath $script:WmRetryFlag -Value ($script:WmDeferred -join "`r`n") -Encoding ASCII
+            Write-WmLog "Odłożone do następnego logowania: $($script:WmDeferred -join ', ')" -Level warn
+        } else {
+            Remove-Item -LiteralPath $script:WmRetryFlag -Force -ErrorAction SilentlyContinue
+        }
     }
 
     if (-not $OnlyIfPending) {
         if (Get-WmSetting $config 'RerunDebloatWeekly' $true) {
-            Invoke-WmDebloat -Config $config
-            if (Get-WmSetting $config 'Privacy' $true) { Invoke-WmPrivacy }
+            $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
+            if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
         }
-        Update-WmTaskSchedule -Config $config
+        $null = Invoke-WmStep 'Harmonogram zadań' { Update-WmTaskSchedule -Config $config }
     }
 
     if ($script:WmChocoNeedsReboot -or (Test-WmPendingReboot)) {

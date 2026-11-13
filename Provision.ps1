@@ -150,6 +150,7 @@ $failed = $false
 try {
     if (-not $SkipRestorePoint) { New-WmRestorePoint }
 
+    # The scheduled tasks run the copied files, so if copying fails the run stops here
     Install-WmFiles -ConfigFile $ConfigPath
     $config = Import-WmConfig (Join-Path $script:WmRoot 'provision.config.psd1')
 
@@ -165,16 +166,21 @@ try {
         Write-WmLog "Nazwa komputera bez zmian: $env:COMPUTERNAME"
     }
 
-    Invoke-WmDebloat -Config $config
-    if (Get-WmSetting $config 'Privacy' $true) { Invoke-WmPrivacy }
+    # Each stage on its own: a failure (e.g. no network for Chocolatey) is logged as an error,
+    # but the scheduled tasks still get registered, so the weekly run can finish the job.
+    $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
+    if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
 
-    Install-WmChocolatey -Config $config
-    $reqs = ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $config -BaseDir $here)
-    $null = Sync-WmPackages -Requirements $reqs -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
+    if (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
+        $null = Invoke-WmStep 'Paczki' {
+            $reqs = ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $config -BaseDir $here)
+            $null = Sync-WmPackages -Requirements $reqs -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
+        }
+    }
 
-    Set-WmDefaultBrowser -Config $config
-    Write-WmPublicState -Config $config
-    Register-WmTasks -Config $config
+    $null = Invoke-WmStep 'Domyślna przeglądarka' { Set-WmDefaultBrowser -Config $config }
+    $null = Invoke-WmStep 'Ustawienia dla powiadomień' { Write-WmPublicState -Config $config }
+    $null = Invoke-WmStep 'Harmonogram zadań' { Register-WmTasks -Config $config }
 } catch {
     $failed = $true
     Write-WmLog "Provisioning przerwany: $($_.Exception.Message)" -Level error
