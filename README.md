@@ -87,6 +87,7 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
   It installs Chocolatey if it is missing, fetches the list, installs new packages, upgrades packages that are neither pinned nor `!noupdate`,
   reruns debloat (`RerunDebloatWeekly`) and updates its own schedule if the configuration changed.
 - A package whose program is running (`RunningProcessMap`) is deferred; `wmanager-Retry` tries again 2 minutes after sign-in.
+  An empty process list (as for `rustdesk`, which always runs as a service) means the package is never deferred.
 - When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.
 
 Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Update'`.

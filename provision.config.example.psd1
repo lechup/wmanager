@@ -29,6 +29,7 @@
 
     # Processes that show a package's program is running.
     # Packages not in this map: a process named like the package is checked.
+    # An empty list (@()) means: never treat the package as running (e.g. a program that runs as a service).
     RunningProcessMap = @{
         'googlechrome'      = @('chrome')
         'libreoffice-fresh' = @('soffice', 'soffice.bin')
@@ -37,7 +38,7 @@
         '7zip'              = @('7zFM', '7zG')
         'vlc'               = @('vlc')
         'notepadplusplus'   = @('notepad++')
-        'rustdesk'          = @('rustdesk')
+        'rustdesk'          = @()   # runs as a service all the time; checking the process would defer it forever
         'firefox'           = @('firefox')
     }
 
