@@ -356,6 +356,14 @@ function Set-WmExplicitAcl {
         [string[]]$ReadExecute = @()
     )
     $isDir = Test-Path -LiteralPath $Path -PathType Container
+    $acl = New-WmExplicitAcl -Directory:$isDir -FullControl $FullControl -ReadExecute $ReadExecute
+    if ($isDir) { [IO.Directory]::SetAccessControl($Path, $acl) } else { [IO.File]::SetAccessControl($Path, $acl) }
+}
+
+# The security descriptor used by Set-WmExplicitAcl (also for creating a folder with it directly).
+function New-WmExplicitAcl {
+    param([switch]$Directory, [string[]]$FullControl = $script:WmAdminSids, [string[]]$ReadExecute = @())
+    $isDir = [bool]$Directory
     if ($isDir) {
         $acl = New-Object System.Security.AccessControl.DirectorySecurity
         $inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
@@ -373,7 +381,7 @@ function Set-WmExplicitAcl {
                     [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
         $acl.AddAccessRule($rule)
     }
-    if ($isDir) { [IO.Directory]::SetAccessControl($Path, $acl) } else { [IO.File]::SetAccessControl($Path, $acl) }
+    return $acl
 }
 
 # SIDs other than $Allowed that have any Allow entry on the path.
@@ -401,9 +409,19 @@ function Initialize-WmRoot {
             $aside = '{0}.untrusted-{1}' -f $script:WmRoot, (Get-Date -Format 'yyyyMMddHHmmss')
             Write-WmLog "$($script:WmRoot) $reason; przenoszę do $aside i tworzę od nowa." -Level warn
             Move-Item -LiteralPath $script:WmRoot -Destination $aside -ErrorAction Stop
+            if (Test-Path -LiteralPath (Join-Path $aside 'state\backup')) {
+                Write-WmLog "Kopie i dziennik zmian zostały w $aside\state\backup i nie będą używane; Restore-Backup.ps1 nie cofnie wcześniejszych przebiegów." -Level warn
+            }
         }
     }
-    New-Item -ItemType Directory -Force -Path $script:WmRoot, $script:WmStateDir, $script:WmLogDir, (Join-Path $script:WmRoot 'lib') -ErrorAction Stop | Out-Null
+    # A new folder is created with its final ACL in one step, so no user can put anything in it first
+    if (-not (Test-Path -LiteralPath $script:WmRoot)) {
+        $acl = New-WmExplicitAcl -Directory -ReadExecute @($script:WmUsersSid)
+        [IO.Directory]::CreateDirectory($script:WmRoot, $acl) | Out-Null
+    }
+    New-Item -ItemType Directory -Force -Path $script:WmStateDir, $script:WmLogDir, (Join-Path $script:WmRoot 'lib') -ErrorAction Stop | Out-Null
+    # Lock down everything before anything is read from the folder (e.g. the undo journal)
+    Set-WmFolderAcl -Path $script:WmRoot
 }
 
 # Folder: owned by Administrators; only SYSTEM and Administrators can write; Users can read and execute.
@@ -422,7 +440,7 @@ function Set-WmFolderAcl {
     & icacls.exe (Join-Path $Path '*') /reset /T /C /Q 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls /reset zwrócił $LASTEXITCODE dla $Path" -Level warn }
     # Private: the config (tokens) and the backups (other users' settings)
-    foreach ($private in @($ConfigFile, $script:WmBackupDir)) {
+    foreach ($private in @($ConfigFile, (Join-Path $Path 'provision.config.psd1'), $script:WmBackupDir) | Select-Object -Unique) {
         if (-not $private -or -not (Test-Path -LiteralPath $private)) { continue }
         try {
             Set-WmExplicitAcl -Path $private
