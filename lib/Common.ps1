@@ -405,7 +405,21 @@ function Send-WmLokiLog {
             Invoke-RestMethod -Uri $url -Method Post -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 30 -UseBasicParsing | Out-Null
             Remove-Item -LiteralPath $f.FullName -Force
         } catch {
-            $msg = "Wysyłka do Loki nie powiodła się ($($f.Name)), spróbuję przy następnym przebiegu: $($_.Exception.Message)"
+            $err = $_
+            $status = 0
+            if ($err.Exception.Response) { try { $status = [int]$err.Exception.Response.StatusCode } catch { } }
+            if ($status -eq 400 -or $status -eq 413) {
+                # Loki will never accept this batch (e.g. entries too old, too large): move it aside
+                # so newer batches are not stuck behind it. Other errors (auth, 429, 5xx, network) keep the queue.
+                $rejected = Join-Path $outbox 'rejected'
+                New-Item -ItemType Directory -Force -Path $rejected | Out-Null
+                Move-Item -LiteralPath $f.FullName -Destination $rejected -Force -ErrorAction SilentlyContinue
+                $msg = "Loki odrzucił $($f.Name) (HTTP $status), przeniesiono do outbox\rejected: $($err.Exception.Message)"
+                Write-Host $msg -ForegroundColor Yellow
+                if ($script:WmLogFile) { Add-Content -LiteralPath $script:WmLogFile -Value $msg -Encoding UTF8 }
+                continue
+            }
+            $msg = "Wysyłka do Loki nie powiodła się ($($f.Name)), spróbuję przy następnym przebiegu: $($err.Exception.Message)"
             Write-Host $msg -ForegroundColor Yellow
             if ($script:WmLogFile) { Add-Content -LiteralPath $script:WmLogFile -Value $msg -Encoding UTF8 }
             break

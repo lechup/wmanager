@@ -98,7 +98,8 @@ Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Upda
   The full Chocolatey output is only in the local log (and in `C:\ProgramData\chocolatey\logs`).
 - **Grafana Cloud Loki**: at the end of a run the script pushes the entries over HTTP (`/loki/api/v1/push`), with no agent.
   Labels: `service_name="wmanager"`, `host`, `job` (`provision`, `update`, `retry`), `level`.
-  When Grafana doesn't respond, the batch waits in `logs\outbox` and is sent on the next run.
+  When Grafana doesn't respond (or rejects the token), the batch waits in `logs\outbox` and is sent on the next run.
+  A batch Loki rejects for good (HTTP 400 or 413, e.g. entries too old) is moved to `logs\outbox\rejected` so it doesn't block newer ones.
   Example query: `{service_name="wmanager", level="error"}`.
 - **Healthchecks.io**: a `/start` ping at the beginning, and success or `/fail` (with the tail of the log) at the end of provisioning and of the weekly update.
   The check is created on the first ping (`?create=1`); its name is the computer name (with an optional `HealthchecksSlugPrefix`).
