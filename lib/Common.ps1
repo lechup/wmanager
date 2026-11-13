@@ -209,9 +209,19 @@ function Invoke-WmForEachUserHive {
             Write-WmLog "Błąd przy profilu $($t.Name): $($_.Exception.Message)" -Level warn
         } finally {
             if ($mount) {
-                [GC]::Collect()
-                [GC]::WaitForPendingFinalizers()
-                & reg.exe unload "HKU\$mount" 2>&1 | Out-Null
+                # A leftover handle keeps the hive loaded; a still-loaded Default profile breaks sign-in of new
+                # accounts (they get a temporary profile), so retry and report a failure as an error
+                $unloaded = $false
+                for ($try = 1; $try -le 5 -and -not $unloaded; $try++) {
+                    [GC]::Collect()
+                    [GC]::WaitForPendingFinalizers()
+                    & reg.exe unload "HKU\$mount" 2>&1 | Out-Null
+                    $unloaded = ($LASTEXITCODE -eq 0)
+                    if (-not $unloaded) { Start-Sleep -Seconds 2 }
+                }
+                if (-not $unloaded) {
+                    Write-WmLog "Nie udało się odłączyć rejestru profilu $($t.Name) (HKU\$mount); pomoże restart komputera." -Level error
+                }
             }
         }
     }
