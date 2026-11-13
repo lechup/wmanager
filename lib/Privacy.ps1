@@ -24,6 +24,8 @@ function Invoke-WmPrivacy {
         $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
         if ($s) {
             try {
+                # The startup type lives in the service key's Start value; recorded for Restore-Backup.ps1
+                Add-WmJournalEntry -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$svc" -Name 'Start'
                 if ($s.Status -ne 'Stopped') { Stop-Service -Name $svc -Force -ErrorAction Stop }
                 Set-Service -Name $svc -StartupType Disabled -ErrorAction Stop
                 Write-WmLog "Usługa $svc wyłączona."

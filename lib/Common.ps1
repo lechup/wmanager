@@ -16,6 +16,12 @@ $script:WmRetryFlag   = Join-Path $script:WmStateDir 'retry-pending.flag'
 $script:WmPublicState = Join-Path $script:WmStateDir 'public.json'
 $script:WmMutexName   = 'Global\wmanager-run'
 
+$script:WmBackupDir   = Join-Path $script:WmStateDir 'backup'
+$script:WmJournalFile = Join-Path $script:WmBackupDir 'journal.json'
+$script:WmJournal     = $null   # undo journal, active only during provisioning (see lib\Backup.ps1)
+$script:WmJournalSeen = @{}
+$script:WmHiveContext = $null   # the user hive Invoke-WmForEachUserHive is working on
+
 # PowerShell 5.1 doesn't enable TLS 1.2 by default
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -140,6 +146,78 @@ function Exit-WmLock {
 # Registry
 # ---------------------------------------------------------------------------
 
+# 'HKLM:\X' or 'Registry::HKEY_USERS\Y' -> 'HKEY_LOCAL_MACHINE\X' or 'HKEY_USERS\Y'
+function ConvertTo-WmRegNativePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $p = $Path -replace '^Registry::', ''
+    $p = $p -replace '^HKLM:\\?', 'HKEY_LOCAL_MACHINE\'
+    return $p.TrimEnd('\')
+}
+
+# Opens a key with the .NET API: read-only, -Writable, or -Create (creates missing keys). $null if missing.
+function Open-WmRegKey {
+    param([Parameter(Mandatory = $true)][string]$Path, [switch]$Writable, [switch]$Create)
+    $hive, $sub = (ConvertTo-WmRegNativePath $Path) -split '\\', 2
+    $base = switch ($hive) {
+        'HKEY_LOCAL_MACHINE' { [Microsoft.Win32.Registry]::LocalMachine }
+        'HKEY_USERS'         { [Microsoft.Win32.Registry]::Users }
+        default              { throw "Nieobsługiwana gałąź rejestru: $hive" }
+    }
+    if ($Create) { return $base.CreateSubKey($sub) }
+    return $base.OpenSubKey($sub, [bool]$Writable)
+}
+
+function Get-WmJournalId {
+    param($Scope, $Sid, $ProfileName, $Key, $Name)
+    $who = if ($Sid) { $Sid } else { $ProfileName }
+    return ('{0}|{1}|{2}|{3}' -f $Scope, $who, $Key, $Name).ToLowerInvariant()
+}
+
+# Undo journal: before wmanager changes a registry value for the first time, the previous state
+# (value and type, or "did not exist") is recorded, so Restore-Backup.ps1 can undo exactly that.
+# Values in user hives are stored relative to the hive, with the profile's SID and path.
+function Add-WmJournalEntry {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Name)
+    if ($null -eq $script:WmJournal) { return }
+    $native = ConvertTo-WmRegNativePath $Path
+    $scope = 'machine'; $sid = ''; $profileName = ''; $key = $native
+    $ctx = $script:WmHiveContext
+    if ($ctx) {
+        $hiveRoot = ConvertTo-WmRegNativePath $ctx.Root
+        if ($native.StartsWith($hiveRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            $scope = 'user'; $sid = [string]$ctx.Sid; $profileName = [string]$ctx.Profile
+            $key = $native.Substring($hiveRoot.Length + 1)
+        }
+    }
+    $id = Get-WmJournalId $scope $sid $profileName $key $Name
+    if ($script:WmJournalSeen.ContainsKey($id)) { return }
+    $script:WmJournalSeen[$id] = $true
+
+    $entry = [ordered]@{ Scope = $scope; Sid = $sid; Profile = $profileName; Key = $key; Name = $Name
+                         KeyExisted = $false; Existed = $false; Kind = ''; Value = $null }
+    $k = $null
+    try {
+        $k = Open-WmRegKey -Path $native
+        if ($k) {
+            $entry.KeyExisted = $true
+            if ($k.GetValueNames() -contains $Name) {
+                $kind = $k.GetValueKind($Name)
+                $raw = $k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                $entry.Existed = $true
+                $entry.Kind = [string]$kind
+                if ($kind -eq 'Binary') { $entry.Value = [Convert]::ToBase64String([byte[]]$raw) }
+                elseif ($kind -eq 'MultiString') { $entry.Value = [string[]]$raw }
+                else { $entry.Value = [string]$raw }
+            }
+        }
+    } catch {
+        Write-WmLog "Dziennik zmian: nie mogę odczytać $native\$Name : $($_.Exception.Message)" -Level warn
+    } finally {
+        if ($k) { $k.Close() }
+    }
+    $script:WmJournal.Add([pscustomobject]$entry)
+}
+
 function Set-WmRegValue {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -147,6 +225,7 @@ function Set-WmRegValue {
         [Parameter(Mandatory = $true)]$Value,
         [ValidateSet('DWord', 'QWord', 'String', 'ExpandString')][string]$Type = 'DWord'
     )
+    Add-WmJournalEntry -Path $Path -Name $Name
     try {
         if (-not (Test-Path -LiteralPath $Path)) {
             New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
@@ -161,13 +240,15 @@ function Set-WmRegValue {
 
 function Remove-WmRegValue {
     param([string]$Path, [string]$Name)
-    if (Test-Path -LiteralPath $Path) {
+    if ($null -ne (Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue)) {
+        Add-WmJournalEntry -Path $Path -Name $Name
         Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction SilentlyContinue
     }
 }
 
 # Runs $Action against the registry of every user profile and the default profile.
-# $Action receives the root as 'Registry::HKEY_USERS\<...>' (the HKCU equivalent).
+# $Action receives the root as 'Registry::HKEY_USERS\<...>' (the HKCU equivalent), the profile path
+# ('Default' for the default profile) and the SID ($null for the default profile).
 # Local and domain accounts have SIDs S-1-5-21-*, Entra ID (Azure AD) accounts S-1-12-1-*.
 # User profiles that could not be processed are left in $script:WmHiveSkipped.
 function Invoke-WmForEachUserHive {
@@ -203,11 +284,13 @@ function Invoke-WmForEachUserHive {
             $root = "Registry::HKEY_USERS\$mount"
         }
         try {
-            & $Action $root $t.Name
+            $script:WmHiveContext = @{ Root = $root; Profile = $t.Name; Sid = $t.Sid }
+            & $Action $root $t.Name $t.Sid
         } catch {
             if ($t.Sid) { $script:WmHiveSkipped += $t.Name }
             Write-WmLog "Błąd przy profilu $($t.Name): $($_.Exception.Message)" -Level warn
         } finally {
+            $script:WmHiveContext = $null
             if ($mount) {
                 # A leftover handle keeps the hive loaded; a still-loaded Default profile breaks sign-in of new
                 # accounts (they get a temporary profile), so retry and report a failure as an error
@@ -295,7 +378,8 @@ function Initialize-WmRoot {
 
 # Folder: owned by Administrators; only SYSTEM and Administrators can write; Users can read and execute.
 # Everything inside only inherits the folder's ACL (explicit entries are removed).
-# Configuration file (tokens): SYSTEM and Administrators only. Checked after setting; a failure is an error.
+# Configuration file (tokens) and state\backup: SYSTEM and Administrators only. Checked after setting;
+# a failure is an error.
 function Set-WmFolderAcl {
     param([Parameter(Mandatory = $true)][string]$Path, [string]$ConfigFile)
     & icacls.exe "$Path" /setowner '*S-1-5-32-544' /T /C /Q 2>&1 | Out-Null
@@ -307,15 +391,38 @@ function Set-WmFolderAcl {
     }
     & icacls.exe (Join-Path $Path '*') /reset /T /C /Q 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls /reset zwrócił $LASTEXITCODE dla $Path" -Level warn }
-    if ($ConfigFile -and (Test-Path -LiteralPath $ConfigFile)) {
+    # Private: the config (tokens) and the backups (other users' settings)
+    foreach ($private in @($ConfigFile, $script:WmBackupDir)) {
+        if (-not $private -or -not (Test-Path -LiteralPath $private)) { continue }
         try {
-            Set-WmExplicitAcl -Path $ConfigFile
-            $extra = @(Get-WmUnexpectedAclSids -Path $ConfigFile)
+            Set-WmExplicitAcl -Path $private
+            $extra = @(Get-WmUnexpectedAclSids -Path $private)
             if ($extra.Count -gt 0) { throw "dostęp mają też: $($extra -join ', ')" }
         } catch {
-            Write-WmLog "Nie udało się zabezpieczyć pliku konfiguracji $ConfigFile : $($_.Exception.Message)" -Level error
+            Write-WmLog "Nie udało się zabezpieczyć $private : $($_.Exception.Message)" -Level error
         }
     }
+}
+
+# ---------------------------------------------------------------------------
+# Console
+# ---------------------------------------------------------------------------
+
+function Test-WmInteractive {
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-NonI' }) { return $false }
+    try { if ([Console]::IsInputRedirected) { return $false } } catch { return $false }
+    return $true
+}
+
+# Yes/no question at the console. Enter, or no console at all, gives the default (no, unless -DefaultYes).
+function Confirm-WmContinue {
+    param([Parameter(Mandatory = $true)][string]$Question, [switch]$DefaultYes)
+    if (-not (Test-WmInteractive)) { return [bool]$DefaultYes }
+    $hint = if ($DefaultYes) { '[T/n]' } else { '[t/N]' }
+    $answer = (Read-Host "$Question $hint").Trim()
+    if (-not $answer) { return [bool]$DefaultYes }
+    return ($answer -match '^(t|tak|y|yes)$')
 }
 
 # ---------------------------------------------------------------------------

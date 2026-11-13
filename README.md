@@ -30,9 +30,10 @@ Without a console (e.g. autounattend) the question is skipped and the name stays
 | `Provision.ps1` | Main script |
 | `Update-Packages.ps1` | Weekly update (`wmanager-Update` task) and retry at sign-in (`wmanager-Retry`) |
 | `Notify-User.ps1` | Restart notification and a one-time prompt to set the default browser (`wmanager-Notify`) |
+| `Restore-Backup.ps1` | Undoes the registry changes made by provisioning (see [Backup and restore](#backup-and-restore)) |
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
 | `choco-reqs.txt` | Package list |
-| `lib\*.ps1` | Stages: shared functions, debloat, privacy, Chocolatey, scheduled tasks |
+| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, scheduled tasks |
 | `tests\` | Pester tests for the list parser |
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
@@ -45,13 +46,15 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 1. Check for Windows 11 and administrator rights, determine the computer name.
 2. System restore point. If it can't be created, the script asks whether to go on without it (Enter = stop, nothing changed yet).
    `run.cmd -SkipRestorePoint` skips the restore point and the question.
-3. Copy files to `C:\ProgramData\wmanager` and set permissions.
-4. Rename the computer (if a name was given; takes effect after a restart).
-5. Debloat: apps from the `RemoveAppx` list (for all users and from the system image), OneDrive, policies, Edge.
-6. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
-7. Chocolatey, package sources, installing the packages from the list.
-8. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
-9. Register the scheduled tasks (folder `\wmanager\`).
+3. Backup of Store apps and the registry, and the start of the undo journal (see [Backup and restore](#backup-and-restore)).
+   If it fails, the script asks the same way.
+4. Copy files to `C:\ProgramData\wmanager` and set permissions.
+5. Rename the computer (if a name was given; takes effect after a restart).
+6. Debloat: apps from the `RemoveAppx` list (for all users and from the system image), OneDrive, policies, Edge.
+7. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
+8. Chocolatey, package sources, installing the packages from the list.
+9. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
+10. Register the scheduled tasks (folder `\wmanager\`).
 
 User settings are applied to every existing profile and to the default profile (new accounts).
 
@@ -60,6 +63,37 @@ User settings are applied to every existing profile and to the default profile (
 If Desktop, Documents or Pictures are redirected to OneDrive in any profile (local, domain or Entra ID account),
 or a profile's registry cannot be checked, the script **does not remove** OneDrive on that computer
 and writes a warning to the log.
+
+## Backup and restore
+
+Before changing anything, provisioning writes a backup to `C:\ProgramData\wmanager\state\backup\<date>\`
+(readable only by Administrators and SYSTEM; the first backup and the latest one are kept):
+
+| File | Content |
+| --- | --- |
+| `appx-installed.csv`, `appx-provisioned.csv` | Store apps installed for users and in the system image |
+| `default-associations.xml` | Default apps for new accounts (DISM export) |
+| `machine-NN.reg`, `user-<profile>-NN.reg` | Registry branches that debloat and privacy change; user files use `HKEY_CURRENT_USER`, so that user can import them |
+| `manifest.txt` | Which key went to which file, and which keys did not exist |
+
+The undo journal `state\backup\journal.json` records, for every registry value wmanager changes during provisioning,
+its state before the very first change (old value and type, or "did not exist"). It is shared by all provisioning runs.
+
+To undo, run on the computer as administrator:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\ProgramData\wmanager\Restore-Backup.ps1
+```
+
+It asks for confirmation, then puts every journaled value back (or removes it, and removes keys wmanager created
+if they are empty) for the computer and for every profile that still exists. Changes users made later in the same
+keys are left alone. It also restores the default apps for new accounts from the first backup, lists Store apps
+removed since then, and offers to disable the wmanager tasks (otherwise the weekly run applies debloat again).
+Restart the computer afterwards.
+
+Not undone: removed Store apps (reinstall from the Store) and OneDrive (reinstall from Microsoft), installed
+Chocolatey packages, the computer name. Settings the weekly run applies to profiles created after provisioning
+are not in the journal. Programs and system files can be rolled back with the system restore point.
 
 ## choco-reqs.txt
 

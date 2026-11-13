@@ -34,6 +34,7 @@ param(
 $ErrorActionPreference = 'Continue'
 $here = $PSScriptRoot
 . (Join-Path $here 'lib\Common.ps1')
+. (Join-Path $here 'lib\Backup.ps1')
 . (Join-Path $here 'lib\Debloat.ps1')
 . (Join-Path $here 'lib\Privacy.ps1')
 . (Join-Path $here 'lib\Choco.ps1')
@@ -42,13 +43,6 @@ $here = $PSScriptRoot
 # ---------------------------------------------------------------------------
 # Helper steps
 # ---------------------------------------------------------------------------
-
-function Test-WmInteractive {
-    if (-not [Environment]::UserInteractive) { return $false }
-    if ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-NonI' }) { return $false }
-    try { if ([Console]::IsInputRedirected) { return $false } } catch { return $false }
-    return $true
-}
 
 function Test-WmComputerName {
     param([string]$Name)
@@ -93,20 +87,12 @@ function New-WmRestorePoint {
     }
 }
 
-# Asks at the console whether to go on after a failed safety step. Without a console the answer is no.
-function Confirm-WmContinue {
-    param([Parameter(Mandatory = $true)][string]$Question)
-    if (-not (Test-WmInteractive)) { return $false }
-    $answer = (Read-Host "$Question [t/N]").Trim()
-    return ($answer -match '^(t|tak|y|yes)$')
-}
-
 function Install-WmFiles {
     param([string]$ConfigFile)
     $src = (Resolve-Path -LiteralPath $here).Path.TrimEnd('\')
     $dst = (Resolve-Path -LiteralPath $script:WmRoot).Path.TrimEnd('\')
     if ($src -ne $dst) {
-        foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Notify-User.ps1', 'run.cmd', 'choco-reqs.txt')) {
+        foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt')) {
             $p = Join-Path $src $f
             if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force -ErrorAction Stop }
         }
@@ -178,6 +164,28 @@ try {
         Write-WmLog 'Kontynuuję bez punktu przywracania (potwierdzone w konsoli).' -Level warn
     }
 
+    # Backup (Store apps, registry branches) and the undo journal for Restore-Backup.ps1; see lib\Backup.ps1
+    $backupOk = $true
+    try {
+        $backupDir = Backup-WmState
+        Write-WmLog "Kopia ustawień zapisana w $backupDir"
+    } catch {
+        $backupOk = $false
+        Write-WmLog "Nie udało się zrobić kopii ustawień: $($_.Exception.Message)" -Level warn
+    }
+    try {
+        Start-WmJournal
+    } catch {
+        $backupOk = $false
+        Write-WmLog "Nie udało się uruchomić dziennika zmian: $($_.Exception.Message)" -Level warn
+    }
+    if (-not $backupOk) {
+        if (-not (Confirm-WmContinue 'Kopia ustawień jest niepełna. Kontynuować mimo to?')) {
+            throw 'Brak kopii ustawień; provisioning przerwany przed zmianami.'
+        }
+        Write-WmLog 'Kontynuuję z niepełną kopią ustawień (potwierdzone w konsoli).' -Level warn
+    }
+
     # The scheduled tasks run the copied files, so if copying fails the run stops here
     Install-WmFiles -ConfigFile $ConfigPath
     $config = Import-WmConfig (Join-Path $script:WmRoot 'provision.config.psd1')
@@ -215,6 +223,11 @@ try {
     $failed = $true
     Write-WmLog "Provisioning przerwany: $($_.Exception.Message)" -Level error
 } finally {
+    try {
+        Save-WmJournal
+    } catch {
+        Write-WmLog "Nie udało się zapisać dziennika zmian (Restore-Backup.ps1 nie cofnie tego przebiegu): $($_.Exception.Message)" -Level error
+    }
     if ($script:WmErrors -gt 0) { $failed = $true }
     Write-WmLog ("Koniec: ostrzeżenia {0}, błędy {1}. Log: {2}" -f $script:WmWarnings, $script:WmErrors, $script:WmLogFile)
     Remove-WmOldLogs -Days ([int](Get-WmSetting $config 'LogRetentionDays' 90))

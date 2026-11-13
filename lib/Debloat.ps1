@@ -112,6 +112,7 @@ function Set-WmDebloatPolicies {
     # This key is sometimes protected by TrustedInstaller; access denied is not a critical error
     try {
         $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications'
+        Add-WmJournalEntry -Path $k -Name 'ConfigureChatAutoInstall'
         if (-not (Test-Path -LiteralPath $k)) { New-Item -Path $k -Force -ErrorAction Stop | Out-Null }
         New-ItemProperty -LiteralPath $k -Name 'ConfigureChatAutoInstall' -Value 0 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
     } catch {
