@@ -41,23 +41,26 @@ $configFile = Join-Path $script:WmRoot 'provision.config.psd1'
 if (Test-Path -LiteralPath $configFile) {
     try { $config = Import-WmConfig $configFile } catch { }
 }
-$failed = $false
-$cancelled = $false
-
+# Read and confirm before anything changes
 try {
     $journal = @(Read-WmJournal)
-    $backups = @(Get-ChildItem -LiteralPath $script:WmBackupDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)
-    if ($journal.Count -eq 0 -and $backups.Count -eq 0) { throw "Brak kopii i dziennika zmian w $($script:WmBackupDir)." }
+} catch {
+    Write-WmLog "Nie mogę odczytać dziennika zmian: $($_.Exception.Message)" -Level error
+    Exit-WmLock $lock
+    exit 1
+}
+$backups = @(Get-ChildItem -LiteralPath $script:WmBackupDir -Directory -ErrorAction SilentlyContinue)
+$machine = @($journal | Where-Object { $_.Scope -eq 'machine' })
+$user    = @($journal | Where-Object { $_.Scope -eq 'user' })
+Write-WmLog "wmanager: przywracanie na $($script:WmHostName). Dziennik: $($machine.Count) wartości komputera, $($user.Count) wartości użytkowników; kopii: $($backups.Count)."
+if (-not (Confirm-WmContinue 'Cofnąć zmiany wmanagera?')) {
+    Write-WmLog 'Anulowano, nic nie zmieniono.'
+    Exit-WmLock $lock
+    exit 0
+}
 
-    $machine = @($journal | Where-Object { $_.Scope -eq 'machine' })
-    $user    = @($journal | Where-Object { $_.Scope -eq 'user' })
-    Write-WmLog "wmanager: przywracanie na $($script:WmHostName). Dziennik: $($machine.Count) wartości komputera, $($user.Count) wartości użytkowników."
-    if (-not (Confirm-WmContinue 'Cofnąć zmiany wmanagera w rejestrze?')) {
-        $cancelled = $true
-        Write-WmLog 'Anulowano, nic nie zmieniono.'
-        return
-    }
-
+$failed = $false
+try {
     # Counters live in a hashtable: the hive scriptblock below runs in a child scope
     $count = @{ Ok = 0 }
 
@@ -83,7 +86,7 @@ try {
 
     # --- Default apps for new accounts, from the first backup ------------------
     $first = Get-WmFirstBackup
-    if (-not $first) { $first = $backups | Select-Object -First 1 }
+    if (-not $first) { $first = $backups | Sort-Object Name | Select-Object -First 1 }
     if ($first) {
         Restore-WmDefaultAssociations -BackupDir $first.FullName
 
@@ -124,7 +127,6 @@ try {
 }
 
 Write-Host ''
-if ($cancelled) { exit 0 }
 if ($failed) {
     Write-Host 'Przywracanie zakończone z błędami. Sprawdź log powyżej.' -ForegroundColor Yellow
     exit 1

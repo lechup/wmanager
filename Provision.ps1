@@ -152,6 +152,7 @@ try {
 Initialize-WmLog 'provision'
 Write-WmLog "wmanager provisioning: $($os.Caption) build $($os.BuildNumber), komputer $env:COMPUTERNAME"
 $failed = $false
+$hcStarted = $false
 
 try {
     # Nothing is changed before this point. Without a restore point the person at the console decides.
@@ -203,6 +204,7 @@ try {
     }
     # Pinged only once the final name is known, so start and end go to the same check
     Send-WmHealthcheck -Config $config -Signal start
+    $hcStarted = $true
 
     # Each stage on its own: a failure (e.g. no network for Chocolatey) is logged as an error,
     # but the scheduled tasks still get registered, so the weekly run can finish the job.
@@ -228,9 +230,13 @@ try {
     Write-WmLog ("Koniec: ostrzeżenia {0}, błędy {1}. Log: {2}" -f $script:WmWarnings, $script:WmErrors, $script:WmLogFile)
     Remove-WmOldLogs -Days ([int](Get-WmSetting $config 'LogRetentionDays' 90))
     Send-WmLokiLog -Config $config
-    $signal = 'success'
-    if ($failed) { $signal = 'fail' }
-    Send-WmHealthcheck -Config $config -Signal $signal -Body (Get-WmLogTail 60)
+    # Stopped before the name was settled: no ping. The person at the console sees the result, and a
+    # ping under the old name would create (?create=1) a check that never hears from this computer again.
+    if ($hcStarted) {
+        $signal = 'success'
+        if ($failed) { $signal = 'fail' }
+        Send-WmHealthcheck -Config $config -Signal $signal -Body (Get-WmLogTail 60)
+    }
     Exit-WmLock $lock
 }
 

@@ -20,7 +20,9 @@ Microsoft Store, Edge, Defender and Windows Update stay.
 5. Restart the computer when it finishes.
 
 You can also pass the name up front: `run.cmd -ComputerName OFFICE-03`.
-Without a console (e.g. autounattend) the question is skipped and the name stays as it is.
+Provisioning is meant to be run by a person at the console: when a safety step fails (restore point, backup,
+no internet), it asks whether to continue. Without a console the answer is "no" and provisioning stops before
+changing anything.
 
 ## Files
 
@@ -138,7 +140,9 @@ Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Upda
   When Grafana doesn't respond (or rejects the token), the batch waits in `logs\outbox` and is sent on the next run.
   A batch Loki rejects for good (HTTP 400 or 413, e.g. entries too old) is moved to `logs\outbox\rejected` so it doesn't block newer ones.
   Example query: `{service_name="wmanager", level="error"}`.
-- **Healthchecks.io**: a `/start` ping at the beginning, and success or `/fail` (with the tail of the log) at the end of provisioning and of the weekly update.
+- **Healthchecks.io**: a `/start` ping at the beginning (in provisioning: once the computer name is settled), and success
+  or `/fail` (with the tail of the log) at the end of provisioning and of the weekly update. Provisioning stopped before
+  the name is settled (e.g. a declined question) sends nothing; the console shows the result.
   The check is created on the first ping (`?create=1`); its name is the computer name (with an optional `HealthchecksSlugPrefix`).
 
 Log messages, console output and user notifications are in Polish.
