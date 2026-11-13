@@ -1,14 +1,18 @@
 ﻿# Backup before provisioning, and the undo journal used by Restore-Backup.ps1.
 #
-# Each provisioning run writes state\backup\<date>\ (only the first and the latest are kept):
+# Each provisioning run writes state\backup\<date>\ (only the first, marked with first.txt, and the
+# latest are kept):
 #   appx-installed.csv, appx-provisioned.csv   Store apps before debloat
-#   default-associations.xml                   default apps for new accounts (DISM export)
+#   oem-default-associations.xml or .none      default apps for new accounts (the file DISM import
+#                                              writes), or a marker that there were none
 #   machine-NN.reg, user-<profile>-NN.reg      registry branches debloat and privacy change,
 #                                              for a person to look at (user files use HKEY_CURRENT_USER)
 #   manifest.txt                               which key went to which file, or that it did not exist
 # The undo journal state\backup\journal.jsonl is shared by all runs: for every registry value
 # wmanager changed, the state before the very first change (see Add-WmJournalEntry in Common.ps1).
 # Keep the key lists below in sync with lib\Debloat.ps1 and lib\Privacy.ps1.
+
+$script:WmOemAssocFile = Join-Path $env:SystemRoot 'System32\OEMDefaultAssociations.xml'
 
 $script:WmBackupMachineKeys = @(
     'HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft'
@@ -65,20 +69,27 @@ function Backup-WmState {
         Export-Csv -LiteralPath (Join-Path $dir 'appx-provisioned.csv') -NoTypeInformation -Encoding UTF8 -ErrorAction Stop
 
     $manifest = New-Object 'System.Collections.Generic.List[string]'
-    $assoc = Join-Path $dir 'default-associations.xml'
-    & dism.exe /Online /Export-DefaultAppAssociations:"$assoc" 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { $manifest.Add('ZAPISANO  domyślne aplikacje -> default-associations.xml') }
-    else { $manifest.Add("BŁĄD      domyślne aplikacje (DISM $LASTEXITCODE)") }
+    # Default apps for new accounts: DISM import (used for the default browser) writes this file.
+    # (dism /Export-DefaultAppAssociations would export the current user's choices instead.)
+    if (Test-Path -LiteralPath $script:WmOemAssocFile) {
+        Copy-Item -LiteralPath $script:WmOemAssocFile -Destination (Join-Path $dir 'oem-default-associations.xml') -ErrorAction Stop
+        $manifest.Add('ZAPISANO  domyślne aplikacje dla nowych kont -> oem-default-associations.xml')
+    } else {
+        [IO.File]::WriteAllText((Join-Path $dir 'oem-default-associations.none'), '')
+        $manifest.Add('BRAK      domyślne aplikacje dla nowych kont (ustawienia Windows) -> oem-default-associations.none')
+    }
 
     $n = 0
     foreach ($key in $script:WmBackupMachineKeys) {
         $n++
         $manifest.Add((Export-WmRegKey -Key $key -File (Join-Path $dir ('machine-{0:D2}.reg' -f $n))))
     }
+    $profileNo = @{ N = 0 }   # numbered, so two profiles with similar folder names never share files
     Invoke-WmForEachUserHive {
         param($root, $name, $sid)
         $hive = ConvertTo-WmRegNativePath $root
-        $label = (Split-Path $name -Leaf) -replace '[^A-Za-z0-9_-]', '_'
+        $profileNo.N++
+        $label = 'p{0:D2}-{1}' -f $profileNo.N, ((Split-Path $name -Leaf) -replace '[^A-Za-z0-9_-]', '_')
         $m = 0
         foreach ($k in $script:WmBackupUserKeys) {
             $m++
@@ -90,14 +101,45 @@ function Backup-WmState {
     [IO.File]::WriteAllLines((Join-Path $dir 'manifest.txt'), $manifest.ToArray(), (New-Object System.Text.UTF8Encoding($true)))
     foreach ($line in $manifest) { if ($line -like 'BŁĄD*') { Write-WmLog "Kopia: $line" -Level warn } }
 
-    # Keep the first backup (state before the first provisioning) and the latest one
-    $all = @(Get-ChildItem -LiteralPath $script:WmBackupDir -Directory | Sort-Object Name)
-    if ($all.Count -gt 2) {
-        foreach ($old in $all[1..($all.Count - 2)]) {
+    # Keep the first backup (state before the first provisioning) and this one. The first is marked
+    # with first.txt rather than found by date: the clock of a new computer may be wrong.
+    $first = Get-WmFirstBackup
+    if (-not $first) {
+        [IO.File]::WriteAllText((Join-Path $dir 'first.txt'), '')
+        $first = Get-Item -LiteralPath $dir
+    }
+    foreach ($old in @(Get-ChildItem -LiteralPath $script:WmBackupDir -Directory)) {
+        if ($old.FullName -ne $first.FullName -and $old.FullName -ne $dir) {
             Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
     return $dir
+}
+
+function Get-WmFirstBackup {
+    Get-ChildItem -LiteralPath $script:WmBackupDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'first.txt') } | Select-Object -First 1
+}
+
+# Default apps for new accounts as in the backup: the saved file again, or the Windows defaults
+# if there was none. Does nothing if they did not change since the backup.
+function Restore-WmDefaultAssociations {
+    param([Parameter(Mandatory = $true)][string]$BackupDir)
+    $saved = Join-Path $BackupDir 'oem-default-associations.xml'
+    $none  = Join-Path $BackupDir 'oem-default-associations.none'
+    $current = $script:WmOemAssocFile
+    if (Test-Path -LiteralPath $saved) {
+        if ((Test-Path -LiteralPath $current) -and
+            (Get-FileHash -LiteralPath $current).Hash -eq (Get-FileHash -LiteralPath $saved).Hash) { return }
+        $out = & dism.exe /Online /Import-DefaultAppAssociations:"$saved" 2>&1
+    } elseif (Test-Path -LiteralPath $none) {
+        if (-not (Test-Path -LiteralPath $current)) { return }
+        $out = & dism.exe /Online /Remove-DefaultAppAssociations 2>&1
+    } else {
+        return
+    }
+    if ($LASTEXITCODE -eq 0) { Write-WmLog 'Domyślne aplikacje dla nowych kont przywrócone.' }
+    else { Write-WmLog "DISM nie przywrócił domyślnych aplikacji dla nowych kont (kod $LASTEXITCODE): $($out -join ' ')" -Level warn }
 }
 
 # ---------------------------------------------------------------------------

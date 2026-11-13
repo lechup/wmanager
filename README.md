@@ -67,13 +67,13 @@ and writes a warning to the log.
 ## Backup and restore
 
 Before changing anything, provisioning writes a backup to `C:\ProgramData\wmanager\state\backup\<date>\`
-(readable only by Administrators and SYSTEM; the first backup and the latest one are kept):
+(readable only by Administrators and SYSTEM; the first backup, marked with `first.txt`, and the latest one are kept):
 
 | File | Content |
 | --- | --- |
 | `appx-installed.csv`, `appx-provisioned.csv` | Store apps installed for users and in the system image |
-| `default-associations.xml` | Default apps for new accounts (DISM export) |
-| `machine-NN.reg`, `user-<profile>-NN.reg` | Registry branches that debloat and privacy change; user files use `HKEY_CURRENT_USER`, so that user can import them |
+| `oem-default-associations.xml` or `.none` | Default apps for new accounts (`System32\OEMDefaultAssociations.xml`, which DISM import writes), or a marker that there were none |
+| `machine-NN.reg`, `user-pNN-<profile>-NN.reg` | Registry branches that debloat and privacy change; user files use `HKEY_CURRENT_USER`, so that user can import them |
 | `manifest.txt` | Which key went to which file, and which keys did not exist |
 
 The undo journal `state\backup\journal.jsonl` records, for every registry value wmanager changes during provisioning,
@@ -88,7 +88,8 @@ powershell -ExecutionPolicy Bypass -File C:\ProgramData\wmanager\Restore-Backup.
 
 It asks for confirmation, then puts every journaled value back (or removes it, and removes keys wmanager created
 if they are empty) for the computer and for every profile that still exists. Changes users made later in the same
-keys are left alone. It also restores the default apps for new accounts from the first backup, lists Store apps
+keys are left alone. It also restores the default apps for new accounts from the first backup (or the Windows defaults
+if there were none), lists Store apps
 removed since then, and offers to disable the wmanager tasks (otherwise the weekly run applies debloat again).
 Restart the computer afterwards.
 

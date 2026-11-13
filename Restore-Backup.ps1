@@ -82,14 +82,10 @@ try {
     Write-WmLog "Rejestr: przywrócono $($count.Ok) z $($journal.Count) wartości."
 
     # --- Default apps for new accounts, from the first backup ------------------
-    $first = $backups | Select-Object -First 1
+    $first = Get-WmFirstBackup
+    if (-not $first) { $first = $backups | Select-Object -First 1 }
     if ($first) {
-        $assoc = Join-Path $first.FullName 'default-associations.xml'
-        if (Test-Path -LiteralPath $assoc) {
-            $out = & dism.exe /Online /Import-DefaultAppAssociations:"$assoc" 2>&1
-            if ($LASTEXITCODE -eq 0) { Write-WmLog "Domyślne aplikacje dla nowych kont przywrócone z kopii $($first.Name)." }
-            else { Write-WmLog "DISM nie przywrócił domyślnych aplikacji (kod $LASTEXITCODE): $($out -join ' ')" -Level warn }
-        }
+        Restore-WmDefaultAssociations -BackupDir $first.FullName
 
         # --- Store apps removed since the first backup -----------------------
         $csv = Join-Path $first.FullName 'appx-installed.csv'
