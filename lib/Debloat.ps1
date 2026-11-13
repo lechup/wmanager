@@ -49,8 +49,10 @@ function Get-WmOneDriveRedirectedProfiles {
 
 function Remove-WmOneDrive {
     $redirected = @(Get-WmOneDriveRedirectedProfiles)
-    if ($redirected.Count -gt 0) {
+    $unchecked = @($script:WmHiveSkipped)   # a profile we could not check might be redirected too
+    if ($redirected.Count -gt 0 -or $unchecked.Count -gt 0) {
         foreach ($r in $redirected) { Write-WmLog "Folder przekierowany do OneDrive: $r" -Level warn }
+        foreach ($u in $unchecked) { Write-WmLog "Nie udało się sprawdzić folderów profilu: $u" -Level warn }
         Write-WmLog 'Pomijam usuwanie OneDrive na tym komputerze, żeby nie odciąć plików użytkowników.' -Level warn
         return
     }

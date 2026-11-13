@@ -56,8 +56,9 @@ User settings are applied to every existing profile and to the default profile (
 
 ### OneDrive
 
-If Desktop, Documents or Pictures are redirected to OneDrive in any profile,
-the script **does not remove** OneDrive on that computer and writes a warning to the log.
+If Desktop, Documents or Pictures are redirected to OneDrive in any profile (local, domain or Entra ID account),
+or a profile's registry cannot be checked, the script **does not remove** OneDrive on that computer
+and writes a warning to the log.
 
 ## choco-reqs.txt
 

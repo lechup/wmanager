@@ -151,12 +151,15 @@ function Remove-WmRegValue {
 
 # Runs $Action against the registry of every user profile and the default profile.
 # $Action receives the root as 'Registry::HKEY_USERS\<...>' (the HKCU equivalent).
+# Local and domain accounts have SIDs S-1-5-21-*, Entra ID (Azure AD) accounts S-1-12-1-*.
+# User profiles that could not be processed are left in $script:WmHiveSkipped.
 function Invoke-WmForEachUserHive {
     param([Parameter(Mandatory = $true)][scriptblock]$Action)
 
+    $script:WmHiveSkipped = @()
     $targets = @()
     $profiles = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
-        Where-Object { -not $_.Special -and $_.LocalPath -and $_.SID -like 'S-1-5-21-*' }
+        Where-Object { -not $_.Special -and $_.LocalPath -and ($_.SID -like 'S-1-5-21-*' -or $_.SID -like 'S-1-12-1-*') }
     foreach ($p in $profiles) {
         $dat = Join-Path $p.LocalPath 'NTUSER.DAT'
         if (Test-Path -LiteralPath $dat) {
@@ -177,6 +180,7 @@ function Invoke-WmForEachUserHive {
             & reg.exe load "HKU\$mount" "$($t.Dat)" 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-WmLog "Nie mogę wczytać rejestru profilu $($t.Name)" -Level warn
+                if ($t.Sid) { $script:WmHiveSkipped += $t.Name }
                 continue
             }
             $root = "Registry::HKEY_USERS\$mount"
@@ -184,6 +188,7 @@ function Invoke-WmForEachUserHive {
         try {
             & $Action $root $t.Name
         } catch {
+            if ($t.Sid) { $script:WmHiveSkipped += $t.Name }
             Write-WmLog "Błąd przy profilu $($t.Name): $($_.Exception.Message)" -Level warn
         } finally {
             if ($mount) {
