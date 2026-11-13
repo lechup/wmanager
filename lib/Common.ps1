@@ -11,7 +11,7 @@ $script:WmWarnings   = 0
 $script:WmErrors     = 0
 $script:WmLogBuffer  = New-Object 'System.Collections.Generic.List[object]'
 
-$script:WmRebootFlag  = Join-Path $script:WmStateDir 'reboot-required.flag'
+$script:WmRebootKey   = 'SOFTWARE\wmanager\RebootRequired'   # under HKLM, volatile
 $script:WmRetryFlag   = Join-Path $script:WmStateDir 'retry-pending.flag'
 $script:WmPublicState = Join-Path $script:WmStateDir 'public.json'
 $script:WmMutexName   = 'Global\wmanager-run'
@@ -336,22 +336,17 @@ function Test-WmPendingReboot {
     return $false
 }
 
-function Get-WmBootTime {
-    return (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')
-}
-
-# "Restart needed" flag stamped with the current boot time.
-# After a restart the boot time changes, so the flag no longer applies.
+# "Restart needed" flag: a volatile registry key. Windows keeps volatile keys only in memory,
+# so the flag disappears by itself at the next restart. (Comparing boot times was unreliable:
+# Windows shifts the reported boot time when the clock is corrected, e.g. after sleep.)
+# Notify-User.ps1 checks the same key. Users can read it (HKLM\SOFTWARE permissions).
 function Set-WmRebootFlag {
-    New-Item -ItemType Directory -Force -Path $script:WmStateDir -ErrorAction Stop | Out-Null
-    Set-Content -LiteralPath $script:WmRebootFlag -Value (Get-WmBootTime) -Encoding ASCII -ErrorAction Stop
-}
-
-function Clear-WmStaleRebootFlag {
-    if (Test-Path -LiteralPath $script:WmRebootFlag) {
-        $saved = (Get-Content -LiteralPath $script:WmRebootFlag -Raw).Trim()
-        if ($saved -ne (Get-WmBootTime)) { Remove-Item -LiteralPath $script:WmRebootFlag -Force -ErrorAction SilentlyContinue }
-    }
+    $lm = [Microsoft.Win32.Registry]::LocalMachine
+    # The parent must not be volatile (CreateSubKey would create missing parents with the same option)
+    $lm.CreateSubKey((Split-Path $script:WmRebootKey -Parent)).Close()
+    $k = $lm.CreateSubKey($script:WmRebootKey, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+                          [Microsoft.Win32.RegistryOptions]::Volatile)
+    try { $k.SetValue('Since', (Get-Date).ToString('o')) } finally { $k.Close() }
 }
 
 # ---------------------------------------------------------------------------

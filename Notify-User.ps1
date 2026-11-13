@@ -5,7 +5,7 @@
 $ErrorActionPreference = 'SilentlyContinue'
 $root       = Join-Path $env:ProgramData 'wmanager'
 $stateDir   = Join-Path $root 'state'
-$rebootFlag = Join-Path $stateDir 'reboot-required.flag'
+$rebootKey  = 'HKLM:\SOFTWARE\wmanager\RebootRequired'   # volatile: Windows removes it at restart
 $publicFile = Join-Path $stateDir 'public.json'
 
 function Show-WmToast {
@@ -26,12 +26,8 @@ function Show-WmToast {
 }
 
 # --- 1. Restart -------------------------------------------------------------
-if (Test-Path -LiteralPath $rebootFlag) {
-    $saved = (Get-Content -LiteralPath $rebootFlag -Raw).Trim()
-    $boot  = (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')
-    if ($saved -eq $boot) {
-        Show-WmToast 'Potrzebny restart komputera' 'Zainstalowano aktualizacje programów. Uruchom ponownie komputer, gdy będzie Ci wygodnie.'
-    }
+if (Test-Path -LiteralPath $rebootKey) {
+    Show-WmToast 'Potrzebny restart komputera' 'Zainstalowano aktualizacje programów. Uruchom ponownie komputer, gdy będzie Ci wygodnie.'
 }
 
 # --- 2. Default browser (one-time) -------------------------------------------

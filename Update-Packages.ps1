@@ -26,8 +26,6 @@ $failed = $false
 if (-not $OnlyIfPending) { Send-WmHealthcheck -Config $config -Signal start }
 
 try {
-    Clear-WmStaleRebootFlag
-
     # Stages run independently (see Invoke-WmStep). Install-WmChocolatey also repairs a machine
     # where provisioning could not install Chocolatey, and applies changed package sources.
     $script:WmDeferred = $null
