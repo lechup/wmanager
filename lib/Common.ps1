@@ -199,15 +199,60 @@ function Invoke-WmForEachUserHive {
 # wmanager folder permissions
 # ---------------------------------------------------------------------------
 
+$script:WmAdminSids = @('S-1-5-18', 'S-1-5-32-544')   # SYSTEM, Administrators
+$script:WmUsersSid  = 'S-1-5-32-545'
+
+# Replaces the whole ACL with explicit entries only (nothing inherited from the parent):
+# Full Control for $FullControl, Read & Execute for $ReadExecute. On a folder the entries apply to its contents.
+function Set-WmExplicitAcl {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string[]]$FullControl = $script:WmAdminSids,
+        [string[]]$ReadExecute = @()
+    )
+    $isDir = Test-Path -LiteralPath $Path -PathType Container
+    if ($isDir) {
+        $acl = New-Object System.Security.AccessControl.DirectorySecurity
+        $inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    } else {
+        $acl = New-Object System.Security.AccessControl.FileSecurity
+        $inherit = [System.Security.AccessControl.InheritanceFlags]::None
+    }
+    $acl.SetAccessRuleProtection($true, $false)
+    $grants = @()
+    foreach ($s in $FullControl) { $grants += ,@($s, [System.Security.AccessControl.FileSystemRights]::FullControl) }
+    foreach ($s in $ReadExecute) { $grants += ,@($s, [System.Security.AccessControl.FileSystemRights]::ReadAndExecute) }
+    foreach ($g in $grants) {
+        $sid = New-Object System.Security.Principal.SecurityIdentifier($g[0])
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, $g[1], $inherit,
+                    [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
+        $acl.AddAccessRule($rule)
+    }
+    if ($isDir) { [IO.Directory]::SetAccessControl($Path, $acl) } else { [IO.File]::SetAccessControl($Path, $acl) }
+}
+
+# SIDs other than $Allowed that have any Allow entry on the path.
+function Get-WmUnexpectedAclSids {
+    param([Parameter(Mandatory = $true)][string]$Path, [string[]]$Allowed = $script:WmAdminSids)
+    $rules = (Get-Acl -LiteralPath $Path).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+    return @($rules | Where-Object { $_.AccessControlType -eq 'Allow' -and $Allowed -notcontains $_.IdentityReference.Value } |
+             ForEach-Object { $_.IdentityReference.Value } | Select-Object -Unique)
+}
+
 # Folder: only SYSTEM and Administrators can write; Users can read and execute.
-# Configuration file (tokens): SYSTEM and Administrators only.
+# Configuration file (tokens): SYSTEM and Administrators only. Checked after setting; a failure is an error.
 function Set-WmFolderAcl {
     param([Parameter(Mandatory = $true)][string]$Path, [string]$ConfigFile)
     & icacls.exe "$Path" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' /T /C /Q 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls zwrócił $LASTEXITCODE dla $Path" -Level warn }
     if ($ConfigFile -and (Test-Path -LiteralPath $ConfigFile)) {
-        & icacls.exe "$ConfigFile" /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /C /Q 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls zwrócił $LASTEXITCODE dla $ConfigFile" -Level warn }
+        try {
+            Set-WmExplicitAcl -Path $ConfigFile
+            $extra = @(Get-WmUnexpectedAclSids -Path $ConfigFile)
+            if ($extra.Count -gt 0) { throw "dostęp mają też: $($extra -join ', ')" }
+        } catch {
+            Write-WmLog "Nie udało się zabezpieczyć pliku konfiguracji $ConfigFile : $($_.Exception.Message)" -Level error
+        }
     }
 }
 
