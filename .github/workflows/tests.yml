@@ -18,18 +18,16 @@ jobs:
   sign:
     name: Sign test sources (Linux)
     runs-on: ubuntu-24.04
+    # osslsigncode signs PowerShell files only in newer versions; 26.04 has the same 2.13 the README setup uses
+    container: ubuntu:26.04
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install osslsigncode
+      - name: Install tools
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q osslsigncode
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends osslsigncode openssl shellcheck git ca-certificates
           osslsigncode --version
-          if ! osslsigncode --help 2>&1 | grep -q '\.psd1'; then
-            echo "::error::This osslsigncode can't sign PowerShell files (2.7 or newer is needed)"
-            exit 1
-          fi
+
+      - uses: actions/checkout@v5
 
       - name: Check shell scripts
         run: |
@@ -37,12 +35,12 @@ jobs:
           shellcheck -S error tools/*.sh tests/ci/*.sh
 
       - name: Build and sign test sources
-        run: tests/ci/build-sources.sh "$RUNNER_TEMP/sources"
+        run: tests/ci/build-sources.sh ci-sources
 
       - uses: actions/upload-artifact@v4
         with:
           name: management-sources
-          path: ${{ runner.temp }}/sources
+          path: ci-sources
           retention-days: 3
 
   windows:
@@ -50,7 +48,7 @@ jobs:
     needs: sign
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/download-artifact@v4
         with:
