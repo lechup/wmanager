@@ -20,6 +20,12 @@ function Invoke-Section {
 
 function Get-Gb { param($Bytes) [math]::Round([double]$Bytes / 1GB, 1) }
 
+# One value of a section: $null when it can't be read, so the rest of the section still gets reported
+function Get-Value {
+    param([scriptblock]$Body)
+    try { & $Body } catch { $null }
+}
+
 # --- Resources ------------------------------------------------------------------------
 Invoke-Section 'system' {
     $os   = Get-CimInstance Win32_OperatingSystem
@@ -110,29 +116,35 @@ Invoke-Section 'bitlocker' {
 }
 
 Invoke-Section 'security' {
-    $tpm = Get-Tpm
-    $tpmVersion = $null
-    try { $tpmVersion = ((Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm).SpecVersion -split ',')[0].Trim() } catch { }
-    $secureBoot = 'unsupported'   # legacy BIOS
-    try { $secureBoot = if (Confirm-SecureBootUEFI) { 'on' } else { 'off' } } catch { }
-    $firewall = @(Get-NetFirewallProfile | ForEach-Object { '{0}={1}' -f $_.Name, $(if ($_.Enabled) { 'on' } else { 'off' }) }) -join ', '
-    $uac = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue).EnableLUA -eq 1
+    $tpm = Get-Value { Get-Tpm }
+    $tpmVersion = Get-Value { ((Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm).SpecVersion -split ',')[0].Trim() }
+    $secureBoot = Get-Value { if (Confirm-SecureBootUEFI) { 'on' } else { 'off' } }
+    if (-not $secureBoot) { $secureBoot = 'unsupported' }   # legacy BIOS
+    # ActiveStore: what is in force, including group policy and MDM, not only the local settings
+    $firewall = Get-Value {
+        @(Get-NetFirewallProfile -PolicyStore ActiveStore | ForEach-Object { '{0}={1}' -f $_.Name, $(if ([string]$_.Enabled -eq 'True') { 'on' } else { 'off' }) }) -join ', '
+    }
+    $uac = Get-Value { (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System').EnableLUA -eq 1 }
 
     # Members of Administrators (S-1-5-32-544). Get-LocalGroupMember fails on some computers with
     # Entra ID members, so the old ADSI interface is used instead.
-    $group = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-    $admins = @(([ADSI]"WinNT://./$group,group").psbase.Invoke('Members') | ForEach-Object {
-        $path = $_.GetType().InvokeMember('ADsPath', 'GetProperty', $null, $_, $null)
-        $path -replace '^WinNT://', '' -replace '/', '\'
-    }) -join ', '
+    $admins = Get-Value {
+        $group = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+        @(([ADSI]"WinNT://./$group,group").psbase.Invoke('Members') | ForEach-Object {
+            $path = $_.GetType().InvokeMember('ADsPath', 'GetProperty', $null, $_, $null)
+            $path -replace '^WinNT://', '' -replace '/', '\'
+        }) -join ', '
+    }
 
+    $tpmPresent = $null; $tpmReady = $null
+    if ($tpm) { $tpmPresent = [bool]$tpm.TpmPresent; $tpmReady = [bool]$tpm.TpmReady }
     Out-Report 'security' ([ordered]@{
-        tpm_present  = [bool]$tpm.TpmPresent
-        tpm_ready    = [bool]$tpm.TpmReady
+        tpm_present  = $tpmPresent
+        tpm_ready    = $tpmReady
         tpm_version  = $tpmVersion
         secure_boot  = $secureBoot
         firewall     = $firewall
-        uac          = [bool]$uac
+        uac          = $uac
         local_admins = $admins
     })
 }
@@ -158,12 +170,12 @@ Invoke-Section 'physical_disk' {
 
 Invoke-Section 'battery' {
     if (-not (Get-CimInstance Win32_Battery)) { return }   # desktop: no line
-    $design = @(Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryStaticData)[0].DesignedCapacity
-    $full   = @(Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryFullChargedCapacity)[0].FullChargedCapacity
-    $cycles = $null
-    try { $cycles = @(Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryCycleCount)[0].CycleCount } catch { }
+    # Not every laptop provides these classes ("Not supported"); each value on its own
+    $design = Get-Value { @(Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryStaticData)[0].DesignedCapacity }
+    $full   = Get-Value { @(Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryFullChargedCapacity)[0].FullChargedCapacity }
+    $cycles = Get-Value { @(Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryCycleCount)[0].CycleCount }
     $health = $null
-    if ($design) { $health = [math]::Round(100 * $full / $design) }
+    if ($design -and $full) { $health = [math]::Round(100 * $full / $design) }
     Out-Report 'battery' ([ordered]@{ design_mwh = $design; full_charge_mwh = $full; health_pct = $health; cycles = $cycles })
 }
 

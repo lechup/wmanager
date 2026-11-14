@@ -159,7 +159,11 @@ try {
 $newName = Resolve-WmComputerName -Requested $ComputerName -Prompt ([bool](Get-WmSetting $config 'PromptComputerName' $true))
 
 $lock = Enter-WmLock
-if (-not $lock) { Write-Host 'Inny przebieg wmanager już trwa. Spróbuj za chwilę.' -ForegroundColor Red; exit 3 }
+if (-not $lock) {
+    Write-Host 'Trwa inny przebieg wmanager (np. joby grup); czekam do 10 minut...' -ForegroundColor Yellow
+    $lock = Enter-WmLock -WaitSeconds 600
+}
+if (-not $lock) { Write-Host 'Inny przebieg wmanager wciąż trwa. Spróbuj za chwilę.' -ForegroundColor Red; exit 3 }
 
 try {
     Initialize-WmRoot
@@ -244,21 +248,21 @@ try {
     if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
 
     if ($offline) {
-        Write-WmLog 'Pomijam Chocolatey, programy i skrypty grup (brak internetu); zrobi to cotygodniowe zadanie.' -Level warn
-    } else {
-        if (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
-            $null = Invoke-WmStep 'Paczki' {
-                $reqs = Get-WmRequirements -Config $config -BaseDir $here
-                $null = Sync-WmPackages -Requirements $reqs -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
-            }
+        Write-WmLog 'Pomijam Chocolatey i programy (brak internetu); zainstaluje je cotygodniowe zadanie.' -Level warn
+    } elseif (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
+        $null = Invoke-WmStep 'Paczki' {
+            $reqs = Get-WmRequirements -Config $config -BaseDir $here
+            $null = Sync-WmPackages -Requirements $reqs -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
         }
-        # Scripts don't need Chocolatey, so they run even when it failed; does nothing without a management source
-        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config }
     }
 
     $null = Invoke-WmStep 'Domyślna przeglądarka' { Set-WmDefaultBrowser -Config $config }
     $null = Invoke-WmStep 'Ustawienia dla powiadomień' { Write-WmPublicState -Config $config }
     $null = Invoke-WmStep 'Harmonogram zadań' { Register-WmTasks -Config $config }
+    # Group scripts must run as SYSTEM, and provisioning runs as the person at the console
+    if (Get-WmManagementSettings $config) {
+        Write-WmLog 'Skrypty i joby grup uruchomi zadanie wmanager-Jobs (SYSTEM) za kilka minut albo zaraz po restarcie; wyniki w logu i Loki.'
+    }
 } catch {
     $failed = $true
     Write-WmLog "Provisioning przerwany: $($_.Exception.Message)" -Level error

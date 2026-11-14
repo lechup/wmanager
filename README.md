@@ -41,7 +41,8 @@ changing anything.
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks |
 | `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
-| `tests\` | Pester tests for the list parser and the management source checks |
+| `tests\` | Pester tests (list parser, management source checks), integration tests and CI scripts |
+| `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
 only Administrators and SYSTEM can write there, and only they can read `provision.config.psd1` (which holds the tokens).
@@ -53,8 +54,7 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 1. Check for Windows 11 and administrator rights, the management settings and signing certificate (if set),
    determine the computer name.
 2. Check that the Chocolatey, package-list and management servers answer. Without internet the script asks whether
-   to go on without installing programs and running group scripts (Enter = stop, nothing changed yet); the weekly
-   task does that later.
+   to go on without installing programs (Enter = stop, nothing changed yet); the weekly task installs them later.
 3. System restore point. If it can't be created, the script asks whether to go on without it (Enter = stop).
    `run.cmd -SkipRestorePoint` skips the restore point and the question.
 4. Backup of Store apps and the registry, and the start of the undo journal (see [Backup and restore](#backup-and-restore)).
@@ -65,9 +65,11 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 8. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
 9. Chocolatey, package sources, installing the packages from the list (with a management source: the common list
    plus the lists of the computer's groups).
-10. Group scripts (with a management source; see [Computer groups](#computer-groups)).
-11. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
-12. Register the scheduled tasks (folder `\wmanager\`; `wmanager-Jobs` only with a management source).
+10. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
+11. Register the scheduled tasks (folder `\wmanager\`; `wmanager-Jobs` only with a management source).
+
+With a management source, provisioning doesn't run the group scripts itself: it runs as the person at the console,
+and scripts must run as SYSTEM. `wmanager-Jobs` runs them a few minutes after provisioning (or right after the restart).
 
 User settings are applied to every existing profile and to the default profile (new accounts).
 
@@ -171,13 +173,15 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   group in the computer's list wins (with a warning). Packages are never uninstalled, also when a computer leaves a
   group or a package disappears from a list.
 - **Scripts:** run by Windows PowerShell 5.1 as SYSTEM, in a separate process, group by group in the order of the map,
-  files by name (number them: `10-`, `20-`), at provisioning and in the weekly run. A script runs once and again
-  whenever its content changes; it doesn't run for the same content again, so a weekly run doesn't repeat it.
-  Exit code `0` = done, `3010` = done and the computer needs a restart (the user gets the notification), anything else,
-  an exception or the time limit (`ScriptTimeoutMinutes`, 15 by default) = error, and the script runs again at the next
-  weekly run. A failed script doesn't stop the scripts after it. Output goes to the log (and to Loki).
-  Scripts run after debloat, but debloat repeats every week while a script doesn't, so a script can't permanently turn
-  back on something debloat removes. Removing a script or leaving a group doesn't undo what the script did.
+  files by name (number them: `10-`, `20-`). They are run by the hourly `wmanager-Jobs` task (first a few minutes after
+  provisioning) and checked again by the weekly run. A script runs once and again whenever its content changes; it
+  doesn't run for the same content again. A change in the source reaches a computer within about a day (the hourly
+  task fetches the source every 20 hours) or at the weekly run. Exit code `0` = done, `3010` = done and the computer
+  needs a restart (the user gets the notification), anything else, an exception or the time limit
+  (`ScriptTimeoutMinutes`, 15 by default) = error: the hourly task tries a failed script again after 20 hours (at once
+  if its content changes), the weekly run tries it every week. A failed script doesn't stop the scripts after it.
+  Output goes to the log (and to Loki). Debloat repeats every week while a script doesn't, so a script can't
+  permanently turn back on something debloat removes. Removing a script or leaving a group doesn't undo what it did.
 - **Jobs:** like scripts, but on a schedule: the `wmanager-Jobs` task (SYSTEM) starts every hour and runs each job of the
   computer's groups whose time has come, by folder: `jobs/hourly`, `jobs/daily`, `jobs/weekly`. A computer that was off
   catches up at the next hour it is on. The start time is recorded before the job runs, so a failed job waits for its
@@ -267,6 +271,8 @@ Notes:
   60 days ahead.
 - The `wmanager-Jobs` task is registered at provisioning when `Management.Source` is set; if you add a management
   source to an existing computer, run provisioning again.
+- Script and job output goes through the console code page (852 on Polish Windows): characters outside it come out
+  as `?`.
 
 ## Weekly update
 
@@ -277,7 +283,10 @@ Notes:
   An empty process list (as for `rustdesk`, which always runs as a service) means the package is never deferred.
 - When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.
 - With a management source it also fetches and checks the source and runs the group scripts whose content changed
-  (after debloat). Failed scripts run again at the next weekly run, not at sign-in.
+  or that failed before (after debloat).
+- Runs never overlap. When the hourly `wmanager-Jobs` is busy (e.g. both start after a boot), the weekly run waits up
+  to 50 minutes for it; if it is still busy, `wmanager-Retry` does the full weekly run at the next sign-in. The hourly
+  run skips its turn when another run is busy, and provisioning waits up to 10 minutes.
 - Without internet (the Chocolatey, package-list or management servers don't answer) the weekly run changes nothing
   and reports nothing; `wmanager-Retry` does the full weekly run at the next sign-in.
 
@@ -322,6 +331,21 @@ On Windows with Pester 5:
 Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser
 Invoke-Pester .\tests
 ```
+
+The integration tests (`tests\Managed.Integration.Tests.ps1`) change the computer (trusted root store,
+`C:\ProgramData\wmanager`, scheduled tasks), so they are skipped unless `WM_CI_SOURCES` is set; they run in CI.
+
+**CI** (`.github/workflows/tests.yml`, every push and pull request, free on a public repository):
+
+1. Linux: `bash -n` and shellcheck of the shell scripts; `tests/ci/build-sources.sh` builds test management sources
+   from `examples/management` and `tests/fixtures/management` and signs them with `tools/publish.sh` and a throwaway key.
+2. Windows Server 2025, Windows PowerShell 5.1: every `.ps1`/`.psd1` parsed (and checked for a BOM), the Pester tests,
+   then the integration tests: Windows accepts the osslsigncode signature, rejects an older manifest, a manifest of
+   another source, a changed file and a changed manifest; a script runs once per content and a failing one every time;
+   jobs run when due, their JSON lines reach the Loki batch with the `task` label; the example system report runs;
+   the hourly task is registered.
+
+CI runs on Windows Server, not Windows 11 Home/Pro, so it doesn't replace the checks below.
 
 Before rolling out to computers: Windows 11 Home and Pro virtual machines (with a snapshot), two consecutive runs
 (the second run must not report errors), a manual run of the task, a missed schedule, the restart notification,

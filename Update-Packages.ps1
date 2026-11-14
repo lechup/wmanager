@@ -12,20 +12,39 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
 
-# A weekly run skipped for lack of internet leaves 'offline' in the retry flag,
-# so the retry at the next sign-in does the full weekly run.
+# A weekly run that couldn't run (no internet, another run busy for too long) leaves 'full' in the retry
+# flag, so the retry at the next sign-in does the full weekly run. ('offline' is the older name of the mark.)
+function Set-WmFullRunPending {
+    try {
+        New-Item -ItemType Directory -Force -Path $script:WmStateDir -ErrorAction Stop | Out-Null
+        if (@(Get-Content -LiteralPath $script:WmRetryFlag -ErrorAction SilentlyContinue) -notcontains 'full') {
+            Add-Content -LiteralPath $script:WmRetryFlag -Value 'full' -Encoding ASCII -ErrorAction Stop
+        }
+    } catch {
+        Write-Host "Nie mogę zapisać znacznika ponowienia: $($_.Exception.Message)"
+    }
+}
+
 $fullRun = -not $OnlyIfPending
 if ($OnlyIfPending) {
     if (-not (Test-Path -LiteralPath $script:WmRetryFlag)) { exit 0 }
-    if (@(Get-Content -LiteralPath $script:WmRetryFlag -ErrorAction SilentlyContinue) -contains 'offline') { $fullRun = $true }
+    $marks = @(Get-Content -LiteralPath $script:WmRetryFlag -ErrorAction SilentlyContinue)
+    if ($marks -contains 'full' -or $marks -contains 'offline') { $fullRun = $true }
 }
 
 $config = Import-WmConfig (Join-Path $here 'provision.config.psd1')
 $job = 'update'
 if (-not $fullRun) { $job = 'retry' }
 
-$lock = Enter-WmLock
-if (-not $lock) { Write-Host 'Inny przebieg wmanager już trwa, kończę.'; exit 0 }
+# The hourly jobs may hold the lock for a few minutes (e.g. after boot, when both tasks start); wait for them
+$wait = 1200
+if ($fullRun) { $wait = 3000 }
+$lock = Enter-WmLock -WaitSeconds $wait
+if (-not $lock) {
+    Write-Host 'Inny przebieg wmanager wciąż trwa; ponowię przy następnym logowaniu.'
+    if ($fullRun) { Set-WmFullRunPending }
+    exit 0
+}
 
 Initialize-WmLog $job
 Write-WmLog "wmanager $job na $($script:WmHostName)"
@@ -34,16 +53,7 @@ Write-WmLog "wmanager $job na $($script:WmHostName)"
 $unreachable = @(Get-WmUnreachableHosts -Config $config)
 if ($unreachable.Count -gt 0) {
     Write-WmLog "Brak połączenia z: $($unreachable -join ', '). Pomijam przebieg, ponowię przy następnym logowaniu."
-    if ($fullRun) {
-        try {
-            New-Item -ItemType Directory -Force -Path $script:WmStateDir -ErrorAction Stop | Out-Null
-            if (@(Get-Content -LiteralPath $script:WmRetryFlag -ErrorAction SilentlyContinue) -notcontains 'offline') {
-                Add-Content -LiteralPath $script:WmRetryFlag -Value 'offline' -Encoding ASCII -ErrorAction Stop
-            }
-        } catch {
-            Write-WmLog "Nie mogę zapisać znacznika ponowienia: $($_.Exception.Message)" -Level warn
-        }
-    }
+    if ($fullRun) { Set-WmFullRunPending }
     Exit-WmLock $lock
     exit 0
 }

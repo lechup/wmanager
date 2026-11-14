@@ -35,7 +35,11 @@ if (-not (Test-Path -LiteralPath $script:WmBackupDir)) {
 }
 
 $lock = Enter-WmLock
-if (-not $lock) { Write-Host 'Inny przebieg wmanager już trwa. Spróbuj za chwilę.' -ForegroundColor Red; exit 3 }
+if (-not $lock) {
+    Write-Host 'Trwa inny przebieg wmanager (np. joby grup); czekam do 10 minut...' -ForegroundColor Yellow
+    $lock = Enter-WmLock -WaitSeconds 600
+}
+if (-not $lock) { Write-Host 'Inny przebieg wmanager wciąż trwa. Spróbuj za chwilę.' -ForegroundColor Red; exit 3 }
 
 Initialize-WmLog 'restore'
 $config = @{}

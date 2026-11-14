@@ -6,7 +6,7 @@
 #   groups.psd1                            computer name -> groups
 #   choco-reqs.txt                         the common package list
 #   groups/<group>/choco-reqs.txt          extra packages for the group (optional)
-#   groups/<group>/scripts/*.ps1           run as SYSTEM, again whenever their content changes
+#   groups/<group>/scripts/*.ps1           run as SYSTEM (hourly and weekly task), again whenever their content changes
 #   groups/<group>/jobs/<when>/*.ps1       run as SYSTEM on a schedule: hourly, daily or weekly (Invoke-Jobs.ps1)
 #   groups/<group>/...                     any other files the scripts use
 #
@@ -18,6 +18,7 @@
 # version is rejected, the last verified copy is used.
 
 $script:WmScriptsState      = Join-Path $script:WmStateDir 'scripts-done.txt'
+$script:WmScriptsFailed     = Join-Path $script:WmStateDir 'scripts-failed.txt'   # path -> hash|time of the last failure
 $script:WmJobsState         = Join-Path $script:WmStateDir 'jobs-state.txt'
 $script:WmManagedChecked    = Join-Path $script:WmStateDir 'managed-checked.txt'   # touched at every fetch attempt
 $script:WmCertFriendlyName  = 'wmanager-signing'   # marks the certificate wmanager added to the root store
@@ -32,6 +33,13 @@ $script:WmScriptsNeedReboot = $false
 function Write-WmManagedNote {
     param([Parameter(Mandatory = $true)][string]$Message)
     if (-not $script:WmManagedQuiet) { Write-WmLog $Message }
+}
+
+# Warnings about the content of the source (e.g. a group without files): reported by the weekly run,
+# not again every hour.
+function Write-WmManagedWarning {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    if (-not $script:WmManagedQuiet) { Write-WmLog $Message -Level warn }
 }
 
 # ---------------------------------------------------------------------------
@@ -153,7 +161,7 @@ function Merge-WmRequirements {
                 $merged[$key] = $r
                 $from[$key] = $l
             } else {
-                Write-WmLog "Paczka $($r.Name) jest różnie opisana w '$($prev.Label)' i '$($l.Label)'; używam wpisu z '$($prev.Label)'." -Level warn
+                Write-WmManagedWarning "Paczka $($r.Name) jest różnie opisana w '$($prev.Label)' i '$($l.Label)'; używam wpisu z '$($prev.Label)'."
             }
         }
     }
@@ -372,7 +380,11 @@ function Repair-WmManagedSwap {
     if (Test-Path -LiteralPath $script:WmManagedDir) { return }
     $old = Get-ChildItem -LiteralPath $script:WmStateDir -Directory -Filter 'managed.old-*' -ErrorAction SilentlyContinue |
            Sort-Object Name -Descending | Select-Object -First 1
-    if ($old) { Move-Item -LiteralPath $old.FullName -Destination $script:WmManagedDir -ErrorAction Stop }
+    if ($old) {
+        Move-Item -LiteralPath $old.FullName -Destination $script:WmManagedDir -ErrorAction Stop
+        # Provisioning may have reset the old copy's ACL (Set-WmFolderAcl); keep it administrators-only
+        Set-WmExplicitAcl -Path $script:WmManagedDir
+    }
 }
 
 # Downloads and checks the current version of the source; when it is valid, it replaces state\managed.
@@ -485,7 +497,7 @@ function Resolve-WmManagedContent {
     $lists = @([pscustomobject]@{ Label = 'lista wspólna'; IsGroup = $false; Items = @($snap.Lists['']) })
     foreach ($g in $groups) {
         $hasFiles = @($manifest.Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
-        if (-not $hasFiles) { Write-WmLog "Grupa $g nie ma żadnych plików w źródle zarządzania." -Level warn; continue }
+        if (-not $hasFiles) { Write-WmManagedWarning "Grupa $g nie ma żadnych plików w źródle zarządzania."; continue }
         if ($snap.Lists.ContainsKey($g)) { $lists += [pscustomobject]@{ Label = $g; IsGroup = $true; Items = @($snap.Lists[$g]) } }
     }
     return [pscustomobject]@{
@@ -624,47 +636,73 @@ function Get-WmScriptEnvironment {
     }
 }
 
-# Runs the scripts of this computer's groups whose content changed since their last successful run.
-# Exit code 0 = done, 3010 = done and a restart is needed; anything else (or the timeout) is an error and
-# the script runs again next time. A failed script doesn't stop the ones after it.
+# Runs the scripts of this computer's groups whose content changed since their last successful run
+# (the hourly wmanager-Jobs task and the weekly run, both as SYSTEM). Exit code 0 = done, 3010 = done and a
+# restart is needed; anything else (or the timeout) is an error and the script runs again later: with
+# -RetryFailedAfterHours (the hourly run) not before that many hours, unless its content changed.
+# A failed script doesn't stop the ones after it.
 function Invoke-WmGroupScripts {
-    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [int]$RetryFailedAfterHours = 0)
     $settings = Get-WmManagementSettings $Config
     if (-not $settings) { return }
-    Write-WmLog '--- Skrypty grup ---'
+    Write-WmManagedNote '--- Skrypty grup ---'
     $content = Get-WmManagedContent -Config $Config
     $scripts = @($content.Scripts)
 
     # Forget scripts this computer no longer has: if it joins the group again, they run again
     $done = Read-WmTabState $script:WmScriptsState
-    foreach ($k in @($done.Keys)) { if (-not ($scripts | Where-Object { $_.Path -eq $k })) { $done.Remove($k) } }
-    try { Save-WmTabState -Path $script:WmScriptsState -Map $done } catch { }
-    if ($scripts.Count -eq 0) { Write-WmLog 'Brak skryptów dla grup tego komputera.'; return }
+    $failed = Read-WmTabState $script:WmScriptsFailed
+    foreach ($map in @($done, $failed)) {
+        foreach ($k in @($map.Keys)) { if (-not ($scripts | Where-Object { $_.Path -eq $k })) { $map.Remove($k) } }
+    }
+    try { Save-WmTabState -Path $script:WmScriptsState -Map $done; Save-WmTabState -Path $script:WmScriptsFailed -Map $failed } catch { }
+    if ($scripts.Count -eq 0) { Write-WmManagedNote 'Brak skryptów dla grup tego komputera.'; return }
 
     $timeout = [int]$settings.ScriptTimeoutMinutes
     if ($timeout -le 0) { $timeout = 15 }
+    $now = [DateTime]::UtcNow
     foreach ($s in $scripts) {
-        if ($done[$s.Path] -eq $s.Hash) { Write-WmLog "$($s.Path): bez zmian." -LocalOnly; continue }
+        if ($done[$s.Path] -eq $s.Hash) {
+            if (-not $script:WmManagedQuiet) { Write-WmLog "$($s.Path): bez zmian." -LocalOnly }
+            continue
+        }
+        if ($RetryFailedAfterHours -gt 0 -and $failed[$s.Path]) {
+            $f = $failed[$s.Path].Split('|')
+            $at = [datetime]::MinValue
+            if ($f.Count -eq 2 -and $f[0] -eq $s.Hash -and [datetime]::TryParse($f[1], [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind, [ref]$at)) {
+                $age = $now - $at.ToUniversalTime()
+                if ($age.TotalHours -ge 0 -and $age.TotalHours -lt $RetryFailedAfterHours) { continue }
+            }
+        }
         $file = Join-Path $script:WmManagedDir ($s.Path -replace '/', '\')
         Write-WmLog "$($s.Path): uruchamiam."
         $r = Invoke-WmScriptProcess -File $file -Environment (Get-WmScriptEnvironment $s.Group $s.Path) -TimeoutMinutes $timeout
         Write-WmScriptOutput $r.Output
         if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput $r.Errors -Prefix '  ! ' }
 
-        if ($null -eq $r.ExitCode) {
-            Write-WmLog "$($s.Path): przekroczony czas ($timeout min), przerwany; ponowię w następnym przebiegu." -Level error
-        } elseif ($r.ExitCode -eq 0 -or $r.ExitCode -eq 3010) {
+        if ($null -eq $r.ExitCode -or ($r.ExitCode -ne 0 -and $r.ExitCode -ne 3010)) {
+            $failed[$s.Path] = '{0}|{1}' -f $s.Hash, [DateTime]::UtcNow.ToString('o')
+            $retry = 'ponowię w następnym przebiegu tygodniowym'
+            if ($RetryFailedAfterHours -gt 0) { $retry = "ponowię za $RetryFailedAfterHours h albo po zmianie skryptu" }
+            if ($null -eq $r.ExitCode) { Write-WmLog "$($s.Path): przekroczony czas ($timeout min), przerwany; $retry." -Level error }
+            else { Write-WmLog "$($s.Path): zakończony kodem $($r.ExitCode); $retry." -Level error }
+        } else {
             $done[$s.Path] = $s.Hash
+            $failed.Remove($s.Path)
             if ($r.ExitCode -eq 3010) {
                 $script:WmScriptsNeedReboot = $true
                 Write-WmLog "$($s.Path): zakończony, wymaga restartu."
             } else {
                 Write-WmLog "$($s.Path): zakończony."
             }
-        } else {
-            Write-WmLog "$($s.Path): zakończony kodem $($r.ExitCode); ponowię w następnym przebiegu." -Level error
         }
-        try { Save-WmTabState -Path $script:WmScriptsState -Map $done } catch { Write-WmLog "Nie mogę zapisać stanu skryptów: $($_.Exception.Message)" -Level warn }
+        try {
+            Save-WmTabState -Path $script:WmScriptsState -Map $done
+            Save-WmTabState -Path $script:WmScriptsFailed -Map $failed
+        } catch {
+            Write-WmLog "Nie mogę zapisać stanu skryptów: $($_.Exception.Message)" -Level warn
+        }
     }
 }
 
@@ -680,12 +718,13 @@ function Invoke-WmGroupJobs {
 
     $timeout = [int]$settings.JobTimeoutMinutes
     if ($timeout -le 0) { $timeout = 10 }
+    # One time for the whole run: a long job doesn't shift the ones after it
+    $now = [DateTime]::UtcNow
     foreach ($j in $jobs) {
         $last = $null
         $parsed = [datetime]::MinValue
         if ($state[$j.Path] -and [datetime]::TryParse($state[$j.Path], [Globalization.CultureInfo]::InvariantCulture,
                 [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { $last = $parsed.ToUniversalTime() }
-        $now = [DateTime]::UtcNow
         if (-not (Test-WmJobDue -Every $j.Every -LastRun $last -Now $now)) { continue }
 
         $state[$j.Path] = $now.ToString('o')

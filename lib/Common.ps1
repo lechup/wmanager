@@ -198,10 +198,12 @@ function Invoke-WmStep {
 # Lock against concurrent runs (provisioning and the scheduled task)
 # ---------------------------------------------------------------------------
 
+# -WaitSeconds: how long to wait for a run that holds the lock (e.g. the hourly jobs) to finish.
 function Enter-WmLock {
+    param([int]$WaitSeconds = 0)
     $m = New-Object System.Threading.Mutex($false, $script:WmMutexName)
     try {
-        if ($m.WaitOne(0)) { return $m }
+        if ($m.WaitOne([TimeSpan]::FromSeconds($WaitSeconds))) { return $m }
     } catch [System.Threading.AbandonedMutexException] {
         return $m   # the previous process died, but the lock is ours
     }
@@ -513,8 +515,10 @@ function Set-WmFolderAcl {
     }
     & icacls.exe (Join-Path $Path '*') /reset /T /C /Q 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls /reset zwrócił $LASTEXITCODE dla $Path" -Level warn }
-    # Private: the config (tokens), the backups (other users' settings), the management copy (group scripts)
-    foreach ($private in @($ConfigFile, (Join-Path $Path 'provision.config.psd1'), $script:WmBackupDir, $script:WmManagedDir) | Select-Object -Unique) {
+    # Private: the config (tokens), the backups (other users' settings), the management copy (group scripts),
+    # also an old copy left behind by a swap (managed.old-*)
+    $oldCopies = @(Get-ChildItem -LiteralPath $script:WmStateDir -Directory -Filter 'managed.*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    foreach ($private in @(@($ConfigFile, (Join-Path $Path 'provision.config.psd1'), $script:WmBackupDir, $script:WmManagedDir) + $oldCopies) | Select-Object -Unique) {
         if (-not $private -or -not (Test-Path -LiteralPath $private)) { continue }
         try {
             Set-WmExplicitAcl -Path $private
