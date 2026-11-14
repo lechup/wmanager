@@ -8,6 +8,7 @@ BeforeAll {
     . (Join-Path $root 'lib\Choco.ps1')
     . (Join-Path $root 'lib\Managed.ps1')
     $hashA = 'A' * 64
+    $sid = 'test-source-0001'
 }
 
 Describe 'Test-WmManagedPath' {
@@ -24,22 +25,29 @@ Describe 'Test-WmManagedPath' {
 }
 
 Describe 'ConvertFrom-WmManifestData' {
-    It 'returns the serial and upper-case hashes' {
-        $m = ConvertFrom-WmManifestData @{ Serial = 20261114120000; Files = @{ 'groups.psd1' = ('a' * 64) } }
+    It 'returns the source, the serial and upper-case hashes' {
+        $m = ConvertFrom-WmManifestData @{ SourceId = $sid; Serial = 20261114120000; Files = @{ 'groups.psd1' = ('a' * 64) } } -SourceId $sid
+        $m.SourceId | Should -Be $sid
         $m.Serial | Should -Be 20261114120000
         $m.Files['groups.psd1'] | Should -Be $hashA
     }
 
+    It 'rejects a manifest of another source or without one' {
+        { ConvertFrom-WmManifestData @{ SourceId = 'other-source-01'; Serial = 1; Files = @{} } -SourceId $sid } | Should -Throw
+        { ConvertFrom-WmManifestData @{ Serial = 1; Files = @{} } } | Should -Throw
+        { ConvertFrom-WmManifestData @{ SourceId = 'short'; Serial = 1; Files = @{} } } | Should -Throw
+    }
+
     It 'rejects a missing or invalid serial' {
-        { ConvertFrom-WmManifestData @{ Files = @{} } } | Should -Throw
-        { ConvertFrom-WmManifestData @{ Serial = 'abc'; Files = @{} } } | Should -Throw
-        { ConvertFrom-WmManifestData @{ Serial = 0; Files = @{} } } | Should -Throw
+        { ConvertFrom-WmManifestData @{ SourceId = $sid; Files = @{} } } | Should -Throw
+        { ConvertFrom-WmManifestData @{ SourceId = $sid; Serial = 'abc'; Files = @{} } } | Should -Throw
+        { ConvertFrom-WmManifestData @{ SourceId = $sid; Serial = 0; Files = @{} } } | Should -Throw
     }
 
     It 'rejects bad paths, bad hashes and the manifest itself' {
-        { ConvertFrom-WmManifestData @{ Serial = 1; Files = @{ '../x' = $hashA } } } | Should -Throw
-        { ConvertFrom-WmManifestData @{ Serial = 1; Files = @{ 'x.txt' = 'abc' } } } | Should -Throw
-        { ConvertFrom-WmManifestData @{ Serial = 1; Files = @{ 'manifest.psd1' = $hashA } } } | Should -Throw
+        { ConvertFrom-WmManifestData @{ SourceId = $sid; Serial = 1; Files = @{ '../x' = $hashA } } } | Should -Throw
+        { ConvertFrom-WmManifestData @{ SourceId = $sid; Serial = 1; Files = @{ 'x.txt' = 'abc' } } } | Should -Throw
+        { ConvertFrom-WmManifestData @{ SourceId = $sid; Serial = 1; Files = @{ 'manifest.psd1' = $hashA } } } | Should -Throw
     }
 }
 
@@ -93,6 +101,17 @@ Describe 'Merge-WmRequirements' {
         ($r | Where-Object Name -eq 'adobereader').NoUpdate | Should -BeTrue
     }
 
+    It 'warns when a later group differs from a group that repeated the common entry' {
+        $same  = ConvertFrom-WmRequirements -Text '7zip@24.8.0'
+        $other = ConvertFrom-WmRequirements -Text '7zip'
+        $r = Merge-WmRequirements -Lists @(
+            @{ Label = 'common'; IsGroup = $false; Items = $common },
+            @{ Label = 'a'; IsGroup = $true; Items = $same },
+            @{ Label = 'b'; IsGroup = $true; Items = $other })
+        ($r | Where-Object Name -eq '7zip').Pinned | Should -BeTrue
+        Should -Invoke Write-WmLog -ParameterFilter { $Level -eq 'warn' }
+    }
+
     It 'keeps the first group when two groups disagree' {
         $r = Merge-WmRequirements -Lists @(
             @{ Label = 'common'; IsGroup = $false; Items = @() },
@@ -100,6 +119,39 @@ Describe 'Merge-WmRequirements' {
             @{ Label = 'other'; IsGroup = $true; Items = $other })
         ($r | Where-Object Name -eq 'adobereader').NoUpdate | Should -BeTrue
         Should -Invoke Write-WmLog -ParameterFilter { $Level -eq 'warn' }
+    }
+}
+
+Describe 'Get-WmRequirements without a management source' {
+    It 'returns a flat list, not a list nested in an array' {
+        Mock Get-WmRequirementsText { "vlc`n7zip" }
+        $r = Get-WmRequirements -Config @{} -BaseDir 'C:\x'
+        $r.Count | Should -Be 2
+        $r[0].Name | Should -Be 'vlc'
+        $r[0].Pinned | Should -BeFalse
+    }
+}
+
+Describe 'Read-WmManagedSnapshot' {
+    It 'reads the map and the lists as flat lists' {
+        $dir = Join-Path $TestDrive 'managed'
+        New-Item -ItemType Directory -Path (Join-Path $dir 'groups\acc') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dir 'groups.psd1') -Value "@{ Default = @('acc') }" -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $dir 'choco-reqs.txt') -Value "vlc`r`n7zip" -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $dir 'groups\acc\choco-reqs.txt') -Value 'adobereader' -Encoding UTF8
+        $manifest = [pscustomobject]@{ Files = @{ 'groups.psd1' = $hashA; 'choco-reqs.txt' = $hashA; 'groups/acc/choco-reqs.txt' = $hashA } }
+        $snap = Read-WmManagedSnapshot -Dir $dir -Manifest $manifest
+        $snap.Map.Default | Should -Be @('acc')
+        $snap.Lists[''].Count | Should -Be 2
+        $snap.Lists[''][1].Name | Should -Be '7zip'
+        $snap.Lists['acc'][0].Name | Should -Be 'adobereader'
+    }
+
+    It 'rejects an invalid list' {
+        $dir = Join-Path $TestDrive 'bad'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dir 'choco-reqs.txt') -Value 'vlc !cos' -Encoding UTF8
+        { Read-WmManagedSnapshot -Dir $dir -Manifest ([pscustomobject]@{ Files = @{ 'choco-reqs.txt' = $hashA } }) } | Should -Throw
     }
 }
 
@@ -120,5 +172,39 @@ Describe 'Get-WmGroupScripts' {
 
     It 'returns nothing without groups' {
         (Get-WmGroupScripts -Files @{ 'groups/a/scripts/1.ps1' = $hashA } -Groups @()).Count | Should -Be 0
+    }
+}
+
+Describe 'Get-WmGroupJobs' {
+    It 'finds jobs by frequency folder and names them group/file' {
+        $files = @{
+            'groups/all/jobs/daily/system-report.ps1' = $hashA
+            'groups/all/jobs/hourly/ping.ps1' = $hashA
+            'groups/all/jobs/monthly/ignored.ps1' = $hashA
+            'groups/all/scripts/10-x.ps1' = $hashA
+        }
+        $j = Get-WmGroupJobs -Files $files -Groups @('all')
+        $j.Count | Should -Be 2
+        ($j | Where-Object Every -eq 'daily').Name | Should -Be 'all/system-report'
+        ($j | Where-Object Every -eq 'hourly').Path | Should -Be 'groups/all/jobs/hourly/ping.ps1'
+    }
+}
+
+Describe 'Test-WmJobDue' {
+    BeforeAll { $now = [datetime]'2026-11-14T12:00:00' }
+
+    It 'runs a job that never ran' {
+        Test-WmJobDue -Every 'daily' -LastRun $null -Now $now | Should -BeTrue
+    }
+
+    It 'keeps the period with a few minutes of slack' {
+        Test-WmJobDue -Every 'daily' -LastRun $now.AddHours(-24).AddMinutes(2) -Now $now | Should -BeTrue
+        Test-WmJobDue -Every 'daily' -LastRun $now.AddHours(-23) -Now $now | Should -BeFalse
+        Test-WmJobDue -Every 'hourly' -LastRun $now.AddMinutes(-57) -Now $now | Should -BeTrue
+        Test-WmJobDue -Every 'weekly' -LastRun $now.AddDays(-6) -Now $now | Should -BeFalse
+    }
+
+    It 'runs a job whose last run is in the future (clock went back)' {
+        Test-WmJobDue -Every 'weekly' -LastRun $now.AddDays(2) -Now $now | Should -BeTrue
     }
 }

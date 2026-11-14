@@ -81,7 +81,7 @@ try {
             if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
         }
         # Failed scripts run again at the next weekly run, not at sign-in
-        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config -BaseDir $here }
+        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config }
         $null = Invoke-WmStep 'Harmonogram zadań' { Update-WmTaskSchedule -Config $config }
     }
 

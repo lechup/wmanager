@@ -13,16 +13,20 @@
 
     # --- Computer groups (optional) -----------------------------------------------
     # Signed management source: the common package list, the map of computers to groups, and each
-    # group's packages and scripts. See README, "Computer groups". Empty Source = off.
+    # group's packages, scripts and jobs. See README, "Computer groups". Empty Source = off.
     Management = @{
         # https:// address of the folder (e.g. a private repository) or a full folder path (\\server\share\...)
         Source      = ''   # e.g. 'https://raw.githubusercontent.com/<owner>/<management-repo>/main'
+        # Identifier of the source (source-id.txt, printed by tools/publish.sh); a manifest of another source is rejected
+        SourceId    = ''
         # Authorization header for a private repository, e.g. 'token github_pat_...' (read-only token)
         AuthHeader  = ''
         # Public part of the signing certificate (tools/new-signing-cert.sh), next to this file
         Certificate = 'wmanager-signing.cer'
         # Time limit for one group script; the weekly task stops after 2 hours in total
         ScriptTimeoutMinutes = 15
+        # Time limit for one job; the hourly job run stops after 1 hour in total
+        JobTimeoutMinutes = 10
     }
 
     # --- Chocolatey -----------------------------------------------------------

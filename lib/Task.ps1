@@ -1,9 +1,10 @@
-﻿# Task Scheduler tasks: weekly update, retry at sign-in, notification.
+﻿# Task Scheduler tasks: weekly update, retry at sign-in, notification, group jobs.
 
 $script:WmTaskPath   = '\wmanager\'
 $script:WmTaskUpdate = 'wmanager-Update'
 $script:WmTaskRetry  = 'wmanager-Retry'
 $script:WmTaskNotify = 'wmanager-Notify'
+$script:WmTaskJobs   = 'wmanager-Jobs'
 
 function Get-WmUsersGroupName {
     # The Users group name depends on the system language (e.g. "Użytkownicy"), so resolve it from the SID
@@ -59,6 +60,21 @@ function Register-WmTasks {
     $s3 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskNotify -Action $a3 -Trigger $t3 `
         -Settings $s3 -Principal $users -Description 'wmanager: restart prompt and default browser setup' -Force -ErrorAction Stop | Out-Null
+
+    # 4. Group jobs every hour (SYSTEM), only with a management source. Without -RepetitionDuration the
+    #    repetition never ends (Windows 10 and later).
+    if (Get-WmManagementSettings $Config) {
+        $jobs = Join-Path $script:WmRoot 'Invoke-Jobs.ps1'
+        $a4 = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$jobs`""
+        $t4 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Hours 1)
+        $s4 = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Action $a4 -Trigger $t4 `
+            -Settings $s4 -Principal $system -Description 'wmanager: group jobs from the management source (hourly)' -Force -ErrorAction Stop | Out-Null
+    } elseif (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Confirm:$false -ErrorAction Stop
+        Write-WmLog 'Brak źródła zarządzania: zadanie jobów usunięte.'
+    }
 
     $days = (@(Get-WmSetting $Config 'UpdateDays' @('Monday')) -join ', ')
     Write-WmLog "Zadania zarejestrowane; aktualizacja: $days o $(Get-WmSetting $Config 'UpdateTime' '12:00')."

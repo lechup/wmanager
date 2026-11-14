@@ -5,8 +5,8 @@
 
 .DESCRIPTION
     Removes Microsoft bloatware and services, turns off telemetry and ads, installs Chocolatey
-    and the packages from choco-reqs.txt (or from the signed management source, with the packages
-    and scripts of the computer's groups), and registers a weekly update. Safe to run
+    and the packages from choco-reqs.txt (or from the signed management source, with the packages,
+    scripts and jobs of the computer's groups), and registers a weekly update. Safe to run
     repeatedly: every run brings the computer to the state defined in the configuration.
 
 .PARAMETER ComputerName
@@ -94,10 +94,7 @@ function Install-WmFiles {
     $src = (Resolve-Path -LiteralPath $here).Path.TrimEnd('\')
     $dst = (Resolve-Path -LiteralPath $script:WmRoot).Path.TrimEnd('\')
     if ($src -ne $dst) {
-        $files = @('Provision.ps1', 'Update-Packages.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt')
-        $cert = Get-WmCertificateFileName $Config   # the weekly run checks the management source with it
-        if ($cert) { $files += $cert }
-        foreach ($f in $files) {
+        foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Invoke-Jobs.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt')) {
             $p = Join-Path $src $f
             if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force -ErrorAction Stop }
         }
@@ -111,6 +108,16 @@ function Install-WmFiles {
     if ($srcConfig -ne $dstConfig) {
         Copy-Item -LiteralPath $srcConfig -Destination $dstConfig -Force -ErrorAction Stop
         Write-WmLog "Konfiguracja skopiowana z $srcConfig"
+    }
+    # The signing certificate travels with the config; the weekly and hourly runs check the source with it
+    $cert = Get-WmCertificateFileName $Config
+    if ($cert) {
+        $srcCert = Join-Path (Split-Path $srcConfig -Parent) $cert
+        $dstCert = Join-Path $dst $cert
+        if ($srcCert -ne $dstCert) {
+            Copy-Item -LiteralPath $srcCert -Destination $dstCert -Force -ErrorAction Stop
+            Write-WmLog "Certyfikat podpisu skopiowany z $srcCert"
+        }
     }
     Set-WmFolderAcl -Path $dst -ConfigFile (Join-Path $dst 'provision.config.psd1')
 }
@@ -143,7 +150,7 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
 $config = Import-WmConfig $ConfigPath
 # A mistake in the management settings stops provisioning before anything changes
 try {
-    Test-WmManagementConfig -Config $config -BaseDir $here
+    Test-WmManagementConfig -Config $config -ConfigDir (Split-Path (Resolve-Path -LiteralPath $ConfigPath).Path -Parent)
 } catch {
     Write-Host "Błąd w ustawieniach Management: $($_.Exception.Message)" -ForegroundColor Red
     exit 2
@@ -246,7 +253,7 @@ try {
             }
         }
         # Scripts don't need Chocolatey, so they run even when it failed; does nothing without a management source
-        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config -BaseDir $here }
+        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config }
     }
 
     $null = Invoke-WmStep 'Domyślna przeglądarka' { Set-WmDefaultBrowser -Config $config }

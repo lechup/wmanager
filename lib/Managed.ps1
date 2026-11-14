@@ -1,25 +1,38 @@
-﻿# Computer groups: a signed management source with the central group map, package lists and group scripts.
+﻿# Computer groups: a signed management source with the central group map, package lists, group scripts and jobs.
 #
 # The source is an https:// prefix (e.g. a private Git repository) or a folder (see examples\management):
-#   manifest.psd1                     generated and signed by tools/publish.sh (Authenticode)
-#   groups.psd1                       computer name -> groups
-#   choco-reqs.txt                    the common package list
-#   groups/<group>/choco-reqs.txt     extra packages for the group (optional)
-#   groups/<group>/scripts/*.ps1      run as SYSTEM, again whenever their content changes
-#   groups/<group>/...                any other files the scripts use
+#   manifest.psd1                          generated and signed by tools/publish.sh (Authenticode)
+#   source-id.txt                          identifier of this source (created by tools/publish.sh)
+#   groups.psd1                            computer name -> groups
+#   choco-reqs.txt                         the common package list
+#   groups/<group>/choco-reqs.txt          extra packages for the group (optional)
+#   groups/<group>/scripts/*.ps1           run as SYSTEM, again whenever their content changes
+#   groups/<group>/jobs/<when>/*.ps1       run as SYSTEM on a schedule: hourly, daily or weekly (Invoke-Jobs.ps1)
+#   groups/<group>/...                     any other files the scripts use
 #
 # The manifest lists every file with its SHA256. A computer accepts a manifest only when its Authenticode
-# signature is valid and made with the certificate named in the config, and its Serial is not lower than the
-# one accepted before (an old signed manifest can't be replayed). Every downloaded file must match its hash and
-# every list must parse before the new version replaces the previous one in state\managed. When the source
-# can't be reached, or its new version is rejected, the last verified copy is used.
+# signature is valid and made with the certificate named in the config, its SourceId is the one from the config
+# (a manifest signed for another source doesn't fit), and its Serial is not lower than the one accepted before
+# (an old signed manifest can't be replayed). Every downloaded file must match its hash and every list must parse
+# before the new version replaces the previous one in state\managed. When the source can't be reached, or its new
+# version is rejected, the last verified copy is used.
 
 $script:WmScriptsState      = Join-Path $script:WmStateDir 'scripts-done.txt'
+$script:WmJobsState         = Join-Path $script:WmStateDir 'jobs-state.txt'
+$script:WmManagedChecked    = Join-Path $script:WmStateDir 'managed-checked.txt'   # touched at every fetch attempt
 $script:WmCertFriendlyName  = 'wmanager-signing'   # marks the certificate wmanager added to the root store
 $script:WmCodeSigningOid    = '1.3.6.1.5.5.7.3.3'
+$script:WmJobPeriods        = @('hourly', 'daily', 'weekly')
 $script:WmManaged           = $null                # content resolved in this run (Get-WmManagedContent)
 $script:WmManagedError      = $null
+$script:WmManagedQuiet      = $false               # the hourly job run logs only warnings and errors
 $script:WmScriptsNeedReboot = $false
+
+# Routine information; left out in the hourly job run so the log and Loki don't fill up with it.
+function Write-WmManagedNote {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    if (-not $script:WmManagedQuiet) { Write-WmLog $Message }
+}
 
 # ---------------------------------------------------------------------------
 # Checks on the content (no system dependencies, tested in tests\Managed.Tests.ps1)
@@ -37,9 +50,13 @@ function Test-WmManagedPath {
     return $true
 }
 
-# Checks the data of manifest.psd1. Returns Serial and Files (path -> upper-case SHA256).
+# Checks the data of manifest.psd1. Returns SourceId, Serial and Files (path -> upper-case SHA256).
+# With -SourceId, a manifest of another source is rejected.
 function ConvertFrom-WmManifestData {
-    param([Parameter(Mandatory = $true)][hashtable]$Data)
+    param([Parameter(Mandatory = $true)][hashtable]$Data, [string]$SourceId)
+    $id = [string]$Data.SourceId
+    if ($id -notmatch '^[A-Za-z0-9._-]{8,64}$') { throw 'manifest: brak poprawnego identyfikatora źródła (SourceId)' }
+    if ($SourceId -and $id -ne $SourceId) { throw "manifest należy do innego źródła ($id), a nie do $SourceId z konfiguracji" }
     $serial = 0L
     if (-not [long]::TryParse([string]$Data.Serial, [ref]$serial) -or $serial -le 0) {
         throw 'manifest: brak poprawnego numeru Serial'
@@ -55,7 +72,7 @@ function ConvertFrom-WmManifestData {
         if ($files.ContainsKey($path)) { throw "manifest: ścieżka '$path' występuje dwa razy" }
         $files[$path] = $hash.ToUpperInvariant()
     }
-    return [pscustomobject]@{ Serial = $serial; Files = $files }
+    return [pscustomobject]@{ SourceId = $id; Serial = $serial; Files = $files }
 }
 
 function Test-WmSameFiles {
@@ -125,9 +142,14 @@ function Merge-WmRequirements {
             $key = $r.Name.ToLowerInvariant()
             if (-not $merged.Contains($key)) { $merged[$key] = $r; $from[$key] = $l; continue }
             $prev = $from[$key]
-            if ((Get-WmRequirementSpec $merged[$key]) -eq (Get-WmRequirementSpec $r)) { continue }
-            if ($l.IsGroup -and -not $prev.IsGroup) {
-                Write-WmLog "Paczka $($r.Name): wpis z grupy $($l.Label) zastępuje wpis z listy wspólnej."
+            $takeOver = $l.IsGroup -and -not $prev.IsGroup
+            if ((Get-WmRequirementSpec $merged[$key]) -eq (Get-WmRequirementSpec $r)) {
+                # Same entry: the package now belongs to the group, so a later group that differs gets the warning
+                if ($takeOver) { $from[$key] = $l }
+                continue
+            }
+            if ($takeOver) {
+                Write-WmManagedNote "Paczka $($r.Name): wpis z grupy $($l.Label) zastępuje wpis z listy wspólnej."
                 $merged[$key] = $r
                 $from[$key] = $l
             } else {
@@ -138,22 +160,60 @@ function Merge-WmRequirements {
     return ,@($merged.Values)
 }
 
+# The .ps1 files directly in $Folder ('/' at the end) of the manifest, sorted by name (ordinal).
+function Get-WmManagedScriptPaths {
+    param([Parameter(Mandatory = $true)][hashtable]$Files, [Parameter(Mandatory = $true)][string]$Folder)
+    $paths = @($Files.Keys | Where-Object {
+        $_.StartsWith($Folder, [StringComparison]::OrdinalIgnoreCase) -and
+        $_.Substring($Folder.Length) -notmatch '/' -and $_ -match '\.ps1$' })
+    $sorted = [string[]]$paths
+    [Array]::Sort($sorted, [StringComparer]::OrdinalIgnoreCase)
+    return ,$sorted
+}
+
 # Scripts of the given groups: groups/<group>/scripts/*.ps1, groups in order, files by name
 # (ordinal, so prefix them with numbers: 10-, 20-...).
 function Get-WmGroupScripts {
     param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
     $result = @()
     foreach ($g in $Groups) {
-        $prefix = "groups/$g/scripts/"
-        $paths = @($Files.Keys | Where-Object {
-            $_.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
-            $_.Substring($prefix.Length) -notmatch '/' -and $_ -match '\.ps1$' })
-        if ($paths.Count -eq 0) { continue }
-        $sorted = [string[]]$paths
-        [Array]::Sort($sorted, [StringComparer]::OrdinalIgnoreCase)
-        foreach ($p in $sorted) { $result += [pscustomobject]@{ Group = $g; Path = $p; Hash = $Files[$p] } }
+        foreach ($p in (Get-WmManagedScriptPaths -Files $Files -Folder "groups/$g/scripts/")) {
+            $result += [pscustomobject]@{ Group = $g; Path = $p; Hash = $Files[$p] }
+        }
     }
     return ,$result
+}
+
+# Jobs of the given groups: groups/<group>/jobs/hourly|daily|weekly/*.ps1. Name (group/file) labels the
+# job's entries in Loki.
+function Get-WmGroupJobs {
+    param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
+    $result = @()
+    foreach ($g in $Groups) {
+        foreach ($every in $script:WmJobPeriods) {
+            foreach ($p in (Get-WmManagedScriptPaths -Files $Files -Folder "groups/$g/jobs/$every/")) {
+                $base = [IO.Path]::GetFileNameWithoutExtension($p.Substring($p.LastIndexOf('/') + 1))
+                $result += [pscustomobject]@{ Group = $g; Path = $p; Every = $every; Name = "$g/$base" }
+            }
+        }
+    }
+    return ,$result
+}
+
+# Is a job due? The hourly task starts a little early or late, so 5 minutes of slack keep a daily job at
+# the same hour instead of drifting. A last run in the future (the clock went back) counts as due.
+function Test-WmJobDue {
+    param([Parameter(Mandatory = $true)][string]$Every, $LastRun, [Parameter(Mandatory = $true)][datetime]$Now)
+    if ($null -eq $LastRun) { return $true }
+    $last = [datetime]$LastRun
+    if ($last -gt $Now.AddMinutes(5)) { return $true }
+    switch ($Every) {
+        'hourly' { $period = [TimeSpan]::FromHours(1) }
+        'daily'  { $period = [TimeSpan]::FromDays(1) }
+        'weekly' { $period = [TimeSpan]::FromDays(7) }
+        default  { throw "nieznana częstotliwość '$Every'" }
+    }
+    return (($Now - $last) -ge ($period - [TimeSpan]::FromMinutes(5)))
 }
 
 # ---------------------------------------------------------------------------
@@ -161,9 +221,11 @@ function Get-WmGroupScripts {
 # ---------------------------------------------------------------------------
 
 # The public certificate from the config, checked: code signing only, not a CA, no private key.
+# It lies next to the configuration file ($Dir). An expired certificate is not rejected here: a signature
+# with a timestamp stays valid, and Get-AuthenticodeSignature decides.
 function Get-WmSigningCertificate {
-    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$BaseDir)
-    $path = Join-Path $BaseDir (Get-WmCertificateFileName $Config)
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$Dir)
+    $path = Join-Path $Dir (Get-WmCertificateFileName $Config)
     if (-not (Test-Path -LiteralPath $path)) { throw "Brak certyfikatu podpisu $path" }
     $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($path)
     if ($cert.HasPrivateKey) { throw "$path zawiera klucz prywatny; na komputery trafia tylko publiczny .cer" }
@@ -175,8 +237,17 @@ function Get-WmSigningCertificate {
     $eku = @($cert.Extensions | Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] })
     $codeSigning = $eku | ForEach-Object { $_.EnhancedKeyUsages } | Where-Object { $_.Value -eq $script:WmCodeSigningOid }
     if (-not $codeSigning) { throw "$path nie jest certyfikatem do podpisywania kodu (brak Code Signing)" }
-    if ($cert.NotAfter -lt (Get-Date)) { throw "Certyfikat podpisu wygasł $($cert.NotAfter.ToString('yyyy-MM-dd'))" }
     return $cert
+}
+
+function Write-WmCertificateExpiry {
+    param([Parameter(Mandatory = $true)]$Certificate)
+    $left = ($Certificate.NotAfter - (Get-Date)).TotalDays
+    if ($left -lt 0) {
+        Write-WmLog "Certyfikat podpisu wygasł $($Certificate.NotAfter.ToString('yyyy-MM-dd')); działają tylko podpisy ze znacznikiem czasu." -Level warn
+    } elseif ($left -lt 60) {
+        Write-WmLog "Certyfikat podpisu wygasa $($Certificate.NotAfter.ToString('yyyy-MM-dd')); przygotuj nowy." -Level warn
+    }
 }
 
 # Windows accepts the signature of a self-signed certificate only if the certificate is in the computer's
@@ -252,14 +323,14 @@ function Get-WmManagedFile {
     }
 }
 
-# The manifest of the copy in state\managed, if its signature is still valid for the configured certificate.
+# The manifest of the copy in state\managed, if it is still valid for the configured certificate and source.
 function Get-WmManagedManifest {
-    param([Parameter(Mandatory = $true)][string]$Thumbprint)
+    param([Parameter(Mandatory = $true)][string]$Thumbprint, [Parameter(Mandatory = $true)][string]$SourceId)
     $file = Join-Path $script:WmManagedDir 'manifest.psd1'
     if (-not (Test-Path -LiteralPath $file)) { return $null }
     try {
         Test-WmManifestSignature -Path $file -Thumbprint $Thumbprint
-        return (ConvertFrom-WmManifestData (Import-PowerShellDataFile -LiteralPath $file))
+        return (ConvertFrom-WmManifestData -Data (Import-PowerShellDataFile -LiteralPath $file) -SourceId $SourceId)
     } catch {
         Write-WmLog "Zapisana kopia źródła zarządzania jest nieważna: $($_.Exception.Message)" -Level warn
         return $null
@@ -282,25 +353,34 @@ function Read-WmManagedSnapshot {
         elseif ($path -match '^groups/([^/]+)/choco-reqs\.txt$') { $group = $Matches[1] }
         else { continue }
         $text = [IO.File]::ReadAllText((Join-Path $Dir ($path -replace '/', '\')), [Text.Encoding]::UTF8)
-        try { $lists[$group] = @(ConvertFrom-WmRequirements -Text $text) }
+        # Plain assignment: ConvertFrom-WmRequirements returns the list as one object (,$items)
+        try { $lists[$group] = ConvertFrom-WmRequirements -Text $text }
         catch { throw "${path}: $($_.Exception.Message)" }
     }
     return [pscustomobject]@{ Map = $map; Lists = $lists }
 }
 
-# A swap interrupted between the two renames leaves only managed.old; put it back.
+# Copies replaced by a newer version. They are deleted at once, but a file kept open (e.g. by a program a
+# script started) can leave one behind; a later run tries again.
+function Remove-WmOldManagedCopies {
+    Get-ChildItem -LiteralPath $script:WmStateDir -Directory -Filter 'managed.old-*' -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# A swap interrupted between the two renames leaves state\managed missing; put the newest old copy back.
 function Repair-WmManagedSwap {
-    $old = "$($script:WmManagedDir).old"
-    if ((Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $script:WmManagedDir)) {
-        Move-Item -LiteralPath $old -Destination $script:WmManagedDir -ErrorAction Stop
-    }
+    if (Test-Path -LiteralPath $script:WmManagedDir) { return }
+    $old = Get-ChildItem -LiteralPath $script:WmStateDir -Directory -Filter 'managed.old-*' -ErrorAction SilentlyContinue |
+           Sort-Object Name -Descending | Select-Object -First 1
+    if ($old) { Move-Item -LiteralPath $old.FullName -Destination $script:WmManagedDir -ErrorAction Stop }
 }
 
 # Downloads and checks the current version of the source; when it is valid, it replaces state\managed.
 # Returns the accepted manifest, or $null when the manifest could not be downloaded (warning logged).
-# Throws when the new version is invalid (signature, serial, hashes, content).
+# Throws when the new version is invalid (signature, source, serial, hashes, content) or can't be put in place.
 function Update-WmManagedCopy {
     param([Parameter(Mandatory = $true)][hashtable]$Settings, [Parameter(Mandatory = $true)][string]$Thumbprint)
+    $sourceId = [string]$Settings.SourceId
     $new = "$($script:WmManagedDir).new"
     if (Test-Path -LiteralPath $new) { Remove-Item -LiteralPath $new -Recurse -Force -ErrorAction Stop }
     # Scripts may hold things meant for administrators only, like the private repository they come from
@@ -314,9 +394,9 @@ function Update-WmManagedCopy {
             return $null
         }
         Test-WmManifestSignature -Path $manifestFile -Thumbprint $Thumbprint
-        $manifest = ConvertFrom-WmManifestData (Import-PowerShellDataFile -LiteralPath $manifestFile)
+        $manifest = ConvertFrom-WmManifestData -Data (Import-PowerShellDataFile -LiteralPath $manifestFile) -SourceId $sourceId
 
-        $current = Get-WmManagedManifest -Thumbprint $Thumbprint
+        $current = Get-WmManagedManifest -Thumbprint $Thumbprint -SourceId $sourceId
         if ($current) {
             if ($manifest.Serial -lt $current.Serial) {
                 throw "manifest $($manifest.Serial) jest starszy niż przyjęty wcześniej $($current.Serial)"
@@ -325,7 +405,7 @@ function Update-WmManagedCopy {
                 if (-not (Test-WmSameFiles $manifest.Files $current.Files)) {
                     throw "manifest ma ten sam numer $($manifest.Serial) co przyjęty wcześniej, ale inne pliki"
                 }
-                Write-WmLog "Źródło zarządzania bez zmian (manifest $($manifest.Serial))."
+                Write-WmManagedNote "Źródło zarządzania bez zmian (manifest $($manifest.Serial))."
                 return $current
             }
         }
@@ -340,11 +420,19 @@ function Update-WmManagedCopy {
         }
         $null = Read-WmManagedSnapshot -Dir $new -Manifest $manifest
 
-        $old = "$($script:WmManagedDir).old"
-        if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction Stop }
-        if (Test-Path -LiteralPath $script:WmManagedDir) { Move-Item -LiteralPath $script:WmManagedDir -Destination $old -ErrorAction Stop }
-        Move-Item -LiteralPath $new -Destination $script:WmManagedDir -ErrorAction Stop
-        Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue
+        # Swap. If the second rename fails, the previous copy goes back, so the run still has one.
+        $old = '{0}.old-{1}' -f $script:WmManagedDir, (Get-Date -Format 'yyyyMMddHHmmssfff')
+        if (Test-Path -LiteralPath $script:WmManagedDir) {
+            try { Move-Item -LiteralPath $script:WmManagedDir -Destination $old -ErrorAction Stop }
+            catch { throw "nie mogę podmienić $($script:WmManagedDir) (czy jakiś program używa plików z tego folderu?): $($_.Exception.Message)" }
+        }
+        try {
+            Move-Item -LiteralPath $new -Destination $script:WmManagedDir -ErrorAction Stop
+        } catch {
+            if (Test-Path -LiteralPath $old) { Move-Item -LiteralPath $old -Destination $script:WmManagedDir -ErrorAction SilentlyContinue }
+            throw
+        }
+        Remove-WmOldManagedCopies
         Write-WmLog "Źródło zarządzania: przyjęto manifest $($manifest.Serial) (plików: $($manifest.Files.Count))."
         return $manifest
     } finally {
@@ -352,30 +440,47 @@ function Update-WmManagedCopy {
     }
 }
 
+# Is it time for the hourly job run to fetch the source again? Also when there is no copy yet.
+function Test-WmManagedRefreshDue {
+    param([int]$Hours = 20)
+    if (-not (Test-Path -LiteralPath (Join-Path $script:WmManagedDir 'manifest.psd1'))) { return $true }
+    $f = Get-Item -LiteralPath $script:WmManagedChecked -ErrorAction SilentlyContinue
+    if (-not $f) { return $true }
+    $age = [DateTime]::UtcNow - $f.LastWriteTimeUtc
+    return ($age.TotalHours -ge $Hours -or $age.TotalHours -lt 0)
+}
+
+# -CachedOnly: use the verified copy without contacting the source (the hourly job run, between fetches).
 function Resolve-WmManagedContent {
-    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$BaseDir)
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [switch]$CachedOnly)
     $settings = Get-WmManagementSettings $Config
     if (-not $settings) { throw 'Brak Management.Source w konfiguracji.' }
-    $cert = Get-WmSigningCertificate -Config $Config -BaseDir $BaseDir
+    $sourceId = [string]$settings.SourceId
+    # The installed copy of the certificate (Install-WmFiles puts it next to the installed config)
+    $cert = Get-WmSigningCertificate -Config $Config -Dir $script:WmRoot
     Install-WmSigningCertificate -Certificate $cert
     Repair-WmManagedSwap
 
     $manifest = $null
-    try {
-        $manifest = Update-WmManagedCopy -Settings $settings -Thumbprint $cert.Thumbprint
-    } catch {
-        Write-WmLog "Odrzucono nową wersję ze źródła zarządzania: $($_.Exception.Message)" -Level error
+    if (-not $CachedOnly) {
+        Write-WmCertificateExpiry $cert
+        try {
+            $manifest = Update-WmManagedCopy -Settings $settings -Thumbprint $cert.Thumbprint
+        } catch {
+            Write-WmLog "Odrzucono nową wersję ze źródła zarządzania: $($_.Exception.Message)" -Level error
+        }
+        try { [IO.File]::WriteAllText($script:WmManagedChecked, [DateTime]::UtcNow.ToString('o')) } catch { }
     }
     if (-not $manifest) {
-        $manifest = Get-WmManagedManifest -Thumbprint $cert.Thumbprint
+        $manifest = Get-WmManagedManifest -Thumbprint $cert.Thumbprint -SourceId $sourceId
         if (-not $manifest) { throw 'Brak sprawdzonej wersji źródła zarządzania (nie udało się jej pobrać, a kopii nie ma).' }
-        Write-WmLog "Używam ostatniej sprawdzonej kopii źródła zarządzania (manifest $($manifest.Serial))." -Level warn
+        if (-not $CachedOnly) { Write-WmLog "Używam ostatniej sprawdzonej kopii źródła zarządzania (manifest $($manifest.Serial))." -Level warn }
     }
 
     $snap = Read-WmManagedSnapshot -Dir $script:WmManagedDir -Manifest $manifest
     $groups = Get-WmComputerGroups -Map $snap.Map -ComputerName $script:WmHostName
-    if ($groups.Count -gt 0) { Write-WmLog "Grupy komputera $($script:WmHostName): $($groups -join ', ')." }
-    else { Write-WmLog "Komputer $($script:WmHostName) nie należy do żadnej grupy (tylko lista wspólna)." }
+    if ($groups.Count -gt 0) { Write-WmManagedNote "Grupy komputera $($script:WmHostName): $($groups -join ', ')." }
+    else { Write-WmManagedNote "Komputer $($script:WmHostName) nie należy do żadnej grupy (tylko lista wspólna)." }
 
     $lists = @([pscustomobject]@{ Label = 'lista wspólna'; IsGroup = $false; Items = @($snap.Lists['']) })
     foreach ($g in $groups) {
@@ -388,16 +493,17 @@ function Resolve-WmManagedContent {
         Groups       = $groups
         Requirements = (Merge-WmRequirements -Lists $lists)
         Scripts      = (Get-WmGroupScripts -Files $manifest.Files -Groups $groups)
+        Jobs         = (Get-WmGroupJobs -Files $manifest.Files -Groups $groups)
     }
 }
 
-# The management content for this run, fetched once and reused by the package and script stages.
+# The management content for this run, resolved once and reused by the package, script and job stages.
 function Get-WmManagedContent {
-    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$BaseDir)
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [switch]$CachedOnly)
     if ($script:WmManaged) { return $script:WmManaged }
     if ($script:WmManagedError) { throw $script:WmManagedError }
     try {
-        $script:WmManaged = Resolve-WmManagedContent -Config $Config -BaseDir $BaseDir
+        $script:WmManaged = Resolve-WmManagedContent -Config $Config -CachedOnly:$CachedOnly
         return $script:WmManaged
     } catch {
         $script:WmManagedError = $_.Exception.Message
@@ -405,32 +511,38 @@ function Get-WmManagedContent {
     }
 }
 
-# The package list for this run: from the management source when one is configured, otherwise from ReqsSources.
+# The package list for this run: from the management source when one is configured, otherwise from
+# ReqsSources ($BaseDir resolves their relative paths).
 function Get-WmRequirements {
     param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$BaseDir)
     if (Get-WmManagementSettings $Config) {
-        return ,@((Get-WmManagedContent -Config $Config -BaseDir $BaseDir).Requirements)
+        return ,@((Get-WmManagedContent -Config $Config).Requirements)
     }
-    return ,@(ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $Config -BaseDir $BaseDir))
+    # Not @(...): the parser already returns the list as one object, and @() would nest it in another array
+    $items = ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $Config -BaseDir $BaseDir)
+    return ,$items
 }
 
-# Checked before provisioning changes anything: settings and the certificate file.
+# Checked before provisioning changes anything: settings and the certificate next to the config ($ConfigDir).
 function Test-WmManagementConfig {
-    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$BaseDir)
-    if (-not (Get-WmManagementSettings $Config)) { return }
-    $cert = Get-WmSigningCertificate -Config $Config -BaseDir $BaseDir
-    Write-WmLog "Źródło zarządzania: $((Get-WmManagementSettings $Config).Source), certyfikat $($cert.Subject) ($($cert.Thumbprint))."
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$ConfigDir)
+    $settings = Get-WmManagementSettings $Config
+    if (-not $settings) { return }
+    $cert = Get-WmSigningCertificate -Config $Config -Dir $ConfigDir
+    Write-WmLog "Źródło zarządzania: $($settings.Source) ($($settings.SourceId)), certyfikat $($cert.Subject) ($($cert.Thumbprint))."
+    Write-WmCertificateExpiry $cert
 }
 
 # ---------------------------------------------------------------------------
-# Group scripts
+# Running group scripts and jobs
 # ---------------------------------------------------------------------------
 
-# Path -> SHA256 of the last successful run.
-function Read-WmScriptsState {
+# Small state files: one "key<TAB>value" per line.
+function Read-WmTabState {
+    param([Parameter(Mandatory = $true)][string]$Path)
     $map = @{}
-    if (Test-Path -LiteralPath $script:WmScriptsState) {
-        foreach ($line in [IO.File]::ReadAllLines($script:WmScriptsState)) {
+    if (Test-Path -LiteralPath $Path) {
+        foreach ($line in [IO.File]::ReadAllLines($Path)) {
             $p = $line.Split("`t")
             if ($p.Count -ge 2 -and $p[0]) { $map[$p[0]] = $p[1] }
         }
@@ -438,25 +550,26 @@ function Read-WmScriptsState {
     return $map
 }
 
-function Save-WmScriptsState {
-    param([Parameter(Mandatory = $true)][hashtable]$Map)
+function Save-WmTabState {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][hashtable]$Map)
     $lines = @($Map.Keys | Sort-Object | ForEach-Object { "$_`t$($Map[$_])" })
-    [IO.File]::WriteAllLines($script:WmScriptsState, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllLines($Path, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 # Runs one script in its own Windows PowerShell process (so it can't change wmanager's state).
-# Returns ExitCode ($null after the timeout, when the process tree is killed), Output and Errors.
+# The working folder is the system TEMP, not the group folder: state\managed is replaced with every new
+# version, and a program left running from it would block that. Returns ExitCode ($null after the timeout,
+# when the process tree is killed), Output and Errors.
 function Invoke-WmScriptProcess {
     param(
         [Parameter(Mandatory = $true)][string]$File,
-        [Parameter(Mandatory = $true)][string]$WorkDir,
         [hashtable]$Environment = @{},
         [int]$TimeoutMinutes = 15
     )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$File`""
-    $psi.WorkingDirectory = $WorkDir
+    $psi.WorkingDirectory = [IO.Path]::GetTempPath()
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
@@ -489,13 +602,25 @@ function Invoke-WmScriptProcess {
     }
 }
 
+# Writes the lines of a script's output to the log. -Raw (jobs): each line goes to Loki as it is, so a job
+# printing JSON can be read with '| json' in Grafana.
 function Write-WmScriptOutput {
-    param([AllowEmptyString()][string]$Text, [string]$Prefix = '  ')
+    param([AllowEmptyString()][string]$Text, [string]$Prefix = '  ', [string]$Task = '', [switch]$Raw, [int]$MaxLength = 2000)
     foreach ($l in ($Text -split "\r?\n")) {
         $s = $l.TrimEnd()
         if (-not $s) { continue }
-        if ($s.Length -gt 2000) { $s = $s.Substring(0, 2000) + '...' }
-        Write-WmLog "$Prefix$s"
+        if ($s.Length -gt $MaxLength) { $s = $s.Substring(0, $MaxLength) + '...' }
+        if ($Raw) { Write-WmLog $s -Task $Task -Raw } else { Write-WmLog "$Prefix$s" -Task $Task }
+    }
+}
+
+function Get-WmScriptEnvironment {
+    param([Parameter(Mandatory = $true)][string]$Group, [Parameter(Mandatory = $true)][string]$Path)
+    $parts = $Path.Split('/')   # groups/<folder>/...
+    return @{
+        WMANAGER_GROUP     = $Group
+        WMANAGER_COMPUTER  = $script:WmHostName
+        WMANAGER_GROUP_DIR = Join-Path $script:WmManagedDir ('groups\' + $parts[1])
     }
 }
 
@@ -503,27 +628,26 @@ function Write-WmScriptOutput {
 # Exit code 0 = done, 3010 = done and a restart is needed; anything else (or the timeout) is an error and
 # the script runs again next time. A failed script doesn't stop the ones after it.
 function Invoke-WmGroupScripts {
-    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$BaseDir)
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
     $settings = Get-WmManagementSettings $Config
     if (-not $settings) { return }
     Write-WmLog '--- Skrypty grup ---'
-    $content = Get-WmManagedContent -Config $Config -BaseDir $BaseDir
+    $content = Get-WmManagedContent -Config $Config
     $scripts = @($content.Scripts)
+
+    # Forget scripts this computer no longer has: if it joins the group again, they run again
+    $done = Read-WmTabState $script:WmScriptsState
+    foreach ($k in @($done.Keys)) { if (-not ($scripts | Where-Object { $_.Path -eq $k })) { $done.Remove($k) } }
+    try { Save-WmTabState -Path $script:WmScriptsState -Map $done } catch { }
     if ($scripts.Count -eq 0) { Write-WmLog 'Brak skryptów dla grup tego komputera.'; return }
 
     $timeout = [int]$settings.ScriptTimeoutMinutes
     if ($timeout -le 0) { $timeout = 15 }
-    $done = Read-WmScriptsState
-    # Forget scripts this computer no longer has: if it joins the group again, they run again
-    foreach ($k in @($done.Keys)) { if (-not ($scripts | Where-Object { $_.Path -eq $k })) { $done.Remove($k) } }
-
     foreach ($s in $scripts) {
         if ($done[$s.Path] -eq $s.Hash) { Write-WmLog "$($s.Path): bez zmian." -LocalOnly; continue }
         $file = Join-Path $script:WmManagedDir ($s.Path -replace '/', '\')
-        $groupDir = Split-Path (Split-Path $file -Parent) -Parent
         Write-WmLog "$($s.Path): uruchamiam."
-        $vars = @{ WMANAGER_GROUP = $s.Group; WMANAGER_COMPUTER = $script:WmHostName; WMANAGER_GROUP_DIR = $groupDir }
-        $r = Invoke-WmScriptProcess -File $file -WorkDir $groupDir -Environment $vars -TimeoutMinutes $timeout
+        $r = Invoke-WmScriptProcess -File $file -Environment (Get-WmScriptEnvironment $s.Group $s.Path) -TimeoutMinutes $timeout
         Write-WmScriptOutput $r.Output
         if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput $r.Errors -Prefix '  ! ' }
 
@@ -540,7 +664,47 @@ function Invoke-WmGroupScripts {
         } else {
             Write-WmLog "$($s.Path): zakończony kodem $($r.ExitCode); ponowię w następnym przebiegu." -Level error
         }
-        try { Save-WmScriptsState $done } catch { Write-WmLog "Nie mogę zapisać stanu skryptów: $($_.Exception.Message)" -Level warn }
+        try { Save-WmTabState -Path $script:WmScriptsState -Map $done } catch { Write-WmLog "Nie mogę zapisać stanu skryptów: $($_.Exception.Message)" -Level warn }
     }
-    try { Save-WmScriptsState $done } catch { }
+}
+
+# Runs the due jobs of this computer's groups (Invoke-Jobs.ps1, every hour). The start time is recorded
+# before the run, so a failed or killed job waits for its next turn instead of repeating every hour.
+# Output lines go to Loki unchanged, labelled task="<group>/<name>".
+function Invoke-WmGroupJobs {
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)]$Content)
+    $settings = Get-WmManagementSettings $Config
+    $jobs = @($Content.Jobs)
+    $state = Read-WmTabState $script:WmJobsState
+    foreach ($k in @($state.Keys)) { if (-not ($jobs | Where-Object { $_.Path -eq $k })) { $state.Remove($k) } }
+
+    $timeout = [int]$settings.JobTimeoutMinutes
+    if ($timeout -le 0) { $timeout = 10 }
+    foreach ($j in $jobs) {
+        $last = $null
+        $parsed = [datetime]::MinValue
+        if ($state[$j.Path] -and [datetime]::TryParse($state[$j.Path], [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { $last = $parsed.ToUniversalTime() }
+        $now = [DateTime]::UtcNow
+        if (-not (Test-WmJobDue -Every $j.Every -LastRun $last -Now $now)) { continue }
+
+        $state[$j.Path] = $now.ToString('o')
+        try { Save-WmTabState -Path $script:WmJobsState -Map $state } catch { Write-WmLog "Nie mogę zapisać stanu jobów: $($_.Exception.Message)" -Level warn }
+        Write-WmLog "Job $($j.Name) ($($j.Every)): uruchamiam." -Task $j.Name
+        $vars = Get-WmScriptEnvironment $j.Group $j.Path
+        $vars['WMANAGER_JOB'] = $j.Name
+        $file = Join-Path $script:WmManagedDir ($j.Path -replace '/', '\')
+        $r = Invoke-WmScriptProcess -File $file -Environment $vars -TimeoutMinutes $timeout
+        Write-WmScriptOutput $r.Output -Task $j.Name -Raw -MaxLength 60000
+        if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput $r.Errors -Prefix '! ' -Task $j.Name }
+
+        if ($null -eq $r.ExitCode) {
+            Write-WmLog "Job $($j.Name): przekroczony czas ($timeout min), przerwany." -Level error -Task $j.Name
+        } elseif ($r.ExitCode -ne 0) {
+            Write-WmLog "Job $($j.Name): zakończony kodem $($r.ExitCode)." -Level error -Task $j.Name
+        } else {
+            Write-WmLog "Job $($j.Name): zakończony." -Task $j.Name -LocalOnly
+        }
+    }
+    try { Save-WmTabState -Path $script:WmJobsState -Map $state } catch { }
 }

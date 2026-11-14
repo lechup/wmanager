@@ -6,9 +6,12 @@
 #   WM_TSA=<RFC 3161 timestamp server URL> also adds a timestamp, so the signature stays valid after the
 #   certificate expires (e.g. WM_TSA=http://timestamp.digicert.com).
 #
-# Every file in the folder except manifest.psd1 and hidden files (.git, .gitattributes...) goes into the
-# manifest with its SHA256; computers use a file only if it matches. Run it after every change, then commit
-# and push. Requires osslsigncode (apt install osslsigncode), openssl and sha256sum.
+# The manifest lists every file of the folder with its SHA256, except manifest.psd1 and hidden files
+# (.git, .gitattributes...); computers use a file only if it matches. In a git repository the list is what git
+# will push (tracked files and new files that aren't ignored), so it matches what the computers download.
+# On the first run it creates source-id.txt, the identifier of this source (Management.SourceId in the config).
+# Run it after every change, then commit and push. Requires osslsigncode (apt install osslsigncode), openssl
+# and sha256sum.
 set -euo pipefail
 
 die() { echo "BŁĄD: $*" >&2; exit 1; }
@@ -23,20 +26,45 @@ command -v osslsigncode >/dev/null || die "brak osslsigncode (sudo apt install o
 keydir=$(cd "$keydir" && pwd)
 cd "$dir"
 
-openssl x509 -in "$keydir/cert.pem" -noout -checkend 0 >/dev/null || die "certyfikat podpisu wygasł"
+openssl x509 -in "$keydir/cert.pem" -noout -checkend 0 >/dev/null ||
+    die "certyfikat podpisu wygasł; utwórz nowy (tools/new-signing-cert.sh w innym folderze) i wgraj go na komputery"
 openssl x509 -in "$keydir/cert.pem" -noout -checkend $((60 * 86400)) >/dev/null ||
     warn "certyfikat podpisu wygasa w ciągu 60 dni; przygotuj nowy (tools/new-signing-cert.sh w innym folderze)"
 
+# --- Source identifier -------------------------------------------------------------------
+id_re='^[A-Za-z0-9._-]{8,64}$'
+if [[ ! -f source-id.txt ]]; then
+    [[ -f manifest.psd1 ]] && die "jest manifest.psd1, ale brak source-id.txt; przywróć ten plik (inaczej komputery odrzucą nowe wersje)"
+    tr -d '\n' < /proc/sys/kernel/random/uuid > source-id.txt
+    echo "Nowe źródło zarządzania, identyfikator: $(cat source-id.txt)"
+    echo "Wpisz go do provision.config.psd1: Management.SourceId. Nie kopiuj source-id.txt do innych źródeł."
+fi
+source_id=$(tr -d ' \r\n' < source-id.txt)
+[[ $source_id =~ $id_re ]] || die "source-id.txt: niepoprawny identyfikator '$source_id' (8-64 znaki: litery, cyfry, . - _)"
+
 # --- Files -----------------------------------------------------------------------
+in_git=0
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
 rels=()
-while IFS= read -r -d '' f; do rels+=("${f#./}"); done < <(
-    find . -type f ! -path '*/.*' ! -path './manifest.psd1' -print0 | LC_ALL=C sort -z)
+if (( in_git )); then
+    # Paths relative to this folder; a tracked file deleted here is left out (git add -A removes it)
+    while IFS= read -r -d '' f; do
+        [[ $f == manifest.psd1 || /$f == */.* ]] && continue
+        [[ -e $f || -L $f ]] || continue
+        rels+=("$f")
+    done < <(git ls-files -z --cached --others --exclude-standard -- . | LC_ALL=C sort -zu)
+else
+    while IFS= read -r -d '' f; do rels+=("${f#./}"); done < <(
+        find . ! -type d ! -path '*/.*' ! -path './manifest.psd1' -print0 | LC_ALL=C sort -z)
+fi
 [[ ${#rels[@]} -gt 0 ]] || die "folder $dir jest pusty"
 
 # The same rules as Test-WmManagedPath on the computers
 name_re='^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
 device_re='^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)'
 for rel in "${rels[@]}"; do
+    [[ -L $rel ]] && die "$rel jest dowiązaniem symbolicznym; git wysłałby samą ścieżkę zamiast pliku"
+    [[ -f $rel ]] || die "$rel nie jest zwykłym plikiem"
     [[ $rel =~ $name_re ]] || die "niedozwolona nazwa: $rel (tylko litery, cyfry, kropka, myślnik, podkreślenie)"
     IFS=/ read -ra segs <<< "$rel"
     for s in "${segs[@]}"; do
@@ -60,11 +88,15 @@ for rel in "${rels[@]}"; do
     esac
 done
 
-# Git must keep the bytes exactly as they are here, otherwise hashes and the signature stop matching
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+# Git must keep the bytes exactly as they are here, otherwise hashes and the signature stop matching.
+# Git LFS would put a pointer in the repository instead of the file.
+if (( in_git )); then
     bad=$(printf '%s\n' manifest.psd1 "${rels[@]}" | git check-attr --stdin text | grep -v ': text: unset$' || true)
     [[ -z $bad ]] || die "git zmieniałby końce linii tych plików; dodaj do .gitattributes linię '* -text':
 $bad"
+    lfs=$(printf '%s\n' "${rels[@]}" | git check-attr --stdin filter | grep -vE ': filter: (unspecified|unset)$' || true)
+    [[ -z $lfs ]] || die "te pliki przechodzą przez filtr gita (np. Git LFS), więc w repozytorium byłoby coś innego:
+$lfs"
 fi
 
 # --- Serial: higher than the previous one, even if the clock went back ----------------
@@ -80,9 +112,10 @@ trap 'rm -rf "$tmp"' EXIT
 {
     printf '\xef\xbb\xbf# wmanager management manifest: generated by tools/publish.sh, do not edit by hand.\r\n'
     printf '@{\r\n'
-    printf '    Serial  = %s\r\n' "$serial"
-    printf "    Created = '%s'\r\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf '    Files   = @{\r\n'
+    printf "    SourceId = '%s'\r\n" "$source_id"
+    printf '    Serial   = %s\r\n' "$serial"
+    printf "    Created  = '%s'\r\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '    Files    = @{\r\n'
     for rel in "${rels[@]}"; do
         printf "        '%s' = '%s'\r\n" "$rel" "$(sha256sum -- "$rel" | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')"
     done
@@ -111,5 +144,5 @@ $out"
 
 mv "$tmp/signed.psd1" manifest.psd1
 thumb=$(openssl x509 -in "$keydir/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
-echo "Podpisano manifest $serial (plików: ${#rels[@]}), certyfikat $thumb."
+echo "Podpisano manifest $serial (plików: ${#rels[@]}), źródło $source_id, certyfikat $thumb."
 echo "Teraz zatwierdź i wypchnij zmiany: git add -A && git commit -m '...' && git push"

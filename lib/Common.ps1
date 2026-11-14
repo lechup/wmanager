@@ -56,7 +56,7 @@ function Get-WmSetting {
 }
 
 # The Management section (computer groups, see lib\Managed.ps1), or $null when no source is set.
-# Throws when the source is neither an https:// address nor a full folder path.
+# Throws when the source is neither an https:// address nor a full folder path, or SourceId is missing.
 function Get-WmManagementSettings {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     $m = Get-WmSetting $Config 'Management' $null
@@ -67,17 +67,20 @@ function Get-WmManagementSettings {
     } elseif (-not [IO.Path]::IsPathRooted($src)) {
         throw "Management.Source: folder trzeba podać pełną ścieżką ('$src')"
     }
+    if ([string]$m.SourceId -notmatch '^[A-Za-z0-9._-]{8,64}$') {
+        throw 'Management.SourceId: brak albo niepoprawny identyfikator źródła (zapisuje go tools/publish.sh w source-id.txt)'
+    }
     return $m
 }
 
-# File name of the public signing certificate, kept next to the scripts; $null without a management source.
+# File name of the public signing certificate, kept next to the configuration file; $null without a management source.
 function Get-WmCertificateFileName {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     $m = Get-WmManagementSettings $Config
     if (-not $m) { return $null }
     $name = [string]$m.Certificate
     if (-not $name) { $name = 'wmanager-signing.cer' }
-    if ($name -ne (Split-Path $name -Leaf)) { throw "Management.Certificate: sama nazwa pliku obok skryptu, bez ścieżki ('$name')" }
+    if ($name -ne (Split-Path $name -Leaf)) { throw "Management.Certificate: sama nazwa pliku obok pliku konfiguracji, bez ścieżki ('$name')" }
     return $name
 }
 
@@ -85,11 +88,12 @@ function Get-WmCertificateFileName {
 # Logs
 # ---------------------------------------------------------------------------
 
+# -Daily: one file per day (the hourly job run), instead of one per run.
 function Initialize-WmLog {
-    param([Parameter(Mandatory = $true)][string]$Job)
+    param([Parameter(Mandatory = $true)][string]$Job, [switch]$Daily)
     $script:WmJob = $Job
     New-Item -ItemType Directory -Force -Path $script:WmLogDir | Out-Null
-    $stamp = Get-Date -Format 'yyyy-MM-dd_HHmm'
+    $stamp = if ($Daily) { Get-Date -Format 'yyyy-MM-dd' } else { Get-Date -Format 'yyyy-MM-dd_HHmm' }
     $script:WmLogFile = Join-Path $script:WmLogDir ("{0}-{1}.log" -f $Job, $stamp)
 }
 
@@ -98,7 +102,11 @@ function Write-WmLog {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Message,
         [ValidateSet('info', 'warn', 'error')][string]$Level = 'info',
         # Local file only (e.g. full choco output), not sent to Loki
-        [switch]$LocalOnly
+        [switch]$LocalOnly,
+        # Group job the entry belongs to: the 'task' label in Loki
+        [string]$Task = '',
+        # To Loki without the time and level prefix (job output, e.g. JSON lines)
+        [switch]$Raw
     )
     $ts = Get-Date
     $line = '{0} [{1}] {2}' -f $ts.ToString('yyyy-MM-dd HH:mm:ss'), $Level.ToUpper(), $Message
@@ -111,7 +119,8 @@ function Write-WmLog {
         try { Add-Content -LiteralPath $script:WmLogFile -Value $line -Encoding UTF8 } catch { }
     }
     if (-not $LocalOnly) {
-        $script:WmLogBuffer.Add([pscustomobject]@{ Time = $ts; Level = $Level; Line = $line })
+        $lokiLine = if ($Raw) { $Message } else { $line }
+        $script:WmLogBuffer.Add([pscustomobject]@{ Time = $ts; Level = $Level; Line = $lokiLine; Task = $Task })
     }
 }
 
@@ -601,20 +610,26 @@ function Send-WmLokiLog {
         $hostLabel = $script:WmHostName.ToLower()
         $streams = New-Object System.Collections.Generic.List[string]
         $i = 0
+        # One stream per level and job (entries outside jobs have no task label)
+        $tasks = @($script:WmLogBuffer | ForEach-Object { [string]$_.Task } | Sort-Object -Unique)
         foreach ($level in @('info', 'warn', 'error')) {
-            $entries = @($script:WmLogBuffer | Where-Object { $_.Level -eq $level })
-            if ($entries.Count -eq 0) { continue }
-            $values = New-Object System.Collections.Generic.List[string]
-            foreach ($e in $entries) {
-                # nanoseconds; +$i keeps entries unique and ordered within a millisecond
-                $ns = ([DateTimeOffset]$e.Time).ToUnixTimeMilliseconds() * 1000000 + $i
-                $i++
-                $values.Add('[' + (ConvertTo-WmJsonString ([string]$ns)) + ',' + (ConvertTo-WmJsonString $e.Line) + ']')
+            foreach ($task in $tasks) {
+                $entries = @($script:WmLogBuffer | Where-Object { $_.Level -eq $level -and [string]$_.Task -eq $task })
+                if ($entries.Count -eq 0) { continue }
+                $values = New-Object System.Collections.Generic.List[string]
+                foreach ($e in $entries) {
+                    # nanoseconds; +$i keeps entries unique and ordered within a millisecond
+                    $ns = ([DateTimeOffset]$e.Time).ToUnixTimeMilliseconds() * 1000000 + $i
+                    $i++
+                    $values.Add('[' + (ConvertTo-WmJsonString ([string]$ns)) + ',' + (ConvertTo-WmJsonString $e.Line) + ']')
+                }
+                $labels = '{"service_name":"wmanager","host":' + (ConvertTo-WmJsonString $hostLabel) +
+                          ',"job":' + (ConvertTo-WmJsonString $script:WmJob) +
+                          ',"level":' + (ConvertTo-WmJsonString $level)
+                if ($task) { $labels += ',"task":' + (ConvertTo-WmJsonString $task) }
+                $labels += '}'
+                $streams.Add('{"stream":' + $labels + ',"values":[' + ($values -join ',') + ']}')
             }
-            $labels = '{"service_name":"wmanager","host":' + (ConvertTo-WmJsonString $hostLabel) +
-                      ',"job":' + (ConvertTo-WmJsonString $script:WmJob) +
-                      ',"level":' + (ConvertTo-WmJsonString $level) + '}'
-            $streams.Add('{"stream":' + $labels + ',"values":[' + ($values -join ',') + ']}')
         }
         $json = '{"streams":[' + ($streams -join ',') + ']}'
         $file = Join-Path $outbox ('{0}-{1}.json' -f (Get-Date -Format 'yyyyMMddHHmmssfff'), $script:WmJob)

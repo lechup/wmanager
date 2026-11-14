@@ -5,8 +5,8 @@ Provisioning for Windows 11 (Home and Pro) office computers:
 - removes Microsoft bloatware and services (Teams, OneDrive, Copilot, Widgets, Xbox, Outlook (new) and more),
 - turns off telemetry (down to the minimum the edition allows), ads, suggestions and Bing in search,
 - installs Chocolatey and the packages from `choco-reqs.txt`,
-- optionally puts computers into groups from a signed management source: extra packages and scripts per group
-  (see [Computer groups](#computer-groups)),
+- optionally puts computers into groups from a signed management source: extra packages, scripts and scheduled jobs
+  (e.g. a daily system report to Loki) per group (see [Computer groups](#computer-groups)),
 - registers a weekly package update (Monday 12:00 by default),
 - sends logs to Grafana Cloud Loki and pings Healthchecks.io.
 
@@ -33,13 +33,14 @@ changing anything.
 | `run.cmd` | Double-click launcher; elevates and passes parameters through |
 | `Provision.ps1` | Main script |
 | `Update-Packages.ps1` | Weekly update (`wmanager-Update` task) and retry at sign-in (`wmanager-Retry`) |
+| `Invoke-Jobs.ps1` | Group jobs, every hour (`wmanager-Jobs`, only with a management source) |
 | `Notify-User.ps1` | Restart notification and a one-time prompt to set the default browser (`wmanager-Notify`) |
 | `Restore-Backup.ps1` | Undoes the registry changes made by provisioning (see [Backup and restore](#backup-and-restore)) |
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
 | `choco-reqs.txt` | Package list (when there is no management source) |
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks |
 | `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change) |
-| `examples/management/` | Template of a management source (group map, lists, an example script) |
+| `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
 | `tests\` | Pester tests for the list parser and the management source checks |
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
@@ -66,7 +67,7 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
    plus the lists of the computer's groups).
 10. Group scripts (with a management source; see [Computer groups](#computer-groups)).
 11. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
-12. Register the scheduled tasks (folder `\wmanager\`).
+12. Register the scheduled tasks (folder `\wmanager\`; `wmanager-Jobs` only with a management source).
 
 User settings are applied to every existing profile and to the default profile (new accounts).
 
@@ -136,23 +137,25 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
 ## Computer groups
 
 Optional. A **management source** is a folder you keep in a private repository (or on an HTTPS server or a share).
-It holds the common package list, the map of computers to groups, and each group's own packages and scripts.
-Every computer checks it at provisioning and in each weekly run:
+It holds the common package list, the map of computers to groups, and each group's own packages, scripts and jobs.
+Every computer checks it at provisioning and in each weekly run (the hourly job run at most once a day):
 
 ```
-manifest.psd1                     generated and signed by tools/publish.sh; don't edit
-groups.psd1                       computer name -> groups
-choco-reqs.txt                    common list (every computer)
-groups/<group>/choco-reqs.txt     extra packages for the group (optional)
-groups/<group>/scripts/*.ps1      scripts run as SYSTEM (optional)
-groups/<group>/...                other files the scripts use (installers, drivers...)
+manifest.psd1                        generated and signed by tools/publish.sh; don't edit
+source-id.txt                        identifier of this source, created by tools/publish.sh; don't copy it to another source
+groups.psd1                          computer name -> groups
+choco-reqs.txt                       common list (every computer)
+groups/<group>/choco-reqs.txt        extra packages for the group (optional)
+groups/<group>/scripts/*.ps1         scripts run as SYSTEM when their content changes (optional)
+groups/<group>/jobs/<when>/*.ps1     jobs run as SYSTEM on a schedule: hourly, daily, weekly (optional)
+groups/<group>/...                   other files the scripts use (installers, drivers...)
 ```
 
 `groups.psd1`:
 
 ```powershell
 @{
-    Default   = @()                                     # groups of every computer
+    Default   = @('all')                                # groups of every computer
     Computers = @{
         'OFFICE-01' = @('accounting')
         'OFFICE-02' = @('accounting', 'floor-1')
@@ -168,15 +171,29 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   group in the computer's list wins (with a warning). Packages are never uninstalled, also when a computer leaves a
   group or a package disappears from a list.
 - **Scripts:** run by Windows PowerShell 5.1 as SYSTEM, in a separate process, group by group in the order of the map,
-  files by name (number them: `10-`, `20-`). A script runs once and again whenever its content changes; it doesn't run
-  for the same content again, so a weekly run doesn't repeat it. Exit code `0` = done, `3010` = done and the computer
-  needs a restart (the user gets the notification), anything else, an exception or the time limit
-  (`ScriptTimeoutMinutes`, 15 by default) = error, and the script runs again at the next weekly run.
-  A failed script doesn't stop the scripts after it. Output goes to the log (and to Loki). Environment:
-  `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, `WMANAGER_GROUP_DIR` (the group's folder, for its other files).
-  Save scripts as UTF-8 with BOM (otherwise 5.1 garbles Polish letters). Scripts run after debloat, but debloat repeats
-  every week while a script doesn't, so a script can't permanently turn back on something debloat removes.
-  Removing a script or leaving a group doesn't undo what the script did.
+  files by name (number them: `10-`, `20-`), at provisioning and in the weekly run. A script runs once and again
+  whenever its content changes; it doesn't run for the same content again, so a weekly run doesn't repeat it.
+  Exit code `0` = done, `3010` = done and the computer needs a restart (the user gets the notification), anything else,
+  an exception or the time limit (`ScriptTimeoutMinutes`, 15 by default) = error, and the script runs again at the next
+  weekly run. A failed script doesn't stop the scripts after it. Output goes to the log (and to Loki).
+  Scripts run after debloat, but debloat repeats every week while a script doesn't, so a script can't permanently turn
+  back on something debloat removes. Removing a script or leaving a group doesn't undo what the script did.
+- **Jobs:** like scripts, but on a schedule: the `wmanager-Jobs` task (SYSTEM) starts every hour and runs each job of the
+  computer's groups whose time has come, by folder: `jobs/hourly`, `jobs/daily`, `jobs/weekly`. A computer that was off
+  catches up at the next hour it is on. The start time is recorded before the job runs, so a failed job waits for its
+  next turn (the error is in the log). Time limit `JobTimeoutMinutes` (10 by default). Every line a job prints goes to
+  Loki unchanged, with the label `task="<group>/<file name>"` (`job="jobs"`): print one JSON object per line and Grafana
+  can read it with `| json`. The local log is `logs\jobs-YYYY-MM-DD.log`. Example:
+  `examples/management/groups/all/jobs/daily/system-report.ps1`, a daily report (model and serial number, disks, RAM,
+  uptime, Windows Update, Defender, BitLocker, TPM, Secure Boot, firewall, local administrators, disk health, battery):
+
+  ```
+  {service_name="wmanager", task="all/system-report"} | json | kind="disk"
+  ```
+- **For both:** the working folder is the system TEMP. Use `$PSScriptRoot` or `WMANAGER_GROUP_DIR` (the group's folder)
+  for the group's files; other variables: `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, and `WMANAGER_JOB` for jobs. The group
+  folders are replaced with every new version of the source, so don't run programs or services from them: copy what
+  has to stay (e.g. an agent) elsewhere first. Save files as UTF-8 with BOM (otherwise 5.1 garbles Polish letters).
 
 ### How a computer checks the source
 
@@ -185,13 +202,19 @@ only when all of this holds:
 
 1. The signature is valid and made with the certificate from the config (`Management.Certificate`, pinned by its
    thumbprint), not with just any trusted certificate.
-2. Its `Serial` is not lower than the version accepted before, so an old signed version can't be served again.
-3. Every file it lists downloads and matches its hash, and `groups.psd1` and all lists parse.
+2. Its `SourceId` is the one in the config (`Management.SourceId`), so a manifest signed with the same key for another
+   source (e.g. a test repository) doesn't fit.
+3. Its `Serial` is not lower than the version this computer accepted before.
+4. Every file it lists downloads and matches its hash, and `groups.psd1` and all lists parse.
 
 Otherwise the new version is rejected (an error in the log) and the last verified copy, in
 `C:\ProgramData\wmanager\state\managed` (Administrators and SYSTEM only), is used. If the source can't be reached,
-the copy is used too (a warning). Taking over the repository is not enough to run code on the computers: that needs
-the signing key, which never leaves your computer.
+the copy is used too (a warning).
+
+Someone who can push to the repository but doesn't have the signing key can't add or change code. They can still:
+serve an older signed version to a computer that has none yet (a new or re-provisioned one), and keep computers on the
+version they already have by withholding newer ones. So keep write access to the repository tight anyway, and when you
+remove a dangerous script, check new computers after provisioning.
 
 Windows accepts a self-signed signature only from a certificate in the computer's trusted root store, so provisioning
 adds the wmanager certificate to **LocalMachine\Root** (with the friendly name `wmanager-signing`). The certificate is
@@ -206,11 +229,14 @@ On Linux (needs `openssl`, `osslsigncode`: `sudo apt install osslsigncode`):
    `cert.pem` and `wmanager-signing.cer`. Back up the key and the passphrase; without them you can't sign changes,
    and a new key means a new certificate on every computer.
 2. Create a **private** repository and copy `examples/management/` into it, including `.gitattributes`
-   (`* -text`: git must not change line endings, or the hashes and the signature stop matching).
-3. Edit `groups.psd1`, `choco-reqs.txt` and the groups, then sign and push (see below).
+   (`* -text`: git must not change line endings, or the hashes and the signature stop matching). Large files can't go
+   through Git LFS (the repository would hold a pointer instead of the file).
+3. Edit `groups.psd1`, `choco-reqs.txt` and the groups, then sign and push (see below). The first `publish.sh` creates
+   `source-id.txt` and prints the identifier.
 4. In `provision.config.psd1` set `Management`: `Source` (e.g.
-   `https://raw.githubusercontent.com/<owner>/<repo>/main`), `AuthHeader` (e.g. `token github_pat_...`: a fine-grained
-   token for this one repository with **Contents: read-only**) and put `wmanager-signing.cer` next to the config.
+   `https://raw.githubusercontent.com/<owner>/<repo>/main`), `SourceId` (from step 3), `AuthHeader` (e.g.
+   `token github_pat_...`: a fine-grained token for this one repository with **Contents: read-only**), and put
+   `wmanager-signing.cer` next to `provision.config.psd1`.
 
 ### Making a change
 
@@ -220,10 +246,11 @@ tools/publish.sh ~/path/to/management-repo     # asks for the key passphrase
 cd ~/path/to/management-repo && git add -A && git commit -m "..." && git push
 ```
 
-`publish.sh` checks file names (letters, digits, `.`, `-`, `_`), warns about scripts without a BOM, refuses a git
-repository without `* -text`, writes the manifest with a new `Serial` and signs it. It doesn't check PowerShell syntax:
-an invalid `groups.psd1` or list is rejected by the computers (the previous version keeps working, and the error shows
-in the log, Loki and Healthchecks).
+`publish.sh` takes the files git will push (tracked ones and new ones that aren't ignored), checks their names
+(letters, digits, `.`, `-`, `_`), refuses links, Git LFS files and a repository without `* -text`, warns about scripts
+without a BOM, writes the manifest with a new `Serial` and signs it. It doesn't check PowerShell syntax: an invalid
+`groups.psd1` or list is rejected by the computers (the previous version keeps working, and the error shows in the log,
+Loki and Healthchecks).
 
 Notes:
 
@@ -234,8 +261,12 @@ Notes:
   config on all of them; give it a long expiry and only read access to this one repository.
 - A share (`\\server\share\...`) is read as SYSTEM, i.e. with the computer account: it works in a domain, not in a
   workgroup. For a workgroup use HTTPS.
-- Without a timestamp the signature is valid as long as the certificate (10 years). `WM_TSA=<url> tools/publish.sh ...`
-  adds an RFC 3161 timestamp.
+- The certificate is valid for 10 years. A signature without a timestamp stops being valid when the certificate expires
+  (then computers reject the source, also their saved copy); `WM_TSA=<url> tools/publish.sh ...` adds an RFC 3161
+  timestamp, which keeps it valid. Replace the certificate before it expires: `publish.sh` and the computers warn
+  60 days ahead.
+- The `wmanager-Jobs` task is registered at provisioning when `Management.Source` is set; if you add a management
+  source to an existing computer, run provisioning again.
 
 ## Weekly update
 
@@ -254,10 +285,12 @@ Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Upda
 
 ## Logs and monitoring
 
-- Locally: `C:\ProgramData\wmanager\logs\<provision|update|retry>-YYYY-MM-DD_HHMM.log`, deleted after `LogRetentionDays` (90 days).
+- Locally: `C:\ProgramData\wmanager\logs\<provision|update|retry>-YYYY-MM-DD_HHMM.log` and `jobs-YYYY-MM-DD.log`,
+  deleted after `LogRetentionDays` (90 days).
   The full Chocolatey output is only in the local log (and in `C:\ProgramData\chocolatey\logs`).
 - **Grafana Cloud Loki**: at the end of a run the script pushes the entries over HTTP (`/loki/api/v1/push`), with no agent.
-  Labels: `service_name="wmanager"`, `host`, `job` (`provision`, `update`, `retry`), `level`.
+  Labels: `service_name="wmanager"`, `host`, `job` (`provision`, `update`, `retry`, `jobs`), `level`, and `task`
+  (`<group>/<name>`) for the output of group jobs.
   When Grafana doesn't respond (or rejects the token), the batch waits in `logs\outbox` and is sent on the next run.
   A batch Loki rejects for good (HTTP 400 or 413, e.g. entries too old) is moved to `logs\outbox\rejected` so it doesn't block newer ones.
   Example query: `{service_name="wmanager", level="error"}`.
@@ -296,7 +329,8 @@ then one pilot computer for a week.
 
 With a management source, also check on the virtual machine that `Get-AuthenticodeSignature` reports `Valid` for a
 manifest signed by `publish.sh` (the signature is made with osslsigncode on Linux), that a changed file and an older
-manifest are rejected, and that a script runs once, not again in the next run, and again after it changes.
+manifest are rejected, and that a script runs once, not again in the next run, and again after it changes; that
+`wmanager-Jobs` repeats every hour and the daily report reaches Loki.
 
 ## Limitations
 
