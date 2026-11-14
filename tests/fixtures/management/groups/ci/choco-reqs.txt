@@ -1,0 +1,2 @@
+# CI: replaces the common entry for 7zip with a pinned version.
+7zip@24.8.0

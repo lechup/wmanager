@@ -1,0 +1,72 @@
+# Tests on a throwaway GitHub-hosted Windows runner (free for public repositories):
+# - sign: builds and signs test management sources on Linux with tools/publish.sh (osslsigncode, throwaway key)
+# - windows: Windows PowerShell 5.1: parses every script, runs the Pester tests, then the integration tests
+#   (the osslsigncode signature on Windows, the checks of a new version, group scripts, jobs, the hourly task).
+# It is Windows Server, not Windows 11 Home/Pro: debloat, privacy, notifications and Restore-Backup.ps1 still
+# need a Windows 11 virtual machine (see README, "Tests").
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    name: Sign test sources (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install osslsigncode
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q osslsigncode
+          osslsigncode --version
+          if ! osslsigncode --help 2>&1 | grep -q '\.psd1'; then
+            echo "::error::This osslsigncode can't sign PowerShell files (2.7 or newer is needed)"
+            exit 1
+          fi
+
+      - name: Check shell scripts
+        run: |
+          bash -n tools/*.sh tests/ci/*.sh
+          shellcheck -S error tools/*.sh tests/ci/*.sh
+
+      - name: Build and sign test sources
+        run: tests/ci/build-sources.sh "$RUNNER_TEMP/sources"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: management-sources
+          path: ${{ runner.temp }}/sources
+          retention-days: 3
+
+  windows:
+    name: Windows PowerShell 5.1
+    needs: sign
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: management-sources
+          path: ${{ runner.temp }}/sources
+
+      - name: Parse all scripts
+        shell: powershell
+        run: .\tests\ci\Test-Syntax.ps1
+
+      - name: Unit tests
+        shell: powershell
+        run: .\tests\ci\Invoke-Tests.ps1 -Kind Unit
+
+      - name: Integration tests
+        shell: powershell
+        env:
+          WM_CI_SOURCES: ${{ runner.temp }}\sources
+        run: .\tests\ci\Invoke-Tests.ps1 -Kind Integration
