@@ -37,7 +37,7 @@ jobs:
       - name: Build and sign test sources
         run: tests/ci/build-sources.sh ci-sources
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: management-sources
           path: ci-sources
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: management-sources
           path: ${{ runner.temp }}/sources
