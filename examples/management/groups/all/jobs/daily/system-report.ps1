@@ -87,6 +87,10 @@ Invoke-Section 'defender' {
         $last = $detections | Sort-Object InitialDetectionTime -Descending | Select-Object -First 1
         $lastName = (Get-MpThreat -ErrorAction SilentlyContinue | Where-Object { $_.ThreatID -eq $last.ThreatID } | Select-Object -First 1).ThreatName
     }
+    # Defender reports 4294967295 (UInt32 max) for "never"
+    $never = [uint32]::MaxValue
+    $sigAge = $s.AntivirusSignatureAge; if ($sigAge -eq $never) { $sigAge = $null }
+    $scanAge = $s.QuickScanAge; if ($scanAge -eq $never) { $scanAge = $null }
     $av = @(Get-CimInstance -Namespace 'root\SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction SilentlyContinue |
             ForEach-Object { $_.displayName }) -join ', '
     Out-Report 'defender' ([ordered]@{
@@ -94,8 +98,8 @@ Invoke-Section 'defender' {
         mode               = [string]$s.AMRunningMode
         realtime           = [bool]$s.RealTimeProtectionEnabled
         tamper_protection  = [bool]$s.IsTamperProtected
-        signature_age_days = $s.AntivirusSignatureAge
-        quick_scan_age_days = $s.QuickScanAge
+        signature_age_days = $sigAge
+        quick_scan_age_days = $scanAge
         detections_30d     = $detections.Count
         last_detection     = $lastName
     })
