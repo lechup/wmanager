@@ -1,0 +1,2 @@
+# Git must store these files byte for byte: manifest.psd1 holds their SHA256 and is signed.
+* -text

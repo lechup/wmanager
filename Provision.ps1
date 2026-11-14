@@ -5,7 +5,8 @@
 
 .DESCRIPTION
     Removes Microsoft bloatware and services, turns off telemetry and ads, installs Chocolatey
-    and the packages from choco-reqs.txt, and registers a weekly update. Safe to run
+    and the packages from choco-reqs.txt (or from the signed management source, with the packages
+    and scripts of the computer's groups), and registers a weekly update. Safe to run
     repeatedly: every run brings the computer to the state defined in the configuration.
 
 .PARAMETER ComputerName
@@ -38,6 +39,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Debloat.ps1')
 . (Join-Path $here 'lib\Privacy.ps1')
 . (Join-Path $here 'lib\Choco.ps1')
+. (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
 
 # ---------------------------------------------------------------------------
@@ -88,11 +90,14 @@ function New-WmRestorePoint {
 }
 
 function Install-WmFiles {
-    param([string]$ConfigFile)
+    param([string]$ConfigFile, [hashtable]$Config)
     $src = (Resolve-Path -LiteralPath $here).Path.TrimEnd('\')
     $dst = (Resolve-Path -LiteralPath $script:WmRoot).Path.TrimEnd('\')
     if ($src -ne $dst) {
-        foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt')) {
+        $files = @('Provision.ps1', 'Update-Packages.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt')
+        $cert = Get-WmCertificateFileName $Config   # the weekly run checks the management source with it
+        if ($cert) { $files += $cert }
+        foreach ($f in $files) {
             $p = Join-Path $src $f
             if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force -ErrorAction Stop }
         }
@@ -136,6 +141,13 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
     Copy-Item -LiteralPath $example -Destination $ConfigPath
 }
 $config = Import-WmConfig $ConfigPath
+# A mistake in the management settings stops provisioning before anything changes
+try {
+    Test-WmManagementConfig -Config $config -BaseDir $here
+} catch {
+    Write-Host "Błąd w ustawieniach Management: $($_.Exception.Message)" -ForegroundColor Red
+    exit 2
+}
 
 $newName = Resolve-WmComputerName -Requested $ComputerName -Prompt ([bool](Get-WmSetting $config 'PromptComputerName' $true))
 
@@ -201,7 +213,7 @@ try {
     }
 
     # The scheduled tasks run the copied files, so if copying fails the run stops here
-    Install-WmFiles -ConfigFile $ConfigPath
+    Install-WmFiles -ConfigFile $ConfigPath -Config $config
     $config = Import-WmConfig (Join-Path $script:WmRoot 'provision.config.psd1')
 
     if ($newName -ne $env:COMPUTERNAME) {
@@ -225,12 +237,16 @@ try {
     if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
 
     if ($offline) {
-        Write-WmLog 'Pomijam Chocolatey i programy (brak internetu); zainstaluje je cotygodniowe zadanie.' -Level warn
-    } elseif (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
-        $null = Invoke-WmStep 'Paczki' {
-            $reqs = ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $config -BaseDir $here)
-            $null = Sync-WmPackages -Requirements $reqs -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
+        Write-WmLog 'Pomijam Chocolatey, programy i skrypty grup (brak internetu); zrobi to cotygodniowe zadanie.' -Level warn
+    } else {
+        if (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
+            $null = Invoke-WmStep 'Paczki' {
+                $reqs = Get-WmRequirements -Config $config -BaseDir $here
+                $null = Sync-WmPackages -Requirements $reqs -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
+            }
         }
+        # Scripts don't need Chocolatey, so they run even when it failed; does nothing without a management source
+        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config -BaseDir $here }
     }
 
     $null = Invoke-WmStep 'Domyślna przeglądarka' { Set-WmDefaultBrowser -Config $config }

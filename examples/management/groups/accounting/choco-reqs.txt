@@ -1,0 +1,5 @@
+# Extra packages for the accounting group, in the same format as the common list.
+# An entry for a package that is also on the common list replaces it on these computers.
+
+# PDF forms that SumatraPDF can't fill in; Reader updates itself
+adobereader !noupdate

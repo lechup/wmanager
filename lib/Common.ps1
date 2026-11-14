@@ -17,6 +17,7 @@ $script:WmPublicState = Join-Path $script:WmStateDir 'public.json'
 $script:WmMutexName   = 'Global\wmanager-run'
 
 $script:WmBackupDir   = Join-Path $script:WmStateDir 'backup'
+$script:WmManagedDir  = Join-Path $script:WmStateDir 'managed'   # verified copy of the management source (lib\Managed.ps1)
 $script:WmJournalFile = Join-Path $script:WmBackupDir 'journal.jsonl'
 $script:WmJournalOn   = $false  # undo journal records only during provisioning (see lib\Backup.ps1)
 $script:WmJournalSeen = @{}     # value id -> $true
@@ -52,6 +53,32 @@ function Get-WmSetting {
         return $v
     }
     return $Default
+}
+
+# The Management section (computer groups, see lib\Managed.ps1), or $null when no source is set.
+# Throws when the source is neither an https:// address nor a full folder path.
+function Get-WmManagementSettings {
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    $m = Get-WmSetting $Config 'Management' $null
+    if (-not ($m -is [hashtable]) -or -not $m.Source) { return $null }
+    $src = [string]$m.Source
+    if ($src -match '^[A-Za-z][A-Za-z0-9+.-]*://') {
+        if ($src -notmatch '^https://') { throw "Management.Source: dozwolony jest tylko adres https:// ('$src')" }
+    } elseif (-not [IO.Path]::IsPathRooted($src)) {
+        throw "Management.Source: folder trzeba podać pełną ścieżką ('$src')"
+    }
+    return $m
+}
+
+# File name of the public signing certificate, kept next to the scripts; $null without a management source.
+function Get-WmCertificateFileName {
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    $m = Get-WmManagementSettings $Config
+    if (-not $m) { return $null }
+    $name = [string]$m.Certificate
+    if (-not $name) { $name = 'wmanager-signing.cer' }
+    if ($name -ne (Split-Path $name -Leaf)) { throw "Management.Certificate: sama nazwa pliku obok skryptu, bez ścieżki ('$name')" }
+    return $name
 }
 
 # ---------------------------------------------------------------------------
@@ -107,17 +134,23 @@ function Get-WmLogTail {
 # Network
 # ---------------------------------------------------------------------------
 
-# Servers the run needs: the Chocolatey install script, the enabled package sources and package-list
-# URLs. Returns the hosts that did not answer at all (empty = online). Any HTTP answer, even an
-# error status, counts as reachable.
+# Servers the run needs: the Chocolatey install script, the enabled package sources, and the management
+# source (or, without one, the package-list URLs). Returns the hosts that did not answer at all
+# (empty = online). Any HTTP answer, even an error status, counts as reachable.
 function Get-WmUnreachableHosts {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     $urls = @(Get-WmSetting $Config 'ChocolateyInstallUrl' 'https://community.chocolatey.org/install.ps1')
     foreach ($s in @(Get-WmSetting $Config 'ChocolateySources' @())) {
         if ($s.Url -and $s.Enabled -ne $false) { $urls += $s.Url }
     }
-    foreach ($s in @(Get-WmSetting $Config 'ReqsSources' @())) {
-        if ($s -match '^https?://') { $urls += $s }
+    $mg = $null
+    try { $mg = Get-WmManagementSettings $Config } catch { }   # an invalid setting is reported by the stage using it
+    if ($mg) {
+        if ([string]$mg.Source -match '^https://') { $urls += [string]$mg.Source }
+    } else {
+        foreach ($s in @(Get-WmSetting $Config 'ReqsSources' @())) {
+            if ($s -match '^https?://') { $urls += $s }
+        }
     }
     $bad = @()
     $checked = @{}
@@ -458,8 +491,8 @@ function Initialize-WmRoot {
 
 # Folder: owned by Administrators; only SYSTEM and Administrators can write; Users can read and execute.
 # Everything inside only inherits the folder's ACL (explicit entries are removed).
-# Configuration file (tokens) and state\backup: SYSTEM and Administrators only. Checked after setting;
-# a failure is an error.
+# Configuration file (tokens), state\backup and state\managed: SYSTEM and Administrators only.
+# Checked after setting; a failure is an error.
 function Set-WmFolderAcl {
     param([Parameter(Mandatory = $true)][string]$Path, [string]$ConfigFile)
     & icacls.exe "$Path" /setowner '*S-1-5-32-544' /T /C /Q 2>&1 | Out-Null
@@ -471,8 +504,8 @@ function Set-WmFolderAcl {
     }
     & icacls.exe (Join-Path $Path '*') /reset /T /C /Q 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls /reset zwrócił $LASTEXITCODE dla $Path" -Level warn }
-    # Private: the config (tokens) and the backups (other users' settings)
-    foreach ($private in @($ConfigFile, (Join-Path $Path 'provision.config.psd1'), $script:WmBackupDir) | Select-Object -Unique) {
+    # Private: the config (tokens), the backups (other users' settings), the management copy (group scripts)
+    foreach ($private in @($ConfigFile, (Join-Path $Path 'provision.config.psd1'), $script:WmBackupDir, $script:WmManagedDir) | Select-Object -Unique) {
         if (-not $private -or -not (Test-Path -LiteralPath $private)) { continue }
         try {
             Set-WmExplicitAcl -Path $private

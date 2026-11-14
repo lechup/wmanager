@@ -10,10 +10,11 @@
 
     Also restores the default apps for new accounts from the first backup, lists Store apps removed
     since then (they have to be reinstalled from the Store) and offers to disable the wmanager tasks,
-    because otherwise the weekly run applies debloat again.
+    because otherwise the weekly run applies debloat again. With the tasks disabled, the wmanager
+    signing certificate is also removed from the computer's trusted root store.
 
-    Not undone: removed Store apps and OneDrive, installed Chocolatey packages, the computer name.
-    A restart is needed afterwards.
+    Not undone: removed Store apps and OneDrive, installed Chocolatey packages, the effects of group
+    scripts, the computer name. A restart is needed afterwards.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File C:\ProgramData\wmanager\Restore-Backup.ps1
@@ -25,6 +26,7 @@ $ErrorActionPreference = 'Continue'
 $here = $PSScriptRoot
 . (Join-Path $here 'lib\Common.ps1')
 . (Join-Path $here 'lib\Backup.ps1')
+. (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
 
 if (-not (Test-Path -LiteralPath $script:WmBackupDir)) {
@@ -106,14 +108,24 @@ try {
         Write-WmLog 'OneDrive był odinstalowany; jeśli jest potrzebny, zainstaluj go ponownie ze strony Microsoftu.' -Level warn
     }
 
-    # --- Scheduled tasks ----------------------------------------------------------
+    # --- Scheduled tasks and the signing certificate (the weekly run needs it) ------
+    $tasksOff = $true
     $tasks = @(Get-ScheduledTask -TaskPath $script:WmTaskPath -ErrorAction SilentlyContinue)
     if ($tasks.Count -gt 0) {
         if (Confirm-WmContinue 'Wyłączyć zadania wmanager? Inaczej cotygodniowy przebieg znowu usunie aplikacje i zmieni ustawienia.' -DefaultYes) {
             $tasks | Disable-ScheduledTask -ErrorAction Stop | Out-Null
             Write-WmLog "Zadania wmanager wyłączone ($($tasks.Count))."
         } else {
+            $tasksOff = $false
             Write-WmLog 'Zadania wmanager zostają włączone; cotygodniowy przebieg znowu zastosuje ustawienia.' -Level warn
+        }
+    }
+    if ($tasksOff) {
+        try {
+            $n = Remove-WmSigningCertificates
+            if ($n -gt 0) { Write-WmLog "Certyfikat podpisu wmanager usunięty z zaufanych ($n)." }
+        } catch {
+            Write-WmLog "Nie udało się usunąć certyfikatu podpisu wmanager z zaufanych: $($_.Exception.Message)" -Level warn
         }
     }
 } catch {

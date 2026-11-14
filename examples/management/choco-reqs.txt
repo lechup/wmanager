@@ -1,0 +1,26 @@
+# Common Chocolatey package list for wmanager (every computer)
+#
+# Format (one package per line):
+#   name                      latest version, updated weekly
+#   name@latest               same thing, written explicitly
+#   name@1.2.3                pinned version: installs exactly this one, never updated
+#   name !noupdate            installs the latest but doesn't update it (the program updates itself)
+#   name | --params "/X"      extra parameters for choco install/upgrade
+# A comment starts with # (at the start of a line or after a space).
+
+# Browser (default); Chrome updates itself
+googlechrome !noupdate
+
+# Office
+libreoffice-fresh
+sumatrapdf
+7zip
+
+# Multimedia
+vlc
+
+# Remote support (replaces the removed Quick Assist)
+rustdesk
+
+# Tools
+notepadplusplus

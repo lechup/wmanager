@@ -1,4 +1,4 @@
-﻿# Weekly package update (wmanager-Update task, SYSTEM account).
+﻿# Weekly package update and group scripts (wmanager-Update task, SYSTEM account).
 # With -OnlyIfPending (wmanager-Retry task at sign-in): runs only when something was deferred.
 [CmdletBinding()]
 param([switch]$OnlyIfPending)
@@ -9,6 +9,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Debloat.ps1')
 . (Join-Path $here 'lib\Privacy.ps1')
 . (Join-Path $here 'lib\Choco.ps1')
+. (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
 
 # A weekly run skipped for lack of internet leaves 'offline' in the retry flag,
@@ -56,7 +57,7 @@ try {
     $script:WmDeferred = $null
     if (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
         $null = Invoke-WmStep 'Paczki' {
-            $reqs = ConvertFrom-WmRequirements -Text (Get-WmRequirementsText -Config $config -BaseDir $here)
+            $reqs = Get-WmRequirements -Config $config -BaseDir $here
             $script:WmDeferred = Sync-WmPackages -Requirements $reqs -Upgrade `
                                     -SkipRunning:([bool](Get-WmSetting $config 'SkipRunningPackages' $true)) `
                                     -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
@@ -79,10 +80,12 @@ try {
             $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
             if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
         }
+        # Failed scripts run again at the next weekly run, not at sign-in
+        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config -BaseDir $here }
         $null = Invoke-WmStep 'Harmonogram zadań' { Update-WmTaskSchedule -Config $config }
     }
 
-    if ($script:WmChocoNeedsReboot -or (Test-WmPendingReboot)) {
+    if ($script:WmChocoNeedsReboot -or $script:WmScriptsNeedReboot -or (Test-WmPendingReboot)) {
         Set-WmRebootFlag
         Write-WmLog 'System czeka na restart; użytkownik dostanie powiadomienie.'
         Start-WmNotifyTask

@@ -5,6 +5,8 @@ Provisioning for Windows 11 (Home and Pro) office computers:
 - removes Microsoft bloatware and services (Teams, OneDrive, Copilot, Widgets, Xbox, Outlook (new) and more),
 - turns off telemetry (down to the minimum the edition allows), ads, suggestions and Bing in search,
 - installs Chocolatey and the packages from `choco-reqs.txt`,
+- optionally puts computers into groups from a signed management source: extra packages and scripts per group
+  (see [Computer groups](#computer-groups)),
 - registers a weekly package update (Monday 12:00 by default),
 - sends logs to Grafana Cloud Loki and pings Healthchecks.io.
 
@@ -34,9 +36,11 @@ changing anything.
 | `Notify-User.ps1` | Restart notification and a one-time prompt to set the default browser (`wmanager-Notify`) |
 | `Restore-Backup.ps1` | Undoes the registry changes made by provisioning (see [Backup and restore](#backup-and-restore)) |
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
-| `choco-reqs.txt` | Package list |
-| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, scheduled tasks |
-| `tests\` | Pester tests for the list parser |
+| `choco-reqs.txt` | Package list (when there is no management source) |
+| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks |
+| `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change) |
+| `examples/management/` | Template of a management source (group map, lists, an example script) |
+| `tests\` | Pester tests for the list parser and the management source checks |
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
 only Administrators and SYSTEM can write there, and only they can read `provision.config.psd1` (which holds the tokens).
@@ -45,9 +49,11 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 
 ## Provisioning steps
 
-1. Check for Windows 11 and administrator rights, determine the computer name.
-2. Check that the Chocolatey and package-list servers answer. Without internet the script asks whether to go on
-   without installing programs (Enter = stop, nothing changed yet); the weekly task installs them later.
+1. Check for Windows 11 and administrator rights, the management settings and signing certificate (if set),
+   determine the computer name.
+2. Check that the Chocolatey, package-list and management servers answer. Without internet the script asks whether
+   to go on without installing programs and running group scripts (Enter = stop, nothing changed yet); the weekly
+   task does that later.
 3. System restore point. If it can't be created, the script asks whether to go on without it (Enter = stop).
    `run.cmd -SkipRestorePoint` skips the restore point and the question.
 4. Backup of Store apps and the registry, and the start of the undo journal (see [Backup and restore](#backup-and-restore)).
@@ -56,9 +62,11 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 6. Rename the computer (if a name was given; takes effect after a restart).
 7. Debloat: apps from the `RemoveAppx` list (for all users and from the system image), OneDrive, policies, Edge.
 8. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
-9. Chocolatey, package sources, installing the packages from the list.
-10. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
-11. Register the scheduled tasks (folder `\wmanager\`).
+9. Chocolatey, package sources, installing the packages from the list (with a management source: the common list
+   plus the lists of the computer's groups).
+10. Group scripts (with a management source; see [Computer groups](#computer-groups)).
+11. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
+12. Register the scheduled tasks (folder `\wmanager\`).
 
 User settings are applied to every existing profile and to the default profile (new accounts).
 
@@ -95,10 +103,11 @@ if they are empty) for the computer and for every profile that still exists. Cha
 keys are left alone. It also restores the default apps for new accounts from the first backup (or the Windows defaults
 if there were none), lists Store apps
 removed since then, and offers to disable the wmanager tasks (otherwise the weekly run applies debloat again).
+With the tasks disabled it also removes the wmanager signing certificate from the trusted root store.
 Restart the computer afterwards.
 
 Not undone: removed Store apps (reinstall from the Store) and OneDrive (reinstall from Microsoft), installed
-Chocolatey packages, the computer name. Settings the weekly run applies to profiles created after provisioning
+Chocolatey packages, what group scripts changed, the computer name. Settings the weekly run applies to profiles created after provisioning
 are not in the journal. Programs and system files can be rolled back with the system restore point.
 
 ## choco-reqs.txt
@@ -119,8 +128,114 @@ vlc | --params "/NoDesktopShortcut"   # extra choco parameters
 The list sources (`ReqsSources`) are tried in order: URL, share, file next to the script.
 The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.txt` and is used when no source responds.
 
-> Anyone who can change the list behind the URL can install programs as SYSTEM on every computer.
-> Use HTTPS only, and a repository with restricted write access.
+> Anyone who can change the list behind the URL can install programs as SYSTEM on every computer
+> (the part after `|` goes straight to choco, so even `--source` pointing to their own server).
+> Use HTTPS only, and a repository with restricted write access, or better a signed management source:
+> with `Management.Source` set, `ReqsSources` is not used.
+
+## Computer groups
+
+Optional. A **management source** is a folder you keep in a private repository (or on an HTTPS server or a share).
+It holds the common package list, the map of computers to groups, and each group's own packages and scripts.
+Every computer checks it at provisioning and in each weekly run:
+
+```
+manifest.psd1                     generated and signed by tools/publish.sh; don't edit
+groups.psd1                       computer name -> groups
+choco-reqs.txt                    common list (every computer)
+groups/<group>/choco-reqs.txt     extra packages for the group (optional)
+groups/<group>/scripts/*.ps1      scripts run as SYSTEM (optional)
+groups/<group>/...                other files the scripts use (installers, drivers...)
+```
+
+`groups.psd1`:
+
+```powershell
+@{
+    Default   = @()                                     # groups of every computer
+    Computers = @{
+        'OFFICE-01' = @('accounting')
+        'OFFICE-02' = @('accounting', 'floor-1')
+    }
+}
+```
+
+A computer that is not in the map gets only `Default` and the common list. Moving a computer to another group
+is a change in `groups.psd1`; nothing has to be done on the computer.
+
+- **Packages:** the group lists use the `choco-reqs.txt` format. A group entry replaces the common entry for the same
+  package on that group's computers; if two groups of one computer describe the same package differently, the first
+  group in the computer's list wins (with a warning). Packages are never uninstalled, also when a computer leaves a
+  group or a package disappears from a list.
+- **Scripts:** run by Windows PowerShell 5.1 as SYSTEM, in a separate process, group by group in the order of the map,
+  files by name (number them: `10-`, `20-`). A script runs once and again whenever its content changes; it doesn't run
+  for the same content again, so a weekly run doesn't repeat it. Exit code `0` = done, `3010` = done and the computer
+  needs a restart (the user gets the notification), anything else, an exception or the time limit
+  (`ScriptTimeoutMinutes`, 15 by default) = error, and the script runs again at the next weekly run.
+  A failed script doesn't stop the scripts after it. Output goes to the log (and to Loki). Environment:
+  `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, `WMANAGER_GROUP_DIR` (the group's folder, for its other files).
+  Save scripts as UTF-8 with BOM (otherwise 5.1 garbles Polish letters). Scripts run after debloat, but debloat repeats
+  every week while a script doesn't, so a script can't permanently turn back on something debloat removes.
+  Removing a script or leaving a group doesn't undo what the script did.
+
+### How a computer checks the source
+
+`manifest.psd1` lists every file with its SHA256 and carries an Authenticode signature. A computer uses a new version
+only when all of this holds:
+
+1. The signature is valid and made with the certificate from the config (`Management.Certificate`, pinned by its
+   thumbprint), not with just any trusted certificate.
+2. Its `Serial` is not lower than the version accepted before, so an old signed version can't be served again.
+3. Every file it lists downloads and matches its hash, and `groups.psd1` and all lists parse.
+
+Otherwise the new version is rejected (an error in the log) and the last verified copy, in
+`C:\ProgramData\wmanager\state\managed` (Administrators and SYSTEM only), is used. If the source can't be reached,
+the copy is used too (a warning). Taking over the repository is not enough to run code on the computers: that needs
+the signing key, which never leaves your computer.
+
+Windows accepts a self-signed signature only from a certificate in the computer's trusted root store, so provisioning
+adds the wmanager certificate to **LocalMachine\Root** (with the friendly name `wmanager-signing`). The certificate is
+limited to code signing and is not a CA, so it can't vouch for websites or other certificates; but anything signed with
+its key is trusted on the computer, so guard the key. A new certificate in the config replaces the old one at the next run.
+
+### Setting up (once)
+
+On Linux (needs `openssl`, `osslsigncode`: `sudo apt install osslsigncode`):
+
+1. `tools/new-signing-cert.sh`: creates `~/.wmanager-signing/` with `key.pem` (protected with a passphrase),
+   `cert.pem` and `wmanager-signing.cer`. Back up the key and the passphrase; without them you can't sign changes,
+   and a new key means a new certificate on every computer.
+2. Create a **private** repository and copy `examples/management/` into it, including `.gitattributes`
+   (`* -text`: git must not change line endings, or the hashes and the signature stop matching).
+3. Edit `groups.psd1`, `choco-reqs.txt` and the groups, then sign and push (see below).
+4. In `provision.config.psd1` set `Management`: `Source` (e.g.
+   `https://raw.githubusercontent.com/<owner>/<repo>/main`), `AuthHeader` (e.g. `token github_pat_...`: a fine-grained
+   token for this one repository with **Contents: read-only**) and put `wmanager-signing.cer` next to the config.
+
+### Making a change
+
+```bash
+# edit files in the management repository, then:
+tools/publish.sh ~/path/to/management-repo     # asks for the key passphrase
+cd ~/path/to/management-repo && git add -A && git commit -m "..." && git push
+```
+
+`publish.sh` checks file names (letters, digits, `.`, `-`, `_`), warns about scripts without a BOM, refuses a git
+repository without `* -text`, writes the manifest with a new `Serial` and signs it. It doesn't check PowerShell syntax:
+an invalid `groups.psd1` or list is rejected by the computers (the previous version keeps working, and the error shows
+in the log, Loki and Healthchecks).
+
+Notes:
+
+- GitHub serves raw files through a cache for a few minutes. A computer that catches the new manifest with an old
+  file rejects that version (hash mismatch) and uses it at the next run. Wait a few minutes after pushing before
+  provisioning a computer.
+- The token is stored on every computer (readable only by administrators) and must not expire before you update the
+  config on all of them; give it a long expiry and only read access to this one repository.
+- A share (`\\server\share\...`) is read as SYSTEM, i.e. with the computer account: it works in a domain, not in a
+  workgroup. For a workgroup use HTTPS.
+- Without a timestamp the signature is valid as long as the certificate (10 years). `WM_TSA=<url> tools/publish.sh ...`
+  adds an RFC 3161 timestamp.
 
 ## Weekly update
 
@@ -130,8 +245,10 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
 - A package whose program is running (`RunningProcessMap`) is deferred; `wmanager-Retry` tries again 2 minutes after sign-in.
   An empty process list (as for `rustdesk`, which always runs as a service) means the package is never deferred.
 - When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.
-- Without internet (the Chocolatey and package-list servers don't answer) the weekly run changes nothing and reports
-  nothing; `wmanager-Retry` does the full weekly run at the next sign-in.
+- With a management source it also fetches and checks the source and runs the group scripts whose content changed
+  (after debloat). Failed scripts run again at the next weekly run, not at sign-in.
+- Without internet (the Chocolatey, package-list or management servers don't answer) the weekly run changes nothing
+  and reports nothing; `wmanager-Retry` does the full weekly run at the next sign-in.
 
 Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Update'`.
 
@@ -176,6 +293,10 @@ Invoke-Pester .\tests
 Before rolling out to computers: Windows 11 Home and Pro virtual machines (with a snapshot), two consecutive runs
 (the second run must not report errors), a manual run of the task, a missed schedule, the restart notification,
 then one pilot computer for a week.
+
+With a management source, also check on the virtual machine that `Get-AuthenticodeSignature` reports `Valid` for a
+manifest signed by `publish.sh` (the signature is made with osslsigncode on Linux), that a changed file and an older
+manifest are rejected, and that a script runs once, not again in the next run, and again after it changes.
 
 ## Limitations
 

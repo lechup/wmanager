@@ -4,11 +4,26 @@
     # --- Package list -------------------------------------------------------
     # Sources of choco-reqs.txt, checked in order; the first available one wins.
     # A relative path is resolved from the script's folder.
+    # Not used when Management.Source is set (the list then comes from the management source).
     ReqsSources = @(
         # 'https://raw.githubusercontent.com/lechup/wmanager/main/choco-reqs.txt'
         # '\\server\share\wmanager\choco-reqs.txt'
         'choco-reqs.txt'
     )
+
+    # --- Computer groups (optional) -----------------------------------------------
+    # Signed management source: the common package list, the map of computers to groups, and each
+    # group's packages and scripts. See README, "Computer groups". Empty Source = off.
+    Management = @{
+        # https:// address of the folder (e.g. a private repository) or a full folder path (\\server\share\...)
+        Source      = ''   # e.g. 'https://raw.githubusercontent.com/<owner>/<management-repo>/main'
+        # Authorization header for a private repository, e.g. 'token github_pat_...' (read-only token)
+        AuthHeader  = ''
+        # Public part of the signing certificate (tools/new-signing-cert.sh), next to this file
+        Certificate = 'wmanager-signing.cer'
+        # Time limit for one group script; the weekly task stops after 2 hours in total
+        ScriptTimeoutMinutes = 15
+    }
 
     # --- Chocolatey -----------------------------------------------------------
     ChocolateyInstallUrl = 'https://community.chocolatey.org/install.ps1'
