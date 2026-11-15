@@ -2,11 +2,9 @@
 
 function Remove-WmAppxPackages {
     param([string[]]$Patterns)
+    $Patterns = @($Patterns | Where-Object { $_ })
 
-    $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)
     foreach ($pattern in $Patterns) {
-        if (-not $pattern) { continue }
-
         $installed = @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction SilentlyContinue)
         foreach ($pkg in $installed) {
             try {
@@ -16,7 +14,13 @@ function Remove-WmAppxPackages {
                 Write-WmLog "Nie udało się usunąć $($pkg.Name): $($_.Exception.Message)" -Level warn
             }
         }
+    }
 
+    # The image is read only after the apps are gone: current Windows 11 builds (seen on 26300) also take an app
+    # out of the image when it is removed for all users, and removing it from the image again fails with
+    # "path not found", a false warning for every app
+    $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)
+    foreach ($pattern in $Patterns) {
         foreach ($prov in ($provisioned | Where-Object { $_.DisplayName -like $pattern })) {
             try {
                 Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction Stop | Out-Null
