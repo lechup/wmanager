@@ -16,6 +16,7 @@
 #   tests/vm/vm.sh screenshot <vm> <file.png>          what the screen shows now
 #   tests/vm/vm.sh snapshot <vm> <name>                save the state of a stopped machine (disk, UEFI, TPM)
 #   tests/vm/vm.sh revert <vm> <name>                  go back to a saved state (machine stopped)
+#   tests/vm/vm.sh forget <vm> <name>                  delete a saved state
 #   tests/vm/vm.sh snapshots <vm>                      list saved states
 #
 # Machines live in $WM_VM_DIR (default ~/vm/wmanager), outside the repository. VNC for a look at the screen:
@@ -141,27 +142,35 @@ cmd_start() {
         --daemon --pid file="$dir/swtpm.pid" --log file="$dir/swtpm.log"
     for _ in $(seq 1 50); do [[ -S $dir/swtpm.sock ]] && break; sleep 0.1; done
 
-    local cds=()
+    # qemu option values: a comma inside a path is written twice
+    local d=${dir//,/,,} iso cds=() code
+    code=$(ovmf_file /usr/share/OVMF/OVMF_CODE_4M.secboot.fd /usr/share/OVMF/OVMF_CODE.secboot.fd)
     if [[ -f $dir/install.iso ]]; then
-        cds=(-drive "file=$(cat "$dir/install.iso"),media=cdrom,if=none,id=cd0,readonly=on" -device ide-cd,drive=cd0,bus=ahci.1,bootindex=2
-             -drive "file=$dir/unattend.iso,media=cdrom,if=none,id=cd1,readonly=on" -device ide-cd,drive=cd1,bus=ahci.2)
+        iso=$(cat "$dir/install.iso")
+        cds=(-drive "file=${iso//,/,,},media=cdrom,if=none,id=cd0,readonly=on" -device ide-cd,drive=cd0,bus=ahci.1,bootindex=2
+             -drive "file=$d/unattend.iso,media=cdrom,if=none,id=cd1,readonly=on" -device ide-cd,drive=cd1,bus=ahci.2)
     fi
-    qemu-system-x86_64 \
+    if ! qemu-system-x86_64 \
         -name "wm-test-$1" -enable-kvm -machine q35,smm=on \
         -cpu host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time -smp 4 -m 6144 \
         -global driver=cfi.pflash01,property=secure,value=on \
-        -drive "if=pflash,format=raw,unit=0,readonly=on,file=$(ovmf_file /usr/share/OVMF/OVMF_CODE_4M.secboot.fd /usr/share/OVMF/OVMF_CODE.secboot.fd)" \
-        -drive "if=pflash,format=raw,unit=1,file=$dir/OVMF_VARS.fd" \
-        -chardev socket,id=chrtpm,path="$dir/swtpm.sock" -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0 \
+        -drive "if=pflash,format=raw,unit=0,readonly=on,file=${code//,/,,}" \
+        -drive "if=pflash,format=raw,unit=1,file=$d/OVMF_VARS.fd" \
+        -chardev socket,id=chrtpm,path="$d/swtpm.sock" -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0 \
         -device ahci,id=ahci \
-        -drive "file=$dir/disk.qcow2,if=none,id=disk0,format=qcow2,discard=unmap" -device ide-hd,drive=disk0,bus=ahci.0,bootindex=1 \
+        -drive "file=$d/disk.qcow2,if=none,id=disk0,format=qcow2,discard=unmap" -device ide-hd,drive=disk0,bus=ahci.0,bootindex=1 \
         "${cds[@]}" \
         -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" -device e1000e,netdev=net0 \
         -device qemu-xhci -device usb-tablet -vga std \
         -display none -vnc "127.0.0.1:$vnc" \
-        -qmp "unix:$dir/qmp.sock,server=on,wait=off" \
+        -qmp "unix:$d/qmp.sock,server=on,wait=off" \
         -rtc base=localtime \
         -daemonize -pidfile "$dir/qemu.pid"
+    then
+        # swtpm would keep the TPM state locked and the next start would fail on it
+        stop_swtpm
+        die "qemu nie wystartował (komunikat powyżej)"
+    fi
     for _ in $(seq 1 50); do [[ -S $dir/qmp.sock ]] && break; sleep 0.1; done
     if [[ -f $dir/install.iso ]]; then
         # The Windows DVD asks to "press any key" to boot from it (only while the disk is empty)
@@ -178,14 +187,26 @@ cmd_stop() {
         # A full shutdown: the power button only hibernates the kernel when Fast Startup is on (the Windows
         # default), so a pending computer name or update would wait, and a saved state would hold a hibernated system
         set_ssh_opts
-        ssh "${ssh_opts[@]}" -o BatchMode=yes -o ConnectTimeout=5 -p "$ssh_port" tester@127.0.0.1 'shutdown.exe /s /t 0' \
-            </dev/null >/dev/null 2>&1 || qmp '{"execute":"system_powerdown"}' >/dev/null
+        # (/f: an open window or dialog in the signed-in session must not hold the shutdown up)
+        ssh "${ssh_opts[@]}" -o BatchMode=yes -o ConnectTimeout=5 -p "$ssh_port" tester@127.0.0.1 'shutdown.exe /s /f /t 0' \
+            </dev/null >/dev/null 2>&1 || qmp '{"execute":"system_powerdown"}' >/dev/null || true
         for _ in $(seq 1 120); do running || break; sleep 1; done
-        if running; then echo "Windows nie wyłączył się w 2 minuty; zatrzymuję maszynę." >&2; qmp '{"execute":"quit"}' >/dev/null || true; sleep 2; fi
+        if running; then
+            echo "Windows nie wyłączył się w 2 minuty; zatrzymuję maszynę." >&2
+            qmp '{"execute":"quit"}' >/dev/null 2>&1 || kill "$(cat "$dir/qemu.pid")" 2>/dev/null || true
+            for _ in $(seq 1 20); do running || break; sleep 0.5; done
+        fi
+        # qemu still holding the disk: snapshot or revert now would damage it, so keep the pid file and stop here
+        running && die "qemu (pid $(cat "$dir/qemu.pid")) wciąż działa; zatrzymaj go ręcznie (kill -9)"
     fi
-    [[ -f $dir/swtpm.pid ]] && kill "$(cat "$dir/swtpm.pid")" 2>/dev/null || true
-    rm -f "$dir/qemu.pid" "$dir/swtpm.pid"
+    stop_swtpm
+    rm -f "$dir/qemu.pid"
     echo "Maszyna $1 zatrzymana."
+}
+
+stop_swtpm() {
+    [[ -f $dir/swtpm.pid ]] && kill "$(cat "$dir/swtpm.pid")" 2>/dev/null || true
+    rm -f "$dir/swtpm.pid"
 }
 
 cmd_status() {
@@ -217,6 +238,7 @@ cmd_deploy() {
     local config=${2:-$repo/provision.config.example.psd1} stage f cer
     [[ -f $config ]] || die "brak pliku konfiguracji $config"
     stage=$(mktemp -d)
+    trap "rm -rf $(printf '%q' "$stage")" EXIT   # also when ssh or scp fails: the copy holds the configuration
     mkdir "$stage/wmanager"
     while IFS= read -r -d '' f; do
         [[ $f == tests/* || ! -f $repo/$f ]] && continue
@@ -229,7 +251,6 @@ cmd_deploy() {
     ssh "${ssh_opts[@]}" -p "$ssh_port" tester@127.0.0.1 \
         'if (Test-Path C:\wmanager) { Remove-Item C:\wmanager -Recurse -Force }' </dev/null
     scp -q -r "${ssh_opts[@]}" -P "$ssh_port" "$stage/wmanager" "tester@127.0.0.1:C:/"
-    rm -rf "$stage"
     echo "Maszyna $1: wmanager w C:\wmanager (konfiguracja: $config)."
 }
 
@@ -243,8 +264,12 @@ cmd_run() {
     for a in "$@"; do ps+=" '${a//\'/\'\'}'"; done
     ps+='; exit $LASTEXITCODE'
     set_ssh_opts
-    ssh "${ssh_opts[@]}" -p "$ssh_port" tester@127.0.0.1 "$ps" </dev/null 2>&1 | iconv -f CP852 -t UTF-8 | tr -d '\r'
-    return "${PIPESTATUS[0]}"
+    local rc
+    set +e
+    ssh "${ssh_opts[@]}" -p "$ssh_port" tester@127.0.0.1 "$ps" </dev/null 2>&1 | iconv -c -f CP852 -t UTF-8 | tr -d '\r'
+    rc=${PIPESTATUS[0]}
+    set -e
+    return "$rc"
 }
 
 cmd_screenshot() {
@@ -252,7 +277,7 @@ cmd_screenshot() {
     running || die "maszyna $1 nie działa"
     local out
     out=$(realpath -m "$2")
-    qmp "{\"execute\":\"screendump\",\"arguments\":{\"filename\":\"$out\",\"format\":\"png\"}}" >/dev/null
+    qmp "{\"execute\":\"screendump\",\"arguments\":{\"filename\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$out"),\"format\":\"png\"}}" >/dev/null
     echo "$out"
 }
 
@@ -260,6 +285,10 @@ cmd_snapshot() {
     vm_conf "$1"
     running && die "zatrzymaj maszynę przed zapisaniem stanu (tests/vm/vm.sh stop $1)"
     [[ $2 =~ ^[A-Za-z0-9._-]+$ ]] || die "nazwa stanu: litery, cyfry, . - _"
+    # qemu-img would add a second snapshot with the same name, and revert would pair the old disk with the new TPM
+    if [[ -d $dir/snapshots/$2 ]] || qemu-img snapshot -l "$dir/disk.qcow2" | awk 'NR > 2 { print $2 }' | grep -qx -- "$2"; then
+        die "stan $2 już istnieje (usuń go: tests/vm/vm.sh forget $1 $2)"
+    fi
     qemu-img snapshot -c "$2" "$dir/disk.qcow2"
     mkdir -p "$dir/snapshots/$2"
     cp "$dir/OVMF_VARS.fd" "$dir/snapshots/$2/"
@@ -278,9 +307,20 @@ cmd_revert() {
     echo "Maszyna $1 wróciła do stanu $2."
 }
 
+cmd_forget() {
+    vm_conf "$1"
+    running && die "zatrzymaj maszynę przed usunięciem stanu (tests/vm/vm.sh stop $1)"
+    [[ $2 =~ ^[A-Za-z0-9._-]+$ ]] || die "nazwa stanu: litery, cyfry, . - _"
+    while qemu-img snapshot -l "$dir/disk.qcow2" | awk 'NR > 2 { print $2 }' | grep -qx -- "$2"; do
+        qemu-img snapshot -d "$2" "$dir/disk.qcow2"
+    done
+    rm -rf "${dir:?}/snapshots/$2"
+    echo "Usunięto stan $2 maszyny $1."
+}
+
 cmd_snapshots() {
     vm_conf "$1"
-    qemu-img snapshot -l "$dir/disk.qcow2"
+    qemu-img snapshot -U -l "$dir/disk.qcow2"   # -U: also while the machine runs
 }
 
 # After the installation: boot from the disk only
@@ -290,7 +330,7 @@ cmd_installed() {
     echo "Maszyna $1: płyty instalacyjne odłączone (od następnego startu)."
 }
 
-[[ $# -ge 1 ]] || { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+[[ $# -ge 1 ]] || { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 cmd=$1; shift
 case $cmd in
     create)     [[ $# -eq 2 ]] || die "użycie: $0 create <pro|home> <iso>"; cmd_create "$@" ;;
@@ -304,6 +344,7 @@ case $cmd in
     screenshot) [[ $# -eq 2 ]] || die "użycie: $0 screenshot <vm> <plik.png>"; cmd_screenshot "$@" ;;
     snapshot)   [[ $# -eq 2 ]] || die "użycie: $0 snapshot <vm> <nazwa>"; cmd_snapshot "$@" ;;
     revert)     [[ $# -eq 2 ]] || die "użycie: $0 revert <vm> <nazwa>"; cmd_revert "$@" ;;
+    forget)     [[ $# -eq 2 ]] || die "użycie: $0 forget <vm> <nazwa>"; cmd_forget "$@" ;;
     snapshots)  [[ $# -eq 1 ]] || die "użycie: $0 snapshots <vm>"; cmd_snapshots "$1" ;;
     installed)  [[ $# -eq 1 ]] || die "użycie: $0 installed <vm>"; cmd_installed "$1" ;;
     *) die "nieznane polecenie '$cmd'" ;;
