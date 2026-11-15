@@ -10,14 +10,16 @@ BeforeAll {
     . (Join-Path $root 'lib\Backup.ps1')
     $script:me = [Security.Principal.WindowsIdentity]::GetCurrent().User
 
-    # A value the way the journal records it, read through the same code
+    # A value the way the journal records it, read through the same code and through the same JSON line
+    # (Add-WmJournalEntry writes it, Read-WmJournal reads it back)
     function Get-TestEntry {
         param([string]$Path, [string]$Name)
         $k = Open-WmRegKey -Path $Path
         try { $state = Get-WmJournalValueState -Key $k -Name $Name } finally { if ($k) { $k.Close() } }
-        return [pscustomobject]@{ Key = $Path; Name = $Name; KeyExisted = $true; Ancestor = ''
-                                  Existed = [bool]$state; Kind = $(if ($state) { $state.Kind } else { '' })
-                                  Value = $(if ($state) { $state.Value } else { $null }) }
+        $entry = [ordered]@{ Key = $Path; Name = $Name; KeyExisted = $true; Ancestor = ''
+                             Existed = [bool]$state; Kind = $(if ($state) { $state.Kind } else { '' })
+                             Value = $(if ($state) { $state.Value } else { $null }) }
+        return ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject ([pscustomobject]$entry) -Compress -Depth 4)
     }
 
     # Like a key Windows protects: the current user may read but not write
@@ -31,7 +33,8 @@ BeforeAll {
         try {
             $acl = $k.GetAccessControl()
             $rule = New-Object System.Security.AccessControl.RegistryAccessRule($script:me, 'SetValue, CreateSubKey, Delete', 'Deny')
-            if ($ReadOnly) { $acl.AddAccessRule($rule) } else { [void]$acl.RemoveAccessRule($rule) }
+            # the key's only explicit rule for this user is the deny one (the rest is inherited)
+            if ($ReadOnly) { $acl.AddAccessRule($rule) } else { $acl.PurgeAccessRules($script:me) }
             $k.SetAccessControl($acl)
         } finally { $k.Close() }
     }
@@ -53,13 +56,21 @@ Describe 'Restore-WmJournalEntry' {
     }
 
     It 'leaves a value that never changed alone, even in a key it may not write to' {
-        New-ItemProperty -LiteralPath "Registry::$script:key" -Name 'Kept' -Value 0 -PropertyType DWord | Out-Null
-        $existed = Get-TestEntry -Path $script:key -Name 'Kept'
-        $missing = Get-TestEntry -Path $script:key -Name 'NeverSet'
+        $p = "Registry::$script:key"
+        New-ItemProperty -LiteralPath $p -Name 'Kept' -Value 0 -PropertyType DWord | Out-Null
+        New-ItemProperty -LiteralPath $p -Name 'One' -Value @('only') -PropertyType MultiString | Out-Null
+        New-ItemProperty -LiteralPath $p -Name 'Path' -Value '%SystemRoot%\x' -PropertyType ExpandString | Out-Null
+        $entries = @('Kept', 'One', 'Path', 'NeverSet') | ForEach-Object { Get-TestEntry -Path $script:key -Name $_ }
         Set-TestKeyReadOnly -Path $script:key -ReadOnly $true
-        Restore-WmJournalEntry -Entry $existed | Should -BeTrue
-        Restore-WmJournalEntry -Entry $missing | Should -BeTrue
+        foreach ($e in $entries) { Restore-WmJournalEntry -Entry $e | Should -BeTrue -Because $e.Name }
         $script:warnings | Should -BeNullOrEmpty
+    }
+
+    It 'tells an empty multi-string from one holding an empty string' {
+        Test-WmSameJournalValue @() @('') | Should -BeFalse
+        Test-WmSameJournalValue @('a', 'b') @('a', 'b') | Should -BeTrue
+        Test-WmSameJournalValue @('a', 'b') @('a', 'B') | Should -BeFalse
+        Test-WmSameJournalValue '1' 1 | Should -BeTrue
     }
 
     It 'puts changed values back with their kind' {
