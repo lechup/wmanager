@@ -4,11 +4,18 @@
 $ErrorActionPreference = 'Stop'
 Start-Transcript -LiteralPath 'C:\Windows\Temp\wm-setup-ssh.log' -Append | Out-Null
 try {
+    # The local password policy expires passwords after 42 days; automatic sign-in and snapshots must keep working
+    Set-LocalUser -Name 'tester' -PasswordNeverExpires $true
+
+    $installed = $false
     $msi = Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'OpenSSH-Win64*.msi' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($msi) {
         $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart' -Wait -PassThru
         Write-Output "msiexec: $($p.ExitCode)"
-    } else {
+        $installed = ($p.ExitCode -in 0, 3010) -and (Get-Service -Name sshd -ErrorAction SilentlyContinue)
+    }
+    # No MSI on the CD, or it failed: the Windows capability (this script runs only once, at the first sign-in)
+    if (-not $installed) {
         # Windows Update may not be ready right after setup; try a few times
         for ($i = 1; $i -le 5; $i++) {
             try { Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null; break }
