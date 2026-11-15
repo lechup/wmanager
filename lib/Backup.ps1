@@ -185,18 +185,6 @@ function Stop-WmJournal {
 # Puts one journal entry back: the old value, or no value if there was none. Keys wmanager created
 # are removed while empty, up to the nearest key that existed before. $HiveRoot (HKEY_USERS\<id>)
 # is the hive of the profile for user entries. Returns $true on success.
-# Whether two values in the journal's form are equal: text compared exactly, a multi-string element by element
-# (joining would make @() equal to @(''))
-function Test-WmSameJournalValue {
-    param($A, $B)
-    $a = @($A); $b = @($B)
-    if ($a.Count -ne $b.Count) { return $false }
-    for ($i = 0; $i -lt $a.Count; $i++) {
-        if ([string]$a[$i] -cne [string]$b[$i]) { return $false }
-    }
-    return $true
-}
-
 function Restore-WmJournalEntry {
     param([Parameter(Mandatory = $true)]$Entry, [string]$HiveRoot = '')
     $keyPath = [string]$Entry.Key

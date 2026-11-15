@@ -276,6 +276,18 @@ function Get-WmJournalValueState {
     return [pscustomobject]@{ Kind = [string]$kind; Value = $value }
 }
 
+# Whether two values in the journal's form are equal: text compared exactly, a multi-string element by element
+# (joining would make @() equal to @(''))
+function Test-WmSameJournalValue {
+    param($A, $B)
+    $a = @($A); $b = @($B)
+    if ($a.Count -ne $b.Count) { return $false }
+    for ($i = 0; $i -lt $a.Count; $i++) {
+        if ([string]$a[$i] -cne [string]$b[$i]) { return $false }
+    }
+    return $true
+}
+
 # Undo journal: before wmanager changes a registry value for the first time, the previous state
 # (value and type, or "did not exist") is appended to journal.jsonl right away, one JSON line per
 # value, so an interrupted run loses nothing. Values in user hives are stored relative to the hive,
@@ -341,6 +353,13 @@ function Set-WmRegValue {
         [ValidateSet('DWord', 'QWord', 'String', 'ExpandString')][string]$Type = 'DWord',
         [ValidateSet('warn', 'info')][string]$OnError = 'warn'
     )
+    # Already set: nothing to write and nothing to journal. This also keeps the daily update quiet about values
+    # Windows lets no script rewrite once set (e.g. a policy the UCPD driver protects from powershell.exe).
+    try {
+        $k = Open-WmRegKey -Path $Path
+        try { $state = Get-WmJournalValueState -Key $k -Name $Name } finally { if ($k) { $k.Close() } }
+        if ($state -and $state.Kind -eq $Type -and (Test-WmSameJournalValue $state.Value $Value)) { return $true }
+    } catch { }   # can't read it: try to write as before
     Add-WmJournalEntry -Path $Path -Name $Name
     try {
         if (-not (Test-Path -LiteralPath $Path)) {

@@ -1,4 +1,5 @@
-﻿# Tests for the undo journal (Add-WmJournalEntry in lib\Common.ps1, Restore-WmJournalEntry in lib\Backup.ps1),
+﻿# Tests for registry writes and the undo journal (Set-WmRegValue and Add-WmJournalEntry in lib\Common.ps1,
+# Restore-WmJournalEntry in lib\Backup.ps1),
 # against a real registry key in the current user's hive (HKEY_USERS\<SID>, which Open-WmRegKey supports).
 # To run (Pester 5):
 #   Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser
@@ -109,5 +110,58 @@ Describe 'Restore-WmJournalEntry' {
         Set-TestKeyReadOnly -Path $script:key -ReadOnly $true
         Restore-WmJournalEntry -Entry $entry | Should -BeFalse
         $script:warnings.Count | Should -Be 1
+    }
+}
+
+Describe 'Set-WmRegValue' {
+    BeforeEach {
+        $script:key = "HKEY_USERS\$($script:me.Value)\Software\wmanager-tests\$([guid]::NewGuid().ToString('N'))"
+        $script:path = "Registry::$script:key"
+        New-Item -Path $script:path -Force | Out-Null
+        $script:WmJournalOn = $false
+        $script:warnings = [System.Collections.ArrayList]@()
+        $script:infos = [System.Collections.ArrayList]@()
+        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } else { [void]$script:infos.Add($Message) } }
+    }
+    AfterEach {
+        Set-TestKeyReadOnly -Path $script:key -ReadOnly $false
+        Remove-Item -LiteralPath $script:path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    AfterAll {
+        Remove-Item -LiteralPath "Registry::HKEY_USERS\$($script:me.Value)\Software\wmanager-tests" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'writes a new value and changes a different one' {
+        Set-WmRegValue $script:path 'V' 1 | Should -BeTrue
+        (Get-ItemProperty -LiteralPath $script:path).V | Should -Be 1
+        Set-WmRegValue $script:path 'V' 2 | Should -BeTrue
+        (Get-ItemProperty -LiteralPath $script:path).V | Should -Be 2
+        Set-WmRegValue $script:path 'S' 'tekst' -Type String | Should -BeTrue
+        (Get-ItemProperty -LiteralPath $script:path).S | Should -Be 'tekst'
+    }
+
+    It 'leaves a value that is already set alone, even in a key it may not write to' {
+        New-ItemProperty -LiteralPath $script:path -Name 'Policy' -Value 0 -PropertyType DWord | Out-Null
+        New-ItemProperty -LiteralPath $script:path -Name 'Text' -Value '%SystemRoot%\x' -PropertyType ExpandString | Out-Null
+        Set-TestKeyReadOnly -Path $script:key -ReadOnly $true
+        Set-WmRegValue $script:path 'Policy' 0 | Should -BeTrue
+        Set-WmRegValue $script:path 'Text' '%SystemRoot%\x' -Type ExpandString | Should -BeTrue
+        $script:warnings | Should -BeNullOrEmpty
+    }
+
+    It 'writes again when only the kind differs' {
+        New-ItemProperty -LiteralPath $script:path -Name 'V' -Value '1' -PropertyType String | Out-Null
+        Set-WmRegValue $script:path 'V' 1 | Should -BeTrue
+        (Get-Item -LiteralPath $script:path).GetValueKind('V') | Should -Be 'DWord'
+    }
+
+    It 'warns when a different value cannot be written, or logs it as info with -OnError info' {
+        New-ItemProperty -LiteralPath $script:path -Name 'Policy' -Value 1 -PropertyType DWord | Out-Null
+        Set-TestKeyReadOnly -Path $script:key -ReadOnly $true
+        Set-WmRegValue $script:path 'Policy' 0 | Should -BeFalse
+        $script:warnings.Count | Should -Be 1
+        Set-WmRegValue $script:path 'Policy' 0 -OnError info | Should -BeFalse
+        $script:warnings.Count | Should -Be 1
+        $script:infos.Count | Should -Be 1
     }
 }
