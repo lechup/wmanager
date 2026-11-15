@@ -115,7 +115,7 @@ Restart the computer afterwards.
 
 Not undone: removed Store apps (reinstall from the Store) and OneDrive (reinstall from Microsoft), installed
 Chocolatey packages, what group scripts changed, the computer name. Settings the weekly run applies to profiles created after provisioning
-are not in the journal. Programs and system files can be rolled back with the system restore point.
+are not in the journal, nor are `UScheduler_Oobe` entries that Windows created after provisioning and the weekly run deleted. Programs and system files can be rolled back with the system restore point.
 
 ## choco-reqs.txt
 

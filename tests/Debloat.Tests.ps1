@@ -113,6 +113,9 @@ Describe 'Disable-WmAppReinstall' {
         $script:journal = [System.Collections.ArrayList]@()
         $script:removed = [System.Collections.ArrayList]@()
         $script:warnings = [System.Collections.ArrayList]@()
+        $script:WmJournalOn = $false   # as in the weekly run; provisioning turns it on
+        $script:WmJournalSeen = @{}
+        $script:journalWorks = $true
         Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } }
         Mock Open-WmRegKey {
             $leaf = Split-Path $Path -Leaf
@@ -122,7 +125,12 @@ Describe 'Disable-WmAppReinstall' {
             $key | Add-Member -MemberType ScriptMethod -Name Close -Value { }
             $key
         }
-        Mock Add-WmJournalEntry { [void]$script:journal.Add("$(Split-Path $Path -Leaf)\$Name") }
+        Mock Add-WmJournalEntry {
+            [void]$script:journal.Add("$(Split-Path $Path -Leaf)\$Name")
+            if ($script:WmJournalOn -and $script:journalWorks) {
+                $script:WmJournalSeen[(Get-WmJournalId 'machine' '' '' (ConvertTo-WmRegNativePath $Path) $Name)] = $true
+            }
+        }
         Mock Remove-Item { [void]$script:removed.Add((Split-Path $LiteralPath -Leaf)) } -ParameterFilter { $LiteralPath -like '*UScheduler_Oobe*' }
     }
 
@@ -152,5 +160,43 @@ Describe 'Disable-WmAppReinstall' {
         $script:removed | Should -BeNullOrEmpty
         $script:warnings.Count | Should -Be 1
         Should -Invoke Add-WmJournalEntry -Times 0 -Exactly
+    }
+
+    It 'deletes the key during provisioning once the journal holds every value' {
+        $script:WmJournalOn = $true
+        Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome')
+        $script:removed | Should -Be @('DevHomeUpdate')
+        $script:warnings | Should -BeNullOrEmpty
+    }
+
+    It 'keeps the key when the journal could not record its values' {
+        $script:WmJournalOn = $true
+        $script:journalWorks = $false
+        Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome')
+        $script:removed | Should -BeNullOrEmpty
+        $script:warnings.Count | Should -Be 1
+    }
+
+    It 'leaves an empty key alone without a warning' {
+        $script:keys['DevHomeUpdate'].Values = @()
+        Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome')
+        $script:removed | Should -BeNullOrEmpty
+        $script:warnings | Should -BeNullOrEmpty
+    }
+
+    It 'keeps a key with a default value, which the journal cannot record, and warns' {
+        $script:keys['DevHomeUpdate'].Values = @('', 'cmdLine')
+        Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome')
+        $script:removed | Should -BeNullOrEmpty
+        $script:warnings.Count | Should -Be 1
+        Should -Invoke Add-WmJournalEntry -Times 0 -Exactly
+    }
+
+    It 'warns about a key it cannot read and goes on with the next one' {
+        Mock Open-WmRegKey { throw 'Żądany dostęp do rejestru jest niedozwolony.' } -ParameterFilter { $Path -like '*DevHomeUpdate' }
+        Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome', 'Microsoft.OutlookForWindows')
+        $script:removed | Should -Be @('OutlookUpdate')
+        $script:warnings.Count | Should -Be 1
+        $script:warnings[0] | Should -BeLike '*DevHomeUpdate*niedozwolony*'
     }
 }
