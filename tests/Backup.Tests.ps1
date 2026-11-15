@@ -149,6 +149,23 @@ Describe 'Set-WmRegValue' {
         $script:warnings | Should -BeNullOrEmpty
     }
 
+    It 'journals a value before the first change, also one that is already set' {
+        $script:WmJournalFile = Join-Path $TestDrive 'journal.jsonl'
+        $script:WmJournalSeen = @{}
+        $script:WmJournalKeys = @{}
+        $script:WmJournalOn = $true
+        New-ItemProperty -LiteralPath $script:path -Name 'Same' -Value 0 -PropertyType DWord | Out-Null
+        New-ItemProperty -LiteralPath $script:path -Name 'Changed' -Value 5 -PropertyType DWord | Out-Null
+        Set-WmRegValue $script:path 'Same' 0 | Should -BeTrue
+        Set-WmRegValue $script:path 'Changed' 1 | Should -BeTrue
+        Set-WmRegValue $script:path 'New' 1 | Should -BeTrue
+        $entries = @(Get-Content -LiteralPath $script:WmJournalFile | ForEach-Object { ConvertFrom-Json -InputObject $_ })
+        $entries.Count | Should -Be 3
+        ($entries | Where-Object Name -eq 'Same').Value | Should -Be '0'
+        ($entries | Where-Object Name -eq 'Changed').Value | Should -Be '5'
+        ($entries | Where-Object Name -eq 'New').Existed | Should -BeFalse
+    }
+
     It 'writes again when only the kind differs' {
         New-ItemProperty -LiteralPath $script:path -Name 'V' -Value '1' -PropertyType String | Out-Null
         Set-WmRegValue $script:path 'V' 1 | Should -BeTrue

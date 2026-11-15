@@ -195,8 +195,9 @@ function Set-WmDebloatPolicies {
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' 'AllowRecallEnablement' 0 | Out-Null
 
     # Widgets / News and Interests. Once the UCPD driver is active (some time after setup) it blocks powershell.exe
-    # from writing this policy, so a refused write is not critical: the Widgets app itself is removed (RemoveAppx)
-    Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0 -OnError info | Out-Null
+    # from writing this policy; set at provisioning, it is left alone afterwards (Set-WmRegValue skips a value
+    # that is already set), and a refused write still warns: then the policy is really not in effect
+    Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0 | Out-Null
 
     # Cortana
     Set-WmRegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' 'AllowCortana' 0 | Out-Null

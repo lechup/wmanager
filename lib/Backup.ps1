@@ -197,9 +197,7 @@ function Restore-WmJournalEntry {
     try {
         # Read-only first: a value already in its journaled state needs no write (e.g. a protected value that
         # wmanager couldn't change in the first place, where opening the key for writing is denied)
-        $k = Open-WmRegKey -Path $keyPath
-        $current = Get-WmJournalValueState -Key $k -Name ([string]$Entry.Name)
-        if ($k) { $k.Close(); $k = $null }
+        $current = Get-WmRegValueState -Path $keyPath -Name ([string]$Entry.Name)
         if ($Entry.Existed) {
             if ($current -and $current.Kind -eq [string]$Entry.Kind -and
                 (Test-WmSameJournalValue $current.Value $Entry.Value)) { return $true }
