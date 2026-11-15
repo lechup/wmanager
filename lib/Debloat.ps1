@@ -3,6 +3,7 @@
 function Remove-WmAppxPackages {
     param([string[]]$Patterns)
     $Patterns = @($Patterns | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    if ($Patterns.Count -eq 0) { return }
 
     # The system image first, then the installed copies: a profile created in between can't get an app back from
     # the image, and the image entries are still there to remove (current Windows 11 builds, seen on 26300, also
@@ -21,13 +22,25 @@ function Remove-WmAppxPackages {
             Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction Stop | Out-Null
             Write-WmLog "Usunięto z obrazu systemu $name"
         } catch {
-            Write-WmLog "Nie udało się usunąć z obrazu $($name): $($_.Exception.Message)" -Level warn
+            # Gone in the meantime (e.g. together with a package removed just before): done, not a failure
+            if (-not (Test-WmProvisioned $prov.PackageName)) {
+                Write-WmLog "Usunięto z obrazu systemu $name (zniknął w trakcie)"
+            } else {
+                Write-WmLog "Nie udało się usunąć z obrazu $($name): $($_.Exception.Message)" -Level warn
+            }
         }
     }
 
     foreach ($pattern in $Patterns) {
         # asked again for every pattern, so an app already removed by an earlier pattern isn't listed
-        foreach ($pkg in @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction SilentlyContinue)) {
+        # (no match is not an error; an error means the app list can't be read)
+        try {
+            $installed = @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction Stop)
+        } catch {
+            Write-WmLog "Nie udało się odczytać zainstalowanych aplikacji ($pattern): $($_.Exception.Message)" -Level warn
+            continue
+        }
+        foreach ($pkg in $installed) {
             try {
                 Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
                 Write-WmLog "Usunięto aplikację $($pkg.Name)"
@@ -35,6 +48,16 @@ function Remove-WmAppxPackages {
                 Write-WmLog "Nie udało się usunąć $($pkg.Name): $($_.Exception.Message)" -Level warn
             }
         }
+    }
+}
+
+# Whether a package is still in the system image; when that can't be checked, it counts as still there.
+function Test-WmProvisioned {
+    param([Parameter(Mandatory = $true)][string]$PackageName)
+    try {
+        return [bool](@(Get-AppxProvisionedPackage -Online -ErrorAction Stop) | Where-Object { $_.PackageName -eq $PackageName })
+    } catch {
+        return $true
     }
 }
 
