@@ -182,9 +182,9 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   doesn't run for the same content again. A change in the source reaches a computer within about a day (the hourly
   task fetches the source every 20 hours) or at the scheduled update. Exit code `0` = done, `3010` = done and the computer
   needs a restart (the user gets the notification), anything else, an exception or the time limit
-  (`ScriptTimeoutMinutes`, 15 by default) = error: the hourly task tries a failed script again after 20 hours (at once
-  if its content changes), the scheduled update tries it again. A failed script doesn't stop the scripts after it.
-  Output goes to the log (and to Loki). Debloat repeats every week while a script doesn't, so a script can't
+  (`ScriptTimeoutMinutes`, 15 by default) = error: the hourly task and the scheduled update try a failed script again
+  after 20 hours (at once if its content changes). A failed script doesn't stop the scripts after it.
+  Output goes to the log (and to Loki). Debloat repeats with every scheduled update while a script doesn't, so a script can't
   permanently turn back on something debloat removes. Removing a script or leaving a group doesn't undo what it did.
 - **Jobs:** like scripts, but on a schedule: the `wmanager-Jobs` task (SYSTEM) starts every hour and runs each job of the
   computer's groups whose time has come, by folder: `jobs/hourly`, `jobs/daily`, `jobs/weekly`. A computer that was off
@@ -286,6 +286,10 @@ Notes:
   It installs Chocolatey if it is missing, fetches the list, installs new packages, upgrades packages that are neither pinned nor `!noupdate`,
   reruns debloat and the privacy settings (`RerunDebloat`; the older name `RerunDebloatWeekly` still works) and
   updates its own schedule if the configuration changed.
+- Computers set up before the daily default keep `UpdateDays = @('Monday')` in their `provision.config.psd1`; they
+  switch when that file gets the new `UpdateDays` (or loses it), at their next update.
+- A computer that is usually off at `UpdateTime` runs the missed update about 10 minutes after every boot (Windows waits
+  that long with missed tasks), next to the hourly jobs. Pick an `UpdateTime` when the computers are usually on.
 - A package whose program is running (`RunningProcessMap`) is deferred; `wmanager-Retry` tries again 2 minutes after sign-in.
   An empty process list (as for `rustdesk`, which always runs as a service) means the package is never deferred.
 - When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.
@@ -327,8 +331,9 @@ Log messages, console output and user notifications are in Polish.
 
 1. Create a project and generate a **Ping key** in its settings.
 2. Put it in `HealthchecksPingKey`.
-3. After the first provisioning every computer has its own check. Set its **Period to 7 days** and **Grace to 2 days**
-   (an auto-created check has a 1-day period) and connect an e-mail notification.
+3. After the first provisioning every computer has its own check. Keep its **Period at 1 day** (the update runs every
+   day) and set **Grace to 3 days**, so a computer that is off over a weekend raises no alert; connect an e-mail
+   notification. With a weekly `UpdateDays`, use a period of 7 days.
 
 ## Tests
 
@@ -392,6 +397,6 @@ wait for a restart. Over SSH there is no console, so provisioning takes the defa
 ## Limitations
 
 - In Home and Pro, telemetry goes no lower than "Required" (1); level 0 works only in Enterprise/Education.
-- Blocking the system from reinstalling apps works only in Enterprise/Education, so debloat repeats every week.
+- Blocking the system from reinstalling apps works only in Enterprise/Education, so debloat repeats with every scheduled update.
 - Windows 11 doesn't let a script set the default browser for existing users; they get the Settings page once.
 - Requires Chocolatey 2.x (installed automatically).

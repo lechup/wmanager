@@ -14,11 +14,16 @@ function Get-WmUsersGroupName {
 
 function New-WmUpdateTrigger {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
-    # Every day unless UpdateDays says otherwise (a weekly trigger with all seven days)
-    $days = @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)
+    $days = Get-WmUpdateDays $Config
     $time = Get-WmSetting $Config 'UpdateTime' '12:00'
     $at = [datetime]::ParseExact($time, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
     return New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $days -At $at
+}
+
+# Days of the scheduled update: every day unless UpdateDays says otherwise (a weekly trigger with all seven days)
+function Get-WmUpdateDays {
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    return @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)
 }
 
 function Get-WmDaysMask {
@@ -86,7 +91,7 @@ function Register-WmTasks {
         Write-WmLog 'Brak źródła zarządzania: zadanie jobów usunięte.'
     }
 
-    $days = Format-WmUpdateDays @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)
+    $days = Format-WmUpdateDays (Get-WmUpdateDays $Config)
     Write-WmLog "Zadania zarejestrowane; aktualizacja: $days o $(Get-WmSetting $Config 'UpdateTime' '12:00')."
 }
 
@@ -100,11 +105,11 @@ function Update-WmTaskSchedule {
     $have = $task.Triggers | Select-Object -First 1
     $wantTime = ([datetime]$want.StartBoundary).ToString('HH:mm')
     $haveTime = if ($have.StartBoundary) { ([datetime]$have.StartBoundary).ToString('HH:mm') } else { '' }
-    $wantMask = Get-WmDaysMask @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)
+    $wantMask = Get-WmDaysMask (Get-WmUpdateDays $Config)
     $haveMask = [int]$have.DaysOfWeek
     if ($wantTime -ne $haveTime -or $wantMask -ne $haveMask) {
         Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -Trigger $want -ErrorAction Stop | Out-Null
-        Write-WmLog "Zmieniono termin aktualizacji na: $(Format-WmUpdateDays @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)) $wantTime."
+        Write-WmLog "Zmieniono termin aktualizacji na: $(Format-WmUpdateDays (Get-WmUpdateDays $Config)) $wantTime."
     }
 }
 
