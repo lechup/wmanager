@@ -41,7 +41,7 @@ changing anything.
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks |
 | `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
-| `tests\` | Pester tests (list parser, management source checks), integration tests and CI scripts |
+| `tests\` | Pester tests (list parser, management source checks), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
@@ -355,6 +355,32 @@ With a management source, also check on the virtual machine that `Get-Authentico
 manifest signed by `publish.sh` (the signature is made with osslsigncode on Linux), that a changed file and an older
 manifest are rejected, and that a script runs once, not again in the next run, and again after it changes; that
 `wmanager-Jobs` repeats every hour and the daily report reaches Loki.
+
+### Test virtual machines
+
+`tests/vm/vm.sh` (Linux, KVM/QEMU) sets up Windows 11 Pro and Home virtual machines from the official Polish ISO
+(microsoft.com/software-download/windows11), without a product key: unattended installation with TPM 2.0
+(swtpm) and Secure Boot (OVMF), a local administrator `tester` signed in automatically, and an OpenSSH server for
+commands from the terminal. The machines live in `~/vm/wmanager`, outside the repository.
+
+```bash
+sudo apt install -y qemu-system-x86 qemu-utils ovmf swtpm swtpm-tools xorriso
+sudo usermod -aG kvm $USER
+tests/vm/vm.sh create pro ~/Downloads/Win11_pl.iso    # 30-60 min; done when: tests/vm/vm.sh ssh pro hostname
+tests/vm/vm.sh installed pro                          # boot from the disk only from now on
+tests/vm/vm.sh stop pro && tests/vm/vm.sh snapshot pro clean
+tests/vm/vm.sh start pro
+tests/vm/vm.sh deploy pro                             # working tree + example config -> C:\wmanager
+tests/vm/vm.sh run pro Provision.ps1 -ComputerName WM-TEST-PRO
+tests/vm/vm.sh stop pro && tests/vm/vm.sh revert pro clean
+```
+
+`deploy` copies the repository as it is on disk (uncommitted changes included) and `provision.config.example.psd1`,
+or the configuration given as the second parameter (with the `.cer` files next to it).
+
+Run one machine at a time (6 GB RAM each). `vm.sh stop` shuts Windows down fully over SSH: the power button only
+hibernates the kernel while Fast Startup is on (the Windows default), so a new computer name or a pending update would
+wait for a restart. Over SSH there is no console, so provisioning takes the default answers (as in a scheduled task).
 
 ## Limitations
 
