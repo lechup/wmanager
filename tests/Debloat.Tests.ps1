@@ -68,6 +68,33 @@ Describe 'Remove-WmAppxPackages' {
         $script:warnings[0] | Should -BeLike '*z obrazu Microsoft.Todos*Odmowa*'
     }
 
+    It 'counts an image entry that disappeared after the list was read as removed' {
+        # the first read still lists Microsoft.Gone; it is gone by the time it is removed
+        $script:reads = 0
+        Mock Get-AppxProvisionedPackage {
+            $script:reads++
+            $names = @($script:image)
+            if ($script:reads -eq 1) { $names += 'Microsoft.Gone' }
+            $names | ForEach-Object { [pscustomobject]@{ DisplayName = $_; PackageName = "${_}_1.0.0.0_neutral_~_8wekyb3d8bbwe" } }
+        }
+        Remove-WmAppxPackages -Patterns @('Microsoft.Gone')
+        $script:warnings | Should -BeNullOrEmpty
+    }
+
+    It 'warns when the installed apps cannot be read and still cleans the image' {
+        Mock Get-AppxPackage { throw 'Usługa AppX jest niedostępna.' }
+        Remove-WmAppxPackages -Patterns @('Microsoft.Todos')
+        $script:image | Should -Not -Contain 'Microsoft.Todos'
+        $script:warnings.Count | Should -Be 1
+        $script:warnings[0] | Should -BeLike '*zainstalowanych*AppX*'
+    }
+
+    It 'does nothing without patterns' {
+        Remove-WmAppxPackages -Patterns @('', '  ')
+        Should -Invoke Get-AppxProvisionedPackage -Times 0 -Exactly
+        Should -Invoke Get-AppxPackage -Times 0 -Exactly
+    }
+
     It 'warns when the image cannot be read and still removes the installed apps' {
         Mock Get-AppxProvisionedPackage { throw 'DISM jest zajęty.' }
         Remove-WmAppxPackages -Patterns @('Microsoft.BingNews', 'Microsoft.Todos')
