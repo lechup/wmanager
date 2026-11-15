@@ -276,6 +276,13 @@ function Get-WmJournalValueState {
     return [pscustomobject]@{ Kind = [string]$kind; Value = $value }
 }
 
+# A value of a key given by path (HKLM: or HKEY_USERS), as Get-WmJournalValueState gives it; $null if missing.
+function Get-WmRegValueState {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
+    $k = Open-WmRegKey -Path $Path
+    try { return Get-WmJournalValueState -Key $k -Name $Name } finally { if ($k) { $k.Close() } }
+}
+
 # Whether two values in the journal's form are equal: text compared exactly, a multi-string element by element
 # (joining would make @() equal to @(''))
 function Test-WmSameJournalValue {
@@ -353,14 +360,14 @@ function Set-WmRegValue {
         [ValidateSet('DWord', 'QWord', 'String', 'ExpandString')][string]$Type = 'DWord',
         [ValidateSet('warn', 'info')][string]$OnError = 'warn'
     )
-    # Already set: nothing to write and nothing to journal. This also keeps the daily update quiet about values
-    # Windows lets no script rewrite once set (e.g. a policy the UCPD driver protects from powershell.exe).
-    try {
-        $k = Open-WmRegKey -Path $Path
-        try { $state = Get-WmJournalValueState -Key $k -Name $Name } finally { if ($k) { $k.Close() } }
-        if ($state -and $state.Kind -eq $Type -and (Test-WmSameJournalValue $state.Value $Value)) { return $true }
-    } catch { }   # can't read it: try to write as before
     Add-WmJournalEntry -Path $Path -Name $Name
+    # Already set: nothing to write. This keeps the daily update quiet about values Windows lets no script rewrite
+    # once set (e.g. a policy the UCPD driver protects from powershell.exe). The journal entry above is written
+    # either way, so it still holds the state from before wmanager's first run.
+    try {
+        $state = Get-WmRegValueState -Path $Path -Name $Name
+        if ($state -and $state.Kind -eq $Type -and (Test-WmSameJournalValue $state.Value $Value)) { return $true }
+    } catch { }   # can't read it: write as before
     try {
         if (-not (Test-Path -LiteralPath $Path)) {
             New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
