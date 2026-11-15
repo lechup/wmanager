@@ -271,7 +271,7 @@ function Test-WmChocoSuccess {
 }
 
 # Brings packages to the state in the list. Packages not on the list are left alone.
-#   -Upgrade      upgrades packages that are neither pinned nor !noupdate (weekly task)
+#   -Upgrade      upgrades packages that are neither pinned nor !noupdate (scheduled update)
 #   -SkipRunning  skips packages whose program is running; returns them as "deferred"
 function Sync-WmPackages {
     param(

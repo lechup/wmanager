@@ -1,7 +1,7 @@
 # Common Chocolatey package list for wmanager (every computer)
 #
 # Format (one package per line):
-#   name                      latest version, updated weekly
+#   name                      latest version, kept up to date
 #   name@latest               same thing, written explicitly
 #   name@1.2.3                pinned version: installs exactly this one, never updated
 #   name !noupdate            installs the latest but doesn't update it (the program updates itself)

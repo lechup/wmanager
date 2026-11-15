@@ -1,4 +1,4 @@
-﻿# Weekly package update and group scripts (wmanager-Update task, SYSTEM account).
+﻿# Scheduled package update, debloat and group scripts (wmanager-Update task, SYSTEM account, every day by default).
 # With -OnlyIfPending (wmanager-Retry task at sign-in): runs only when something was deferred.
 [CmdletBinding()]
 param([switch]$OnlyIfPending)
@@ -12,8 +12,8 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
 
-# A weekly run that couldn't run (no internet, another run busy for too long) leaves 'full' in the retry
-# flag, so the retry at the next sign-in does the full weekly run. ('offline' is the older name of the mark.)
+# A scheduled run that couldn't run (no internet, another run busy for too long) leaves 'full' in the retry
+# flag, so the retry at the next sign-in does the full run. ('offline' is the older name of the mark.)
 function Set-WmFullRunPending {
     try {
         New-Item -ItemType Directory -Force -Path $script:WmStateDir -ErrorAction Stop | Out-Null
@@ -86,11 +86,11 @@ try {
     }
 
     if ($fullRun) {
-        if (Get-WmSetting $config 'RerunDebloatWeekly' $true) {
+        if (Test-WmRerunDebloat -Config $config) {
             $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
             if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
         }
-        # Failed scripts run again at the next weekly run, not at sign-in
+        # Failed scripts run again at the next scheduled run, not at sign-in
         $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config }
         $null = Invoke-WmStep 'Harmonogram zadań' { Update-WmTaskSchedule -Config $config }
     }

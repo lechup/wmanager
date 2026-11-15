@@ -23,7 +23,7 @@
         AuthHeader  = ''
         # Public part of the signing certificate (tools/new-signing-cert.sh), next to this file
         Certificate = 'wmanager-signing.cer'
-        # Time limit for one group script; the weekly task stops after 2 hours in total
+        # Time limit for one group script; the scheduled update stops after 2 hours in total
         ScriptTimeoutMinutes = 15
         # Time limit for one job; the hourly job run stops after 1 hour in total
         JobTimeoutMinutes = 10
@@ -39,8 +39,9 @@
         # @{ Name = 'company'; Url = 'https://nexus.example.com/repository/choco/'; Priority = 1; Enabled = $true; User = ''; Password = '' }
     )
 
-    # --- Weekly update -------------------------------------------------------
-    UpdateDays = @('Monday')       # Monday, Tuesday, ... (several allowed)
+    # --- Scheduled update ----------------------------------------------------
+    # Every day by default; e.g. @('Monday') = once a week. A day the computer was off is caught up after boot.
+    UpdateDays = @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
     UpdateTime = '12:00'           # HH:mm, local time
 
     # Skip a package whose program is running right now; retry at the next sign-in.
@@ -61,9 +62,9 @@
         'firefox'           = @('firefox')
     }
 
-    # Also run debloat and the privacy settings every week
-    # (major Windows updates can bring apps back).
-    RerunDebloatWeekly = $true
+    # Also run debloat and the privacy settings in every scheduled update
+    # (major Windows updates can bring apps back). The older name RerunDebloatWeekly still works.
+    RerunDebloat = $true
 
     # --- Debloat ---------------------------------------------------------------
     Debloat = @{
