@@ -90,8 +90,9 @@ try {
             $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
             if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
         }
-        # Failed scripts run again at the next scheduled run, not at sign-in
-        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config }
+        # Failed scripts run again after 20 hours, as in the hourly task (with a daily update, retrying at every
+        # run would mean twice a day), and not at sign-in
+        $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config -RetryFailedAfterHours 20 }
         $null = Invoke-WmStep 'Harmonogram zadań' { Update-WmTaskSchedule -Config $config }
     }
 
