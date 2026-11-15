@@ -190,9 +190,15 @@ cmd_stop() {
         # (/f: an open window or dialog in the signed-in session must not hold the shutdown up)
         ssh "${ssh_opts[@]}" -o BatchMode=yes -o ConnectTimeout=5 -p "$ssh_port" tester@127.0.0.1 'shutdown.exe /s /f /t 0' \
             </dev/null >/dev/null 2>&1 || qmp '{"execute":"system_powerdown"}' >/dev/null || true
-        for _ in $(seq 1 120); do running || break; sleep 1; done
+        # Windows installs pending updates while it shuts down, which can take minutes; cutting the power then
+        # could break the installation, so it gets 15 minutes before qemu is stopped
+        local waited=0
+        while running && (( waited < 900 )); do
+            sleep 5; waited=$((waited + 5))
+            if (( waited % 120 == 0 )); then echo "Windows wciąż się wyłącza ($((waited / 60)) min; pewnie instaluje aktualizacje)..."; fi
+        done
         if running; then
-            echo "Windows nie wyłączył się w 2 minuty; zatrzymuję maszynę." >&2
+            echo "Windows nie wyłączył się w 15 minut; zatrzymuję maszynę." >&2
             qmp '{"execute":"quit"}' >/dev/null 2>&1 || kill "$(cat "$dir/qemu.pid")" 2>/dev/null || true
             for _ in $(seq 1 20); do running || break; sleep 0.5; done
         fi
