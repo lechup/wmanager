@@ -234,6 +234,13 @@ function Set-WmEdgePolicies {
     Write-WmLog 'Edge wyciszony zasadami.'
 }
 
+# Whether the scheduled update reruns debloat and privacy: RerunDebloat, or the older name RerunDebloatWeekly
+# (from when the update ran once a week); on by default.
+function Test-WmRerunDebloat {
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    return [bool](Get-WmSetting $Config 'RerunDebloat' (Get-WmSetting $Config 'RerunDebloatWeekly' $true))
+}
+
 function Invoke-WmDebloat {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     $d = Get-WmSetting $Config 'Debloat' @{}

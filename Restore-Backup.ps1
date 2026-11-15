@@ -10,7 +10,7 @@
 
     Also restores the default apps for new accounts from the first backup, lists Store apps removed
     since then (they have to be reinstalled from the Store) and offers to disable the wmanager tasks,
-    because otherwise the weekly run applies debloat again. With the tasks disabled, the wmanager
+    because otherwise the scheduled update applies debloat again. With the tasks disabled, the wmanager
     signing certificate is also removed from the computer's trusted root store.
 
     Not undone: removed Store apps and OneDrive, installed Chocolatey packages, the effects of group
@@ -112,16 +112,16 @@ try {
         Write-WmLog 'OneDrive był odinstalowany; jeśli jest potrzebny, zainstaluj go ponownie ze strony Microsoftu.' -Level warn
     }
 
-    # --- Scheduled tasks and the signing certificate (the weekly run needs it) ------
+    # --- Scheduled tasks and the signing certificate (the scheduled update needs it) ------
     $tasksOff = $true
     $tasks = @(Get-ScheduledTask -TaskPath $script:WmTaskPath -ErrorAction SilentlyContinue)
     if ($tasks.Count -gt 0) {
-        if (Confirm-WmContinue 'Wyłączyć zadania wmanager? Inaczej cotygodniowy przebieg znowu usunie aplikacje i zmieni ustawienia.' -DefaultYes) {
+        if (Confirm-WmContinue 'Wyłączyć zadania wmanager? Inaczej zaplanowana aktualizacja znowu usunie aplikacje i zmieni ustawienia.' -DefaultYes) {
             $tasks | Disable-ScheduledTask -ErrorAction Stop | Out-Null
             Write-WmLog "Zadania wmanager wyłączone ($($tasks.Count))."
         } else {
             $tasksOff = $false
-            Write-WmLog 'Zadania wmanager zostają włączone; cotygodniowy przebieg znowu zastosuje ustawienia.' -Level warn
+            Write-WmLog 'Zadania wmanager zostają włączone; zaplanowana aktualizacja znowu zastosuje ustawienia.' -Level warn
         }
     }
     if ($tasksOff) {

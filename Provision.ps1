@@ -6,7 +6,7 @@
 .DESCRIPTION
     Removes Microsoft bloatware and services, turns off telemetry and ads, installs Chocolatey
     and the packages from choco-reqs.txt (or from the signed management source, with the packages,
-    scripts and jobs of the computer's groups), and registers a weekly update. Safe to run
+    scripts and jobs of the computer's groups), and registers a daily update. Safe to run
     repeatedly: every run brings the computer to the state defined in the configuration.
 
 .PARAMETER ComputerName
@@ -109,7 +109,7 @@ function Install-WmFiles {
         Copy-Item -LiteralPath $srcConfig -Destination $dstConfig -Force -ErrorAction Stop
         Write-WmLog "Konfiguracja skopiowana z $srcConfig"
     }
-    # The signing certificate travels with the config; the weekly and hourly runs check the source with it
+    # The signing certificate travels with the config; the scheduled update and the hourly run check the source with it
     $cert = Get-WmCertificateFileName $Config
     if ($cert) {
         $srcCert = Join-Path (Split-Path $srcConfig -Parent) $cert
@@ -179,12 +179,12 @@ $hcStarted = $false
 
 try {
     # Internet for Chocolatey and the package list, checked before anything changes.
-    # Without it the person at the console decides; the weekly task installs the programs later.
+    # Without it the person at the console decides; the scheduled update installs the programs later.
     $offline = $false
     $unreachable = @(Get-WmUnreachableHosts -Config $config)
     if ($unreachable.Count -gt 0) {
         Write-WmLog "Brak połączenia z: $($unreachable -join ', ')" -Level warn
-        if (-not (Confirm-WmContinue 'Brak internetu. Kontynuować bez instalacji programów (doinstaluje je cotygodniowe zadanie)?')) {
+        if (-not (Confirm-WmContinue 'Brak internetu. Kontynuować bez instalacji programów (doinstaluje je zaplanowana aktualizacja)?')) {
             throw 'Brak internetu; provisioning przerwany przed zmianami.'
         }
         $offline = $true
@@ -243,12 +243,12 @@ try {
     $hcStarted = $true
 
     # Each stage on its own: a failure (e.g. no network for Chocolatey) is logged as an error,
-    # but the scheduled tasks still get registered, so the weekly run can finish the job.
+    # but the scheduled tasks still get registered, so the scheduled update can finish the job.
     $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
     if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
 
     if ($offline) {
-        Write-WmLog 'Pomijam Chocolatey i programy (brak internetu); zainstaluje je cotygodniowe zadanie.' -Level warn
+        Write-WmLog 'Pomijam Chocolatey i programy (brak internetu); zainstaluje je zaplanowana aktualizacja.' -Level warn
     } elseif (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
         $null = Invoke-WmStep 'Paczki' {
             $reqs = Get-WmRequirements -Config $config -BaseDir $here

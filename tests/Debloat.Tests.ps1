@@ -113,7 +113,7 @@ Describe 'Disable-WmAppReinstall' {
         $script:journal = [System.Collections.ArrayList]@()
         $script:removed = [System.Collections.ArrayList]@()
         $script:warnings = [System.Collections.ArrayList]@()
-        $script:WmJournalOn = $false   # as in the weekly run; provisioning turns it on
+        $script:WmJournalOn = $false   # as in the scheduled update; provisioning turns it on
         $script:WmJournalSeen = @{}
         $script:journalWorks = $true
         Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } }

@@ -6,7 +6,7 @@
 #   groups.psd1                            computer name -> groups
 #   choco-reqs.txt                         the common package list
 #   groups/<group>/choco-reqs.txt          extra packages for the group (optional)
-#   groups/<group>/scripts/*.ps1           run as SYSTEM (hourly and weekly task), again whenever their content changes
+#   groups/<group>/scripts/*.ps1           run as SYSTEM (hourly task and scheduled update), again whenever their content changes
 #   groups/<group>/jobs/<when>/*.ps1       run as SYSTEM on a schedule: hourly, daily or weekly (Invoke-Jobs.ps1)
 #   groups/<group>/...                     any other files the scripts use
 #
@@ -35,7 +35,7 @@ function Write-WmManagedNote {
     if (-not $script:WmManagedQuiet) { Write-WmLog $Message }
 }
 
-# Warnings about the content of the source (e.g. a group without files): reported by the weekly run,
+# Warnings about the content of the source (e.g. a group without files): reported by the scheduled update,
 # not again every hour.
 function Write-WmManagedWarning {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -637,7 +637,7 @@ function Get-WmScriptEnvironment {
 }
 
 # Runs the scripts of this computer's groups whose content changed since their last successful run
-# (the hourly wmanager-Jobs task and the weekly run, both as SYSTEM). Exit code 0 = done, 3010 = done and a
+# (the hourly wmanager-Jobs task and the scheduled update, both as SYSTEM). Exit code 0 = done, 3010 = done and a
 # restart is needed; anything else (or the timeout) is an error and the script runs again later: with
 # -RetryFailedAfterHours (the hourly run) not before that many hours, unless its content changed.
 # A failed script doesn't stop the ones after it.
@@ -683,7 +683,7 @@ function Invoke-WmGroupScripts {
 
         if ($null -eq $r.ExitCode -or ($r.ExitCode -ne 0 -and $r.ExitCode -ne 3010)) {
             $failed[$s.Path] = '{0}|{1}' -f $s.Hash, [DateTime]::UtcNow.ToString('o')
-            $retry = 'ponowię w następnym przebiegu tygodniowym'
+            $retry = 'ponowię przy następnej aktualizacji'
             if ($RetryFailedAfterHours -gt 0) { $retry = "ponowię za $RetryFailedAfterHours h albo po zmianie skryptu" }
             if ($null -eq $r.ExitCode) { Write-WmLog "$($s.Path): przekroczony czas ($timeout min), przerwany; $retry." -Level error }
             else { Write-WmLog "$($s.Path): zakończony kodem $($r.ExitCode); $retry." -Level error }

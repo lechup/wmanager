@@ -7,7 +7,7 @@ Provisioning for Windows 11 (Home and Pro) office computers:
 - installs Chocolatey and the packages from `choco-reqs.txt`,
 - optionally puts computers into groups from a signed management source: extra packages, scripts and scheduled jobs
   (e.g. a daily system report to Loki) per group (see [Computer groups](#computer-groups)),
-- registers a weekly package update (Monday 12:00 by default),
+- registers a package update, every day at 12:00 by default,
 - sends logs to Grafana Cloud Loki and pings Healthchecks.io.
 
 The script is safe to run repeatedly: every run brings the computer to the state defined in the configuration.
@@ -32,7 +32,7 @@ changing anything.
 | --- | --- |
 | `run.cmd` | Double-click launcher; elevates and passes parameters through |
 | `Provision.ps1` | Main script |
-| `Update-Packages.ps1` | Weekly update (`wmanager-Update` task) and retry at sign-in (`wmanager-Retry`) |
+| `Update-Packages.ps1` | Scheduled update, daily by default (`wmanager-Update` task), and retry at sign-in (`wmanager-Retry`) |
 | `Invoke-Jobs.ps1` | Group jobs, every hour (`wmanager-Jobs`, only with a management source) |
 | `Notify-User.ps1` | Restart notification and a one-time prompt to set the default browser (`wmanager-Notify`) |
 | `Restore-Backup.ps1` | Undoes the registry changes made by provisioning (see [Backup and restore](#backup-and-restore)) |
@@ -54,7 +54,7 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 1. Check for Windows 11 and administrator rights, the management settings and signing certificate (if set),
    determine the computer name.
 2. Check that the Chocolatey, package-list and management servers answer. Without internet the script asks whether
-   to go on without installing programs (Enter = stop, nothing changed yet); the weekly task installs them later.
+   to go on without installing programs (Enter = stop, nothing changed yet); the scheduled update installs them later.
 3. System restore point. If it can't be created, the script asks whether to go on without it (Enter = stop).
    `run.cmd -SkipRestorePoint` skips the restore point and the question.
 4. Backup of Store apps and the registry, and the start of the undo journal (see [Backup and restore](#backup-and-restore)).
@@ -64,7 +64,7 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
 7. Debloat: apps from the `RemoveAppx` list (from the system image and for all users), OneDrive, policies, Edge.
    For DevHome and the new Outlook it also removes the Windows Update entries (`UScheduler_Oobe`) that would install
    them again minutes after removal. An installation Windows has already started (in the first minutes after setup)
-   can still finish once; the next run or the weekly update removes the app again.
+   can still finish once; the next scheduled update removes the app again.
 8. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
 9. Chocolatey, package sources, installing the packages from the list (with a management source: the common list
    plus the lists of the computer's groups).
@@ -109,19 +109,19 @@ It asks for confirmation, then puts every journaled value back (or removes it, a
 if they are empty) for the computer and for every profile that still exists. Changes users made later in the same
 keys are left alone. It also restores the default apps for new accounts from the first backup (or the Windows defaults
 if there were none), lists Store apps
-removed since then, and offers to disable the wmanager tasks (otherwise the weekly run applies debloat again).
+removed since then, and offers to disable the wmanager tasks (otherwise the scheduled update applies debloat again).
 With the tasks disabled it also removes the wmanager signing certificate from the trusted root store.
 Restart the computer afterwards.
 
 Not undone: removed Store apps (reinstall from the Store) and OneDrive (reinstall from Microsoft), installed
-Chocolatey packages, what group scripts changed, the computer name. Settings the weekly run applies to profiles created after provisioning
-are not in the journal, nor are `UScheduler_Oobe` entries that Windows created after provisioning and the weekly run deleted. Programs and system files can be rolled back with the system restore point.
+Chocolatey packages, what group scripts changed, the computer name. Settings the scheduled update applies to profiles created after provisioning
+are not in the journal, nor are `UScheduler_Oobe` entries that Windows created after provisioning and the scheduled update deleted. Programs and system files can be rolled back with the system restore point.
 
 ## choco-reqs.txt
 
 ```
 googlechrome !noupdate        # install the latest, don't update (it updates itself)
-libreoffice-fresh             # latest, updated weekly
+libreoffice-fresh             # latest, kept up to date
 libreoffice-fresh@latest      # same thing, written explicitly
 7zip@24.8.0                   # pinned version (choco pin), never updated
 vlc | --params "/NoDesktopShortcut"   # extra choco parameters
@@ -144,7 +144,7 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
 
 Optional. A **management source** is a folder you keep in a private repository (or on an HTTPS server or a share).
 It holds the common package list, the map of computers to groups, and each group's own packages, scripts and jobs.
-Every computer checks it at provisioning and in each weekly run (the hourly job run at most once a day):
+Every computer checks it at provisioning and in each scheduled update (the hourly job run at most once a day):
 
 ```
 manifest.psd1                        generated and signed by tools/publish.sh; don't edit
@@ -178,12 +178,12 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   group or a package disappears from a list.
 - **Scripts:** run by Windows PowerShell 5.1 as SYSTEM, in a separate process, group by group in the order of the map,
   files by name (number them: `10-`, `20-`). They are run by the hourly `wmanager-Jobs` task (first a few minutes after
-  provisioning) and checked again by the weekly run. A script runs once and again whenever its content changes; it
+  provisioning) and checked again by the scheduled update. A script runs once and again whenever its content changes; it
   doesn't run for the same content again. A change in the source reaches a computer within about a day (the hourly
-  task fetches the source every 20 hours) or at the weekly run. Exit code `0` = done, `3010` = done and the computer
+  task fetches the source every 20 hours) or at the scheduled update. Exit code `0` = done, `3010` = done and the computer
   needs a restart (the user gets the notification), anything else, an exception or the time limit
   (`ScriptTimeoutMinutes`, 15 by default) = error: the hourly task tries a failed script again after 20 hours (at once
-  if its content changes), the weekly run tries it every week. A failed script doesn't stop the scripts after it.
+  if its content changes), the scheduled update tries it again. A failed script doesn't stop the scripts after it.
   Output goes to the log (and to Loki). Debloat repeats every week while a script doesn't, so a script can't
   permanently turn back on something debloat removes. Removing a script or leaving a group doesn't undo what it did.
 - **Jobs:** like scripts, but on a schedule: the `wmanager-Jobs` task (SYSTEM) starts every hour and runs each job of the
@@ -278,21 +278,24 @@ Notes:
 - Script and job output goes through the console code page (852 on Polish Windows): characters outside it come out
   as `?`.
 
-## Weekly update
+## Scheduled update
 
-- `wmanager-Update` (SYSTEM): scheduled by `UpdateDays` and `UpdateTime`; after a missed run it starts right after boot.
+- `wmanager-Update` (SYSTEM): scheduled by `UpdateDays` and `UpdateTime`, every day at 12:00 by default
+  (`UpdateDays = @('Monday')` makes it weekly). After a missed run it starts right after boot, so a computer that was
+  off for a few days catches up with one run.
   It installs Chocolatey if it is missing, fetches the list, installs new packages, upgrades packages that are neither pinned nor `!noupdate`,
-  reruns debloat (`RerunDebloatWeekly`) and updates its own schedule if the configuration changed.
+  reruns debloat and the privacy settings (`RerunDebloat`; the older name `RerunDebloatWeekly` still works) and
+  updates its own schedule if the configuration changed.
 - A package whose program is running (`RunningProcessMap`) is deferred; `wmanager-Retry` tries again 2 minutes after sign-in.
   An empty process list (as for `rustdesk`, which always runs as a service) means the package is never deferred.
 - When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.
 - With a management source it also fetches and checks the source and runs the group scripts whose content changed
   or that failed before (after debloat).
-- Runs never overlap. When the hourly `wmanager-Jobs` is busy (e.g. both start after a boot), the weekly run waits up
-  to 50 minutes for it; if it is still busy, `wmanager-Retry` does the full weekly run at the next sign-in. The hourly
+- Runs never overlap. When the hourly `wmanager-Jobs` is busy (e.g. both start after a boot), the update waits up
+  to 50 minutes for it; if it is still busy, `wmanager-Retry` does the full run at the next sign-in. The hourly
   run skips its turn when another run is busy, and provisioning waits up to 10 minutes.
-- Without internet (the Chocolatey, package-list or management servers don't answer) the weekly run changes nothing
-  and reports nothing; `wmanager-Retry` does the full weekly run at the next sign-in.
+- Without internet (the Chocolatey, package-list or management servers don't answer) the update changes nothing
+  and reports nothing; `wmanager-Retry` does the full run at the next sign-in.
 
 Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Update'`.
 
@@ -308,7 +311,7 @@ Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Upda
   A batch Loki rejects for good (HTTP 400 or 413, e.g. entries too old) is moved to `logs\outbox\rejected` so it doesn't block newer ones.
   Example query: `{service_name="wmanager", level="error"}`.
 - **Healthchecks.io**: a `/start` ping at the beginning (in provisioning: once the computer name is settled), and success
-  or `/fail` (with the tail of the log) at the end of provisioning and of the weekly update. Provisioning stopped before
+  or `/fail` (with the tail of the log) at the end of provisioning and of the scheduled update. Provisioning stopped before
   the name is settled (e.g. a declined question) sends nothing; the console shows the result.
   The check is created on the first ping (`?create=1`); its name is the computer name (with an optional `HealthchecksSlugPrefix`).
 

@@ -2,8 +2,8 @@
 # - scripts (groups/<group>/scripts/*.ps1) whose content changed since their last successful run;
 #   a failed one is tried again after 20 hours, or at once when its content changes;
 # - jobs (groups/<group>/jobs/hourly|daily|weekly/*.ps1) whose time has come.
-# Uses the verified copy of the source and fetches a new version at most once every 20 hours (the weekly
-# run fetches too). Output goes to the daily log logs\jobs-YYYY-MM-DD.log and to Loki.
+# Uses the verified copy of the source and fetches a new version at most once every 20 hours (the scheduled
+# update fetches too). Output goes to the daily log logs\jobs-YYYY-MM-DD.log and to Loki.
 [CmdletBinding()]
 param()
 
@@ -22,7 +22,7 @@ try {
     exit 1
 }
 
-# Provisioning or the weekly run is busy (and may be replacing state\managed): the next hour tries again
+# Provisioning or the scheduled update is busy (and may be replacing state\managed): the next hour tries again
 $lock = Enter-WmLock
 if (-not $lock) { exit 0 }
 

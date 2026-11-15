@@ -1,10 +1,11 @@
-﻿# Task Scheduler tasks: weekly update, retry at sign-in, notification, group jobs.
+﻿# Task Scheduler tasks: scheduled update (every day by default), retry at sign-in, notification, group jobs.
 
 $script:WmTaskPath   = '\wmanager\'
 $script:WmTaskUpdate = 'wmanager-Update'
 $script:WmTaskRetry  = 'wmanager-Retry'
 $script:WmTaskNotify = 'wmanager-Notify'
 $script:WmTaskJobs   = 'wmanager-Jobs'
+$script:WmAllDays    = @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
 
 function Get-WmUsersGroupName {
     # The Users group name depends on the system language (e.g. "Użytkownicy"), so resolve it from the SID
@@ -13,7 +14,8 @@ function Get-WmUsersGroupName {
 
 function New-WmUpdateTrigger {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
-    $days = @(Get-WmSetting $Config 'UpdateDays' @('Monday'))
+    # Every day unless UpdateDays says otherwise (a weekly trigger with all seven days)
+    $days = @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)
     $time = Get-WmSetting $Config 'UpdateTime' '12:00'
     $at = [datetime]::ParseExact($time, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
     return New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $days -At $at
@@ -27,6 +29,13 @@ function Get-WmDaysMask {
     return $mask
 }
 
+# For the log: 'codziennie' for all seven days, otherwise the list
+function Format-WmUpdateDays {
+    param([string[]]$Days)
+    if ((Get-WmDaysMask $Days) -eq 127) { return 'codziennie' }
+    return ($Days -join ', ')
+}
+
 function Register-WmTasks {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     Write-WmLog '--- Harmonogram zadań ---'
@@ -36,12 +45,12 @@ function Register-WmTasks {
 
     $system = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 
-    # 1. Weekly update (SYSTEM); after a missed run it starts after boot
+    # 1. Scheduled update (SYSTEM), every day by default; after a missed run it starts after boot
     $a1 = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$update`""
     $s1 = New-ScheduledTaskSettingsSet -StartWhenAvailable -RunOnlyIfNetworkAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -Action $a1 -Trigger (New-WmUpdateTrigger $Config) `
-        -Settings $s1 -Principal $system -Description 'wmanager: weekly update of packages from choco-reqs.txt' -Force -ErrorAction Stop | Out-Null
+        -Settings $s1 -Principal $system -Description 'wmanager: scheduled update of packages, debloat and group scripts' -Force -ErrorAction Stop | Out-Null
 
     # 2. Retry deferred updates at sign-in (runs only when something was deferred)
     $a2 = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$update`" -OnlyIfPending"
@@ -77,7 +86,7 @@ function Register-WmTasks {
         Write-WmLog 'Brak źródła zarządzania: zadanie jobów usunięte.'
     }
 
-    $days = (@(Get-WmSetting $Config 'UpdateDays' @('Monday')) -join ', ')
+    $days = Format-WmUpdateDays @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)
     Write-WmLog "Zadania zarejestrowane; aktualizacja: $days o $(Get-WmSetting $Config 'UpdateTime' '12:00')."
 }
 
@@ -91,11 +100,11 @@ function Update-WmTaskSchedule {
     $have = $task.Triggers | Select-Object -First 1
     $wantTime = ([datetime]$want.StartBoundary).ToString('HH:mm')
     $haveTime = if ($have.StartBoundary) { ([datetime]$have.StartBoundary).ToString('HH:mm') } else { '' }
-    $wantMask = Get-WmDaysMask @(Get-WmSetting $Config 'UpdateDays' @('Monday'))
+    $wantMask = Get-WmDaysMask @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)
     $haveMask = [int]$have.DaysOfWeek
     if ($wantTime -ne $haveTime -or $wantMask -ne $haveMask) {
         Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -Trigger $want -ErrorAction Stop | Out-Null
-        Write-WmLog "Zmieniono termin aktualizacji na: $((@(Get-WmSetting $Config 'UpdateDays' @('Monday'))) -join ', ') $wantTime."
+        Write-WmLog "Zmieniono termin aktualizacji na: $(Format-WmUpdateDays @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)) $wantTime."
     }
 }
 
