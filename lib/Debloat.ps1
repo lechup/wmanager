@@ -67,16 +67,26 @@ function Disable-WmAppReinstall {
         $app = $script:WmAppReinstallUpdaters[$updater]
         if (-not ($Patterns | Where-Object { $app -like $_ })) { continue }
         $path = "$script:WmUSchedulerOobeKey\$updater"
-        $k = Open-WmRegKey -Path $path
-        if (-not $k) { continue }
-        try { $names = @($k.GetValueNames()); $subKeys = $k.SubKeyCount } finally { $k.Close() }
-        if ($subKeys -gt 0) {
-            # the journal holds values, not subkeys: without a full record the key stays
-            Write-WmLog "Pomijam $path : ma podklucze, których przywracanie by nie odtworzyło" -Level warn
-            continue
-        }
-        foreach ($name in $names) { Add-WmJournalEntry -Path $path -Name $name }
+        # One updater failing must not stop the app removal that follows
         try {
+            $k = Open-WmRegKey -Path $path
+            if (-not $k) { continue }
+            try { $names = @($k.GetValueNames()); $subKeys = $k.SubKeyCount } finally { $k.Close() }
+            if ($names.Count -eq 0 -and $subKeys -eq 0) { continue }   # nothing in it for Windows Update to run
+            # The journal holds named values only: without a full record the key stays
+            if ($subKeys -gt 0 -or $names -contains '') {
+                Write-WmLog "Pomijam $path : ma podklucze lub wartość domyślną, których przywracanie by nie odtworzyło" -Level warn
+                continue
+            }
+            foreach ($name in $names) { Add-WmJournalEntry -Path $path -Name $name }
+            if ($script:WmJournalOn) {
+                # Deleting is not like overwriting a value: without the journal entries the key would be lost for good
+                $native = ConvertTo-WmRegNativePath $path
+                if (@($names | Where-Object { -not $script:WmJournalSeen.ContainsKey((Get-WmJournalId 'machine' '' '' $native $_)) }).Count -gt 0) {
+                    Write-WmLog "Pomijam $path : dziennik zmian nie zapisał jego wartości" -Level warn
+                    continue
+                }
+            }
             Remove-Item -LiteralPath $path -Force -ErrorAction Stop
             Write-WmLog "Windows Update nie zainstaluje ponownie $app (usunięto $updater)"
         } catch {
