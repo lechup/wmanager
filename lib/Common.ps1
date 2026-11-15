@@ -263,6 +263,19 @@ function Get-WmExistingAncestor {
     return $p
 }
 
+# A registry value as the undo journal stores it: Kind and Value (Binary as base64, MultiString as an array,
+# anything else as text, environment variables not expanded); $null if the key or the value doesn't exist.
+function Get-WmJournalValueState {
+    param($Key, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
+    if (-not $Key -or -not ($Key.GetValueNames() -contains $Name)) { return $null }
+    $kind = $Key.GetValueKind($Name)
+    $raw = $Key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if ($kind -eq 'Binary') { $value = [Convert]::ToBase64String([byte[]]$raw) }
+    elseif ($kind -eq 'MultiString') { $value = [string[]]$raw }
+    else { $value = [string]$raw }
+    return [pscustomobject]@{ Kind = [string]$kind; Value = $value }
+}
+
 # Undo journal: before wmanager changes a registry value for the first time, the previous state
 # (value and type, or "did not exist") is appended to journal.jsonl right away, one JSON line per
 # value, so an interrupted run loses nothing. Values in user hives are stored relative to the hive,
@@ -303,14 +316,11 @@ function Add-WmJournalEntry {
         }
         $entry.KeyExisted = $script:WmJournalKeys[$keyId].Existed
         $entry.Ancestor = $script:WmJournalKeys[$keyId].Ancestor
-        if ($k -and ($k.GetValueNames() -contains $Name)) {
-            $kind = $k.GetValueKind($Name)
-            $raw = $k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $state = Get-WmJournalValueState -Key $k -Name $Name
+        if ($state) {
             $entry.Existed = $true
-            $entry.Kind = [string]$kind
-            if ($kind -eq 'Binary') { $entry.Value = [Convert]::ToBase64String([byte[]]$raw) }
-            elseif ($kind -eq 'MultiString') { $entry.Value = [string[]]$raw }
-            else { $entry.Value = [string]$raw }
+            $entry.Kind = $state.Kind
+            $entry.Value = $state.Value
         }
         $line = ConvertTo-Json -InputObject ([pscustomobject]$entry) -Compress -Depth 4
         [IO.File]::AppendAllText($script:WmJournalFile, $line + "`r`n", (New-Object System.Text.UTF8Encoding($false)))

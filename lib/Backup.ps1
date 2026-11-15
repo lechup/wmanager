@@ -195,7 +195,14 @@ function Restore-WmJournalEntry {
     }
     $k = $null
     try {
+        # Read-only first: a value already in its journaled state needs no write (e.g. a protected value that
+        # wmanager couldn't change in the first place, where opening the key for writing is denied)
+        $k = Open-WmRegKey -Path $keyPath
+        $current = Get-WmJournalValueState -Key $k -Name ([string]$Entry.Name)
+        if ($k) { $k.Close(); $k = $null }
         if ($Entry.Existed) {
+            if ($current -and $current.Kind -eq [string]$Entry.Kind -and
+                ((@($current.Value) -join "`0") -ceq (@($Entry.Value) -join "`0"))) { return $true }
             $k = Open-WmRegKey -Path $keyPath -Create
             $kind = [Microsoft.Win32.RegistryValueKind]$Entry.Kind
             if ($kind -eq 'DWord') { $value = [int]::Parse([string]$Entry.Value) }
@@ -206,9 +213,9 @@ function Restore-WmJournalEntry {
             $k.SetValue($Entry.Name, $value, $kind)
             return $true
         }
-        $k = Open-WmRegKey -Path $keyPath -Writable
-        if ($k) {
-            if ($k.GetValueNames() -contains $Entry.Name) { $k.DeleteValue($Entry.Name, $false) }
+        if ($current) {
+            $k = Open-WmRegKey -Path $keyPath -Writable
+            $k.DeleteValue($Entry.Name, $false)
             $k.Close(); $k = $null
         }
         if (-not $Entry.KeyExisted -and $stopAt) {
