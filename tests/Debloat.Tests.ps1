@@ -103,3 +103,54 @@ Describe 'Remove-WmAppxPackages' {
         $script:warnings[0] | Should -BeLike '*odczytać*DISM*'
     }
 }
+
+Describe 'Disable-WmAppReinstall' {
+    BeforeEach {
+        $script:keys = @{
+            'DevHomeUpdate' = @{ Values = @('cmdLine', 'startArg', 'updaterClientMetadata', 'updaterPriority'); SubKeys = 0 }
+            'OutlookUpdate' = @{ Values = @('cmdLine', 'startArg', 'updaterClientMetadata', 'updaterPriority'); SubKeys = 0 }
+        }
+        $script:journal = [System.Collections.ArrayList]@()
+        $script:removed = [System.Collections.ArrayList]@()
+        $script:warnings = [System.Collections.ArrayList]@()
+        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } }
+        Mock Open-WmRegKey {
+            $leaf = Split-Path $Path -Leaf
+            if (-not $script:keys.ContainsKey($leaf)) { return $null }
+            $key = [pscustomobject]@{ SubKeyCount = $script:keys[$leaf].SubKeys; Names = $script:keys[$leaf].Values }
+            $key | Add-Member -MemberType ScriptMethod -Name GetValueNames -Value { $this.Names }
+            $key | Add-Member -MemberType ScriptMethod -Name Close -Value { }
+            $key
+        }
+        Mock Add-WmJournalEntry { [void]$script:journal.Add("$(Split-Path $Path -Leaf)\$Name") }
+        Mock Remove-Item { [void]$script:removed.Add((Split-Path $LiteralPath -Leaf)) } -ParameterFilter { $LiteralPath -like '*UScheduler_Oobe*' }
+    }
+
+    It 'removes the updater of an app on the list after journaling its values' {
+        Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome', 'Microsoft.BingNews')
+        $script:removed | Should -Be @('DevHomeUpdate')
+        $script:journal | Should -Be @('DevHomeUpdate\cmdLine', 'DevHomeUpdate\startArg', 'DevHomeUpdate\updaterClientMetadata', 'DevHomeUpdate\updaterPriority')
+        $script:warnings | Should -BeNullOrEmpty
+    }
+
+    It 'matches the apps with the wildcard patterns of the list' {
+        Disable-WmAppReinstall -Patterns @(' Microsoft.Outlook* ', 'Microsoft.Windows.Dev*')
+        $script:removed | Should -Be @('DevHomeUpdate', 'OutlookUpdate')
+    }
+
+    It 'leaves updaters alone when their app is not on the list or the key is missing' {
+        Disable-WmAppReinstall -Patterns @('Microsoft.BingNews', '')
+        $script:keys.Remove('DevHomeUpdate')
+        Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome')
+        $script:removed | Should -BeNullOrEmpty
+        Should -Invoke Add-WmJournalEntry -Times 0 -Exactly
+    }
+
+    It 'keeps a key with subkeys, which the journal could not bring back, and warns' {
+        $script:keys['DevHomeUpdate'].SubKeys = 1
+        Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome')
+        $script:removed | Should -BeNullOrEmpty
+        $script:warnings.Count | Should -Be 1
+        Should -Invoke Add-WmJournalEntry -Times 0 -Exactly
+    }
+}

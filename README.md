@@ -61,7 +61,10 @@ in `C:\ProgramData`), provisioning moves it aside to `wmanager.untrusted-<timest
    If it fails, the script asks the same way.
 5. Copy files to `C:\ProgramData\wmanager` and set permissions.
 6. Rename the computer (if a name was given; takes effect after a restart).
-7. Debloat: apps from the `RemoveAppx` list (for all users and from the system image), OneDrive, policies, Edge.
+7. Debloat: apps from the `RemoveAppx` list (from the system image and for all users), OneDrive, policies, Edge.
+   For DevHome and the new Outlook it also removes the Windows Update entries (`UScheduler_Oobe`) that would install
+   them again minutes after removal. An installation Windows has already started (in the first minutes after setup)
+   can still finish once; the next run or the weekly update removes the app again.
 8. Privacy: telemetry, the `DiagTrack` and `dmwappushservice` services, ads, suggestions, local-only search.
 9. Chocolatey, package sources, installing the packages from the list (with a management source: the common list
    plus the lists of the computer's groups).
@@ -92,7 +95,8 @@ Before changing anything, provisioning writes a backup to `C:\ProgramData\wmanag
 | `manifest.txt` | Which key went to which file, and which keys did not exist |
 
 The undo journal `state\backup\journal.jsonl` records, for every registry value wmanager changes during provisioning,
-its state before the very first change (old value and type, or "did not exist"). Each entry is written the moment the
+its state before the very first change (old value and type, or "did not exist"); for a key it deletes (the
+`UScheduler_Oobe` entries) that means every value in it, so the key comes back on restore. Each entry is written the moment the
 value changes, so an interrupted run loses nothing. It is shared by all provisioning runs.
 
 To undo, run on the computer as administrator:
