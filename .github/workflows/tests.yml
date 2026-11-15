@@ -31,8 +31,8 @@ jobs:
 
       - name: Check shell scripts
         run: |
-          bash -n tools/*.sh tests/ci/*.sh
-          shellcheck -S error tools/*.sh tests/ci/*.sh
+          bash -n tools/*.sh tests/ci/*.sh tests/vm/*.sh
+          shellcheck -S error tools/*.sh tests/ci/*.sh tests/vm/*.sh
 
       - name: Build and sign test sources
         run: tests/ci/build-sources.sh ci-sources
