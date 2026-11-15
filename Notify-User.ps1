@@ -26,8 +26,10 @@ function Show-WmToast {
 }
 
 # --- 1. Restart -------------------------------------------------------------
+# The flag comes from program updates, from a restart Windows itself waits for, or from a group script,
+# so the text doesn't say which
 if (Test-Path -LiteralPath $rebootKey) {
-    Show-WmToast 'Potrzebny restart komputera' 'Zainstalowano aktualizacje programów. Uruchom ponownie komputer, gdy będzie Ci wygodnie.'
+    Show-WmToast 'Potrzebny restart komputera' 'Aktualizacje będą gotowe po ponownym uruchomieniu. Uruchom ponownie komputer, gdy będzie Ci wygodnie.'
 }
 
 # --- 2. Default browser (one-time) -------------------------------------------
