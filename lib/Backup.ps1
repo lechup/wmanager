@@ -185,6 +185,18 @@ function Stop-WmJournal {
 # Puts one journal entry back: the old value, or no value if there was none. Keys wmanager created
 # are removed while empty, up to the nearest key that existed before. $HiveRoot (HKEY_USERS\<id>)
 # is the hive of the profile for user entries. Returns $true on success.
+# Whether two values in the journal's form are equal: text compared exactly, a multi-string element by element
+# (joining would make @() equal to @(''))
+function Test-WmSameJournalValue {
+    param($A, $B)
+    $a = @($A); $b = @($B)
+    if ($a.Count -ne $b.Count) { return $false }
+    for ($i = 0; $i -lt $a.Count; $i++) {
+        if ([string]$a[$i] -cne [string]$b[$i]) { return $false }
+    }
+    return $true
+}
+
 function Restore-WmJournalEntry {
     param([Parameter(Mandatory = $true)]$Entry, [string]$HiveRoot = '')
     $keyPath = [string]$Entry.Key
@@ -202,7 +214,7 @@ function Restore-WmJournalEntry {
         if ($k) { $k.Close(); $k = $null }
         if ($Entry.Existed) {
             if ($current -and $current.Kind -eq [string]$Entry.Kind -and
-                ((@($current.Value) -join "`0") -ceq (@($Entry.Value) -join "`0"))) { return $true }
+                (Test-WmSameJournalValue $current.Value $Entry.Value)) { return $true }
             $k = Open-WmRegKey -Path $keyPath -Create
             $kind = [Microsoft.Win32.RegistryValueKind]$Entry.Kind
             if ($kind -eq 'DWord') { $value = [int]::Parse([string]$Entry.Value) }
@@ -215,8 +227,7 @@ function Restore-WmJournalEntry {
         }
         if ($current) {
             $k = Open-WmRegKey -Path $keyPath -Writable
-            $k.DeleteValue($Entry.Name, $false)
-            $k.Close(); $k = $null
+            if ($k) { $k.DeleteValue($Entry.Name, $false); $k.Close(); $k = $null }   # gone in between: nothing to do
         }
         if (-not $Entry.KeyExisted -and $stopAt) {
             $path = ConvertTo-WmRegNativePath $keyPath
