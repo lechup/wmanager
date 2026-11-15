@@ -2,31 +2,37 @@
 
 function Remove-WmAppxPackages {
     param([string[]]$Patterns)
-    $Patterns = @($Patterns | Where-Object { $_ })
+    $Patterns = @($Patterns | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+
+    # The system image first, then the installed copies: a profile created in between can't get an app back from
+    # the image, and the image entries are still there to remove (current Windows 11 builds, seen on 26300, also
+    # take an app out of the image when it is removed for all users; removing it there afterwards fails with
+    # "path not found"). Every image package once, even when several patterns match it.
+    try {
+        $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop)
+    } catch {
+        $provisioned = @()
+        Write-WmLog "Nie udało się odczytać aplikacji w obrazie systemu: $($_.Exception.Message)" -Level warn
+    }
+    foreach ($prov in $provisioned) {
+        $name = $prov.DisplayName
+        if (-not ($Patterns | Where-Object { $name -like $_ })) { continue }
+        try {
+            Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction Stop | Out-Null
+            Write-WmLog "Usunięto z obrazu systemu $name"
+        } catch {
+            Write-WmLog "Nie udało się usunąć z obrazu $($name): $($_.Exception.Message)" -Level warn
+        }
+    }
 
     foreach ($pattern in $Patterns) {
-        $installed = @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction SilentlyContinue)
-        foreach ($pkg in $installed) {
+        # asked again for every pattern, so an app already removed by an earlier pattern isn't listed
+        foreach ($pkg in @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction SilentlyContinue)) {
             try {
                 Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
                 Write-WmLog "Usunięto aplikację $($pkg.Name)"
             } catch {
                 Write-WmLog "Nie udało się usunąć $($pkg.Name): $($_.Exception.Message)" -Level warn
-            }
-        }
-    }
-
-    # The image is read only after the apps are gone: current Windows 11 builds (seen on 26300) also take an app
-    # out of the image when it is removed for all users, and removing it from the image again fails with
-    # "path not found", a false warning for every app
-    $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)
-    foreach ($pattern in $Patterns) {
-        foreach ($prov in ($provisioned | Where-Object { $_.DisplayName -like $pattern })) {
-            try {
-                Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction Stop | Out-Null
-                Write-WmLog "Usunięto z obrazu systemu $($prov.DisplayName)"
-            } catch {
-                Write-WmLog "Nie udało się usunąć z obrazu $($prov.DisplayName): $($_.Exception.Message)" -Level warn
             }
         }
     }

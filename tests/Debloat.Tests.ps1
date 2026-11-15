@@ -10,10 +10,11 @@ BeforeAll {
 
 Describe 'Remove-WmAppxPackages' {
     BeforeEach {
-        # Two apps, installed and in the image. Removing BingNews for all users also takes it out of the image
-        # (current Windows 11 builds); Todos stays in the image (older builds).
+        # BingNews and Todos are installed and in the image, Maps only in the image. Removing BingNews for all
+        # users also takes it out of the image (current Windows 11 builds); Todos stays there (older builds).
         $script:apps = [System.Collections.ArrayList]@('Microsoft.BingNews', 'Microsoft.Todos')
-        $script:image = [System.Collections.ArrayList]@('Microsoft.BingNews', 'Microsoft.Todos')
+        $script:image = [System.Collections.ArrayList]@('Microsoft.BingNews', 'Microsoft.Todos', 'Microsoft.WindowsMaps')
+        $script:ops = [System.Collections.ArrayList]@()
         $script:warnings = [System.Collections.ArrayList]@()
         Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } }
         Mock Get-AppxPackage {
@@ -22,6 +23,7 @@ Describe 'Remove-WmAppxPackages' {
         }
         Mock Remove-AppxPackage {
             $n = ([string]$Package).Split('_')[0]
+            [void]$script:ops.Add("app:$n")
             $script:apps.Remove($n)
             if ($n -eq 'Microsoft.BingNews') { $script:image.Remove($n) }
         }
@@ -32,18 +34,31 @@ Describe 'Remove-WmAppxPackages' {
         Mock Remove-AppxProvisionedPackage {
             $n = ([string]$PackageName).Split('_')[0]
             if ($n -notin $script:image) { throw 'System nie może odnaleźć określonej ścieżki.' }
+            [void]$script:ops.Add("image:$n")
             $script:image.Remove($n)
         }
     }
 
-    It 'removes the apps and what is still in the image, without false warnings' {
-        Remove-WmAppxPackages -Patterns @('Microsoft.BingNews', 'Microsoft.Todos', '', 'Microsoft.NotThere')
+    It 'removes the apps from the image first, then the installed copies, without warnings' {
+        Remove-WmAppxPackages -Patterns @('Microsoft.BingNews', 'Microsoft.Todos', '', '   ', 'Microsoft.NotThere')
         $script:apps.Count | Should -Be 0
-        $script:image.Count | Should -Be 0
+        $script:image | Should -Be @('Microsoft.WindowsMaps')
         $script:warnings | Should -BeNullOrEmpty
-        # the image is read once, after the apps are gone; only Todos is still there to remove
+        $script:ops | Should -Be @('image:Microsoft.BingNews', 'image:Microsoft.Todos', 'app:Microsoft.BingNews', 'app:Microsoft.Todos')
         Should -Invoke Get-AppxProvisionedPackage -Times 1 -Exactly
+    }
+
+    It 'removes an image package once when several patterns match it' {
+        Remove-WmAppxPackages -Patterns @('Microsoft.Todos', 'Microsoft.To*', ' Microsoft.Todos ')
+        $script:warnings | Should -BeNullOrEmpty
         Should -Invoke Remove-AppxProvisionedPackage -Times 1 -Exactly
+        Should -Invoke Remove-AppxPackage -Times 1 -Exactly
+    }
+
+    It 'removes an app that is only in the image' {
+        Remove-WmAppxPackages -Patterns @('Microsoft.WindowsMaps')
+        $script:image | Should -Not -Contain 'Microsoft.WindowsMaps'
+        $script:warnings | Should -BeNullOrEmpty
     }
 
     It 'warns when removing from the image really fails' {
@@ -51,5 +66,13 @@ Describe 'Remove-WmAppxPackages' {
         Remove-WmAppxPackages -Patterns @('Microsoft.Todos')
         $script:warnings.Count | Should -Be 1
         $script:warnings[0] | Should -BeLike '*z obrazu Microsoft.Todos*Odmowa*'
+    }
+
+    It 'warns when the image cannot be read and still removes the installed apps' {
+        Mock Get-AppxProvisionedPackage { throw 'DISM jest zajęty.' }
+        Remove-WmAppxPackages -Patterns @('Microsoft.BingNews', 'Microsoft.Todos')
+        $script:apps.Count | Should -Be 0
+        $script:warnings.Count | Should -Be 1
+        $script:warnings[0] | Should -BeLike '*odczytać*DISM*'
     }
 }

@@ -41,7 +41,7 @@ changing anything.
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks |
 | `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
-| `tests\` | Pester tests (list parser, management source checks), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
+| `tests\` | Pester tests (list parser, management source checks, app removal), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
