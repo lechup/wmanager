@@ -51,6 +51,40 @@ function Remove-WmAppxPackages {
     }
 }
 
+# Windows Update installs some apps again after setup: updaters under UScheduler_Oobe (run by usoclient.exe)
+# brought DevHome back about a minute after it was removed (build 26300). The updater of an app on the
+# RemoveAppx list is removed; its values go to the undo journal first, so Restore-Backup.ps1 brings it back.
+$script:WmUSchedulerOobeKey = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe'
+$script:WmAppReinstallUpdaters = [ordered]@{
+    'DevHomeUpdate' = 'Microsoft.Windows.DevHome'
+    'OutlookUpdate' = 'Microsoft.OutlookForWindows'
+}
+
+function Disable-WmAppReinstall {
+    param([string[]]$Patterns)
+    $Patterns = @($Patterns | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    foreach ($updater in $script:WmAppReinstallUpdaters.Keys) {
+        $app = $script:WmAppReinstallUpdaters[$updater]
+        if (-not ($Patterns | Where-Object { $app -like $_ })) { continue }
+        $path = "$script:WmUSchedulerOobeKey\$updater"
+        $k = Open-WmRegKey -Path $path
+        if (-not $k) { continue }
+        try { $names = @($k.GetValueNames()); $subKeys = $k.SubKeyCount } finally { $k.Close() }
+        if ($subKeys -gt 0) {
+            # the journal holds values, not subkeys: without a full record the key stays
+            Write-WmLog "Pomijam $path : ma podklucze, których przywracanie by nie odtworzyło" -Level warn
+            continue
+        }
+        foreach ($name in $names) { Add-WmJournalEntry -Path $path -Name $name }
+        try {
+            Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+            Write-WmLog "Windows Update nie zainstaluje ponownie $app (usunięto $updater)"
+        } catch {
+            Write-WmLog "Nie udało się usunąć $path : $($_.Exception.Message)" -Level warn
+        }
+    }
+}
+
 # Whether a package is still in the system image; when that can't be checked, it counts as still there.
 function Test-WmProvisioned {
     param([Parameter(Mandatory = $true)][string]$PackageName)
@@ -194,7 +228,11 @@ function Invoke-WmDebloat {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     $d = Get-WmSetting $Config 'Debloat' @{}
     Write-WmLog '--- Debloat ---'
-    if ($d.RemoveApps) { Remove-WmAppxPackages -Patterns (Get-WmSetting $Config 'RemoveAppx' @()) }
+    if ($d.RemoveApps) {
+        $patterns = Get-WmSetting $Config 'RemoveAppx' @()
+        Disable-WmAppReinstall -Patterns $patterns   # first, so Windows Update can't put an app back in between
+        Remove-WmAppxPackages -Patterns $patterns
+    }
     if ($d.OneDrive)   { Remove-WmOneDrive }
     if ($d.Policies)   { Set-WmDebloatPolicies }
     if ($d.Edge)       { Set-WmEdgePolicies }

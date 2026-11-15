@@ -17,6 +17,7 @@ $script:WmOemAssocFile = Join-Path $env:SystemRoot 'System32\OEMDefaultAssociati
 $script:WmBackupMachineKeys = @(
     'HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft'
     'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications'
+    'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe'
     'HKEY_LOCAL_MACHINE\SOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}'
     'HKEY_LOCAL_MACHINE\SOFTWARE\Classes\WOW6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}'
     'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\DiagTrack'
