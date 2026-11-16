@@ -178,7 +178,9 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
 
 ## Computer groups
 
-Optional. A **management source** is a folder you keep in a private repository (or on an HTTPS server or a share).
+Optional. A **management source** is a signed folder of plain files that computers download from an `https://` address
+(your own web server, a private Git repository), a network share or a local folder (see
+[Where to keep the source](#where-to-keep-the-source)).
 It holds the common package list, the map of computers to groups, and each group's own packages, scripts and jobs.
 Every computer checks it at provisioning and in each scheduled update (the hourly job run at most once a day):
 
@@ -255,15 +257,33 @@ Otherwise the new version is rejected (an error in the log) and the last verifie
 `C:\ProgramData\wmanager\state\managed` (Administrators and SYSTEM only), is used. If the source can't be reached,
 the copy is used too (a warning).
 
-Someone who can push to the repository but doesn't have the signing key can't add or change code. They can still:
-serve an older signed version to a computer that has none yet (a new or re-provisioned one), and keep computers on the
-version they already have by withholding newer ones. So keep write access to the repository tight anyway, and when you
-remove a dangerous script, check new computers after provisioning.
+Someone who can change the files at the source (push to the repository, write to the server or the share) but doesn't
+have the signing key can't add or change code. They can still: serve an older signed version to a computer that has
+none yet (a new or re-provisioned one), and keep computers on the version they already have by withholding newer ones.
+So keep write access to the source tight anyway, and when you remove a dangerous script, check new computers after
+provisioning.
 
 Windows accepts a self-signed signature only from a certificate in the computer's trusted root store, so provisioning
 adds the wmanager certificate to **LocalMachine\Root** (with the friendly name `wmanager-signing`). The certificate is
 limited to code signing and is not a CA, so it can't vouch for websites or other certificates; but anything signed with
 its key is trusted on the computer, so guard the key. A new certificate in the config replaces the old one at the next run.
+
+### Where to keep the source
+
+A computer reads `<Source>/manifest.psd1`, then every file the manifest lists as `<Source>/<path>`. Anything that
+serves files as they are works; no directory listing, API or Git on the server is needed. `Management.Source` can be:
+
+| `Source` | Login | Notes |
+| --- | --- | --- |
+| `https://files.example.com/wmanager` (your own web server: nginx, IIS...) | optional: `Management.AuthHeader` is sent as the `Authorization` header, e.g. `Basic d21hbmFnZXI6...` for basic auth (`printf 'user:password' \| base64`) or `Bearer ...` | copy the folder there after each `publish.sh`, `manifest.psd1` last |
+| `https://raw.githubusercontent.com/<owner>/<repo>/main` (a private GitHub repository) | `token github_pat_...`, a fine-grained token with **Contents: read-only** for this one repository | `git push` after each `publish.sh`; GitHub's cache delays new files by a few minutes |
+| `\\server\share\wmanager` | none: the tasks run as SYSTEM, which reaches a share as the computer account | works in a domain, not in a workgroup (use HTTPS there) |
+| `C:\wm-source` | none | for tests |
+
+Not supported: plain `http://`, and a token in the address itself (`?sig=...`, presigned links): the file path is added
+at the end of the address, so only a fixed login in the header works. Cloud storage that needs a signature per request
+or in the address (S3, Azure Blob with SAS) doesn't fit either; a publicly readable bucket works, but then anyone can
+read the source (computer names, scripts).
 
 ### Setting up (once)
 
@@ -272,14 +292,15 @@ On Linux (needs `openssl`, `osslsigncode`: `sudo apt install osslsigncode`):
 1. `tools/new-signing-cert.sh`: creates `~/.wmanager-signing/` with `key.pem` (protected with a passphrase),
    `cert.pem` and `wmanager-signing.cer`. Back up the key and the passphrase; without them you can't sign changes,
    and a new key means a new certificate on every computer.
-2. Create a **private** repository and copy `examples/management/` into it, including `.gitattributes`
-   (`* -text`: git must not change line endings, or the hashes and the signature stop matching). Large files can't go
-   through Git LFS (the repository would hold a pointer instead of the file).
-3. Edit `groups.psd1`, `choco-reqs.txt` and the groups, then sign and push (see below). The first `publish.sh` creates
-   `source-id.txt` and prints the identifier.
-4. In `provision.config.psd1` set `Management`: `Source` (e.g.
-   `https://raw.githubusercontent.com/<owner>/<repo>/main`), `SourceId` (from step 3), `AuthHeader` (e.g.
-   `token github_pat_...`: a fine-grained token for this one repository with **Contents: read-only**), and put
+2. Copy `examples/management/` to a folder of its own. In a Git repository (keep it **private**) keep its
+   `.gitattributes` (`* -text`: git must not change line endings, or the hashes and the signature stop matching);
+   large files can't go through Git LFS (the repository would hold a pointer instead of the file). A plain folder that
+   you copy to a web server or a share needs neither.
+3. Edit `groups.psd1`, `choco-reqs.txt` and the groups, then sign and publish (see below). The first `publish.sh`
+   creates `source-id.txt` and prints the identifier.
+4. In `provision.config.psd1` set `Management`: `Source` (the address or path from
+   [Where to keep the source](#where-to-keep-the-source)), `SourceId` (from step 3), `AuthHeader` if the server
+   needs a login (e.g. `token github_pat_...`), and put
    `wmanager-signing.cer` next to `provision.config.psd1`. The wizard (`init.cmd` / `pwsh ./init.ps1`) does this:
    it fetches the manifest, offers its identifier, checks the signature with the certificate (on Windows) and copies
    the certificate next to the configuration.
@@ -287,12 +308,17 @@ On Linux (needs `openssl`, `osslsigncode`: `sudo apt install osslsigncode`):
 ### Making a change
 
 ```bash
-# edit files in the management repository, then:
-tools/publish.sh ~/path/to/management-repo     # asks for the key passphrase
-cd ~/path/to/management-repo && git add -A && git commit -m "..." && git push
+# edit files in the management folder, then:
+tools/publish.sh ~/path/to/management     # asks for the key passphrase
+# in a Git repository:
+cd ~/path/to/management && git add -A && git commit -m "..." && git push
+# or on a web server or a share: copy the folder, manifest.psd1 last, e.g.
+rsync -a --exclude manifest.psd1 --exclude '.*' ~/path/to/management/ server:/var/www/wmanager/ &&
+    rsync -a ~/path/to/management/manifest.psd1 server:/var/www/wmanager/
 ```
 
-`publish.sh` takes the files git will push (tracked ones and new ones that aren't ignored), checks their names
+In a Git repository `publish.sh` takes the files git will push (tracked ones and new ones that aren't ignored); in a
+plain folder, every file except hidden ones. It checks their names
 (letters, digits, `.`, `-`, `_`), refuses links, Git LFS files and a repository without `* -text`, warns about scripts
 without a BOM, writes the manifest with a new `Serial` and signs it. It doesn't check PowerShell syntax: an invalid
 `groups.psd1` or list is rejected by the computers (the previous version keeps working, and the error shows in the log,
@@ -302,11 +328,10 @@ Notes:
 
 - GitHub serves raw files through a cache for a few minutes. A computer that catches the new manifest with an old
   file rejects that version (hash mismatch) and uses it at the next run. Wait a few minutes after pushing before
-  provisioning a computer.
+  provisioning a computer. On your own server the same happens if `manifest.psd1` arrives before the files, hence
+  "manifest last".
 - The token is stored on every computer (readable only by administrators) and must not expire before you update the
-  config on all of them; give it a long expiry and only read access to this one repository.
-- A share (`\\server\share\...`) is read as SYSTEM, i.e. with the computer account: it works in a domain, not in a
-  workgroup. For a workgroup use HTTPS.
+  config on all of them; give it a long expiry and only read access to the source.
 - The certificate is valid for 10 years. A signature without a timestamp stops being valid when the certificate expires
   (then computers reject the source, also their saved copy); `WM_TSA=<url> tools/publish.sh ...` adds an RFC 3161
   timestamp, which keeps it valid. Replace the certificate before it expires: `publish.sh` and the computers warn

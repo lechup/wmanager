@@ -57,7 +57,7 @@
     'init.groups_off_enter'         = '(Enter = bez skupin)'
     'init.source'                   = 'Zdroj: adresa https:// složky nebo úplná cesta {0}'
     'init.source_hint'              = 'Zadejte adresu https:// nebo úplnou cestu ke složce.'
-    'init.auth_header'              = 'Hlavička Authorization pro soukromý repozitář, např. token github_pat_... (Enter = žádná)'
+    'init.auth_header'              = 'Hlavička Authorization, pokud server vyžaduje přihlášení, např. token github_pat_... nebo Bearer ... (Enter = žádná)'
     'init.auth_header_keep'         = 'Hlavička Authorization (Enter = beze změny, - = žádná)'
     'init.cert_file'                = 'Soubor podpisového certifikátu (wmanager-signing.cer z tools/new-signing-cert.sh)'
     'init.cert_file_hint'           = 'Takový soubor neexistuje.'

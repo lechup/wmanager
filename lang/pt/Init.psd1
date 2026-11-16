@@ -57,7 +57,7 @@
     'init.groups_off_enter'         = '(Enter = sem grupos)'
     'init.source'                   = 'Origem: o endereço https:// de uma pasta ou um caminho completo {0}'
     'init.source_hint'              = 'Indique um endereço https:// ou o caminho completo de uma pasta.'
-    'init.auth_header'              = 'Cabeçalho Authorization para um repositório privado, p. ex. token github_pat_... (Enter = nenhum)'
+    'init.auth_header'              = 'Cabeçalho Authorization, se o servidor exigir início de sessão, p. ex. token github_pat_... ou Bearer ... (Enter = nenhum)'
     'init.auth_header_keep'         = 'Cabeçalho Authorization (Enter = sem alteração, - = nenhum)'
     'init.cert_file'                = 'Ficheiro do certificado de assinatura (wmanager-signing.cer do tools/new-signing-cert.sh)'
     'init.cert_file_hint'           = 'Esse ficheiro não existe.'

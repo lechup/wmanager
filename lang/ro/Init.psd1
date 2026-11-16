@@ -57,7 +57,7 @@
     'init.groups_off_enter'         = '(Enter = fără grupuri)'
     'init.source'                   = 'Sursa: adresa https:// a unui folder sau o cale completă {0}'
     'init.source_hint'              = 'Introduceți o adresă https:// sau calea completă a unui folder.'
-    'init.auth_header'              = 'Antetul Authorization pentru un depozit privat, de ex. token github_pat_... (Enter = niciunul)'
+    'init.auth_header'              = 'Antetul Authorization, dacă serverul cere autentificare, de ex. token github_pat_... sau Bearer ... (Enter = niciunul)'
     'init.auth_header_keep'         = 'Antetul Authorization (Enter = fără modificări, - = niciunul)'
     'init.cert_file'                = 'Fișierul certificatului de semnare (wmanager-signing.cer din tools/new-signing-cert.sh)'
     'init.cert_file_hint'           = 'Nu există un astfel de fișier.'
