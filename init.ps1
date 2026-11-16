@@ -52,8 +52,10 @@ function Read-Secret {
     param([string]$Prompt)
     $redirected = $true
     try { $redirected = [Console]::IsInputRedirected } catch { }
-    if ($redirected) { $a = Read-Host $Prompt }
-    else { $a = [Net.NetworkCredential]::new('', (Read-Host $Prompt -AsSecureString)).Password }
+    if ($redirected) {
+        $a = Read-Host $Prompt
+        if ($null -eq $a -and ++$script:EmptyReads -gt 3) { throw 'Brak odpowiedzi; kreator przerwany.' }
+    } else { $a = [Net.NetworkCredential]::new('', (Read-Host $Prompt -AsSecureString)).Password }
     return ([string]$a).Trim()
 }
 
@@ -81,12 +83,26 @@ Write-Host 'wmanager: kreator konfiguracji' -ForegroundColor Cyan
 Write-Host "Zapisze: $ConfigPath"
 Write-Host 'Enter przyjmuje wartość w nawiasie. Tokeny i klucze nie są wyświetlane przy wpisywaniu.'
 
+# The settings the wizard writes; it changes them in place, so they must be in the file, one per line
+$names = @('UpdateTime', 'UpdateDays', 'LokiUrl', 'LokiUser', 'LokiToken', 'HealthchecksPingKey', 'HealthchecksSlugPrefix',
+           'Source', 'SourceId', 'AuthHeader', 'Certificate')
 $base = $example
 if (Test-Path -LiteralPath $ConfigPath) {
     if (Read-YesNo 'Ten plik już istnieje. Zmienić jego ustawienia (n = zacząć od pliku przykładowego)?' $true) { $base = $ConfigPath }
 }
-$text = [IO.File]::ReadAllText($base)
 $script:cur = Import-PowerShellDataFile -LiteralPath $base
+$text = [IO.File]::ReadAllText($base)
+$missing = @(Get-WmConfigTextProblems -Text $text -Names $names)
+if ($missing.Count -gt 0 -and $base -ne $example) {
+    # e.g. a file from before computer groups: start from the example, keeping these answers as the defaults
+    Write-Problem "w tym pliku brakuje ustawień albo są zapisane w kilku liniach: $($missing -join ', ')."
+    if (-not (Read-YesNo 'Zacząć od pliku przykładowego? Odpowiedzi z obecnego pliku będą domyślne; inne własne zmiany przeniesiesz ręcznie ze starego pliku (zostanie jako .bak).' $true)) {
+        throw 'Przerwano: dopisz brakujące ustawienia (wzór: provision.config.example.psd1) albo zacznij od pliku przykładowego.'
+    }
+    $text = [IO.File]::ReadAllText($example)
+    $missing = @(Get-WmConfigTextProblems -Text $text -Names $names)
+}
+if ($missing.Count -gt 0) { throw "Plik przykładowy nie ma ustawień: $($missing -join ', ')." }
 $management = Get-Current 'Management' @{}
 if (-not ($management -is [hashtable])) { $management = @{} }
 
@@ -127,15 +143,15 @@ $text = Set-WmConfigText $text 'LokiToken' (ConvertTo-WmPsdString $lokiToken)
 
 # --- 3. Healthchecks --------------------------------------------------------------------------------------------
 Write-Section 'Healthchecks.io: alarm, gdy komputer przestanie się aktualizować (opcjonalnie)'
-$pingKey = [string](Get-Current 'HealthchecksPingKey')
-$prompt = if ($pingKey) { 'Ping key projektu (Enter = bez zmian, - = bez Healthchecks)' } else { 'Ping key projektu (Enter = bez Healthchecks)' }
-do {
+$savedKey = [string](Get-Current 'HealthchecksPingKey')
+$prompt = if ($savedKey) { 'Ping key projektu (Enter = bez zmian, - = bez Healthchecks)' } else { 'Ping key projektu (Enter = bez Healthchecks)' }
+while ($true) {
     $k = Read-Secret $prompt
     if ($k -eq '-') { $pingKey = ''; break }
-    if ($k) { $pingKey = $k }
-    $okKey = (-not $pingKey) -or (Test-WmPingKey $pingKey)
-    if (-not $okKey) { Write-Problem 'Ping key ma 22 znaki (litery, cyfry, - i _).'; $pingKey = '' }
-} while (-not $okKey)
+    if (-not $k) { $pingKey = $savedKey; break }   # a mistyped key before doesn't throw the saved one away
+    if (Test-WmPingKey $k) { $pingKey = $k; break }
+    Write-Problem 'Ping key ma 22 znaki (litery, cyfry, - i _).'
+}
 $prefix = [string](Get-Current 'HealthchecksSlugPrefix')
 if ($pingKey) {
     $prefix = Read-Answer 'Przedrostek nazw checków, np. wm- (Enter = bez)' $prefix { $args[0] -match '^[A-Za-z0-9_-]*$' } 'Tylko litery, cyfry, - i _.'
@@ -169,11 +185,16 @@ if ($source -and $source -ne '-') {
 
     $certDest = Join-Path $configDir $certName
     $certDefault = if (Test-Path -LiteralPath $certDest) { $certDest } else { '' }
-    $certPath = Read-Answer 'Plik certyfikatu podpisu (wmanager-signing.cer z tools/new-signing-cert.sh)' $certDefault `
-        { $args[0] -and (Test-Path -LiteralPath $args[0] -PathType Leaf) } 'Nie ma takiego pliku.'
-    $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList ([IO.Path]::GetFullPath($certPath))
+    do {
+        $certPath = Read-Answer 'Plik certyfikatu podpisu (wmanager-signing.cer z tools/new-signing-cert.sh)' $certDefault `
+            { $args[0] -and (Test-Path -LiteralPath $args[0] -PathType Leaf) } 'Nie ma takiego pliku.'
+        $certPath = (Resolve-Path -LiteralPath $certPath).ProviderPath   # also ~ and relative paths
+        $cert = Import-WmCertificateFile $certPath
+        $problem = if ($cert) { Get-WmSigningCertificateProblem $cert } else { 'to nie jest plik certyfikatu (.cer)' }
+        if ($problem) { Write-Problem $problem; $certDefault = '' }
+    } while ($problem)
     Write-Host "  Certyfikat: $($cert.Subject), odcisk $($cert.Thumbprint), ważny do $($cert.NotAfter.ToString('yyyy-MM-dd'))"
-    if ([IO.Path]::GetFullPath($certPath) -ne [IO.Path]::GetFullPath($certDest)) { $certCopy = [IO.Path]::GetFullPath($certPath) }
+    if ($certPath -ne [IO.Path]::GetFullPath($certDest)) { $certCopy = $certPath }
 
     $manifest = $null; $manifestId = ''; $signer = $null
     if ($source -notmatch '^https://' -and -not $script:WmIsWindows) {
@@ -184,7 +205,7 @@ if ($source -and $source -ne '-') {
         $data = Import-PowerShellDataFile -LiteralPath $manifest
         $manifestId = [string]$data.SourceId
         Write-Ok "manifest $($data.Serial), plików: $(@($data.Files.Keys).Count), identyfikator źródła $manifestId"
-        $signer = Test-WmManifestSigner -ManifestPath $manifest -CertificatePath ([IO.Path]::GetFullPath($certPath))
+        $signer = Test-WmManifestSigner -ManifestPath $manifest -CertificatePath $certPath
         if ($signer -eq 'ok') { Write-Ok 'manifest jest podpisany tym certyfikatem.' }
         elseif ($signer -eq 'skipped') { Write-Host '  Podpisu nie sprawdzam (Authenticode jest tylko w Windows); sprawdzi go komputer przy provisioningu.' }
         else { Write-Problem $signer }
@@ -195,8 +216,13 @@ if ($source -and $source -ne '-') {
     } }
     $unchecked = $manifestId -eq '-'
     if ($unchecked) { $manifestId = '' }
-    $idDefault = [string]$management.SourceId
-    if (-not $idDefault) { $idDefault = $manifestId }
+    # The identifier of the manifest just fetched; the saved one only when the source couldn't be read.
+    # The same source with another identifier than saved means it was replaced: say so.
+    $savedId = [string]$management.SourceId
+    $idDefault = if ($manifestId) { $manifestId } else { $savedId }
+    if ($manifestId -and $savedId -and $manifestId -ne $savedId -and $source -eq [string]$management.Source) {
+        Write-Problem "to samo źródło ma teraz inny identyfikator niż zapisany ($savedId); upewnij się, że nikt go nie podmienił."
+    }
     $sourceId = Read-Answer 'Identyfikator źródła (source-id.txt, wypisał go tools/publish.sh)' $idDefault { Test-WmSourceId $args[0] } `
         '8-64 znaki: litery, cyfry, . - _'
     if ($manifestId -and $sourceId -ne $manifestId) { Write-Problem "manifest ma inny identyfikator ($manifestId): komputer go odrzuci." }
@@ -212,13 +238,17 @@ $text = Set-WmConfigText $text 'Certificate' (ConvertTo-WmPsdString $certName)
 
 # --- Saving -----------------------------------------------------------------------------------------------------
 Write-Section 'Zapis'
+# The new file must be a valid data file before it replaces the old one
+$new = "$ConfigPath.new"
+Write-WmConfigFile -Path $new -Text $text
+try { $null = Import-PowerShellDataFile -LiteralPath $new }
+catch { Remove-Item -LiteralPath $new -Force; throw "Nowa konfiguracja jest niepoprawna, nic nie zmieniłem: $($_.Exception.Message)" }
 if (Test-Path -LiteralPath $ConfigPath) {
     $backup = '{0}.bak-{1}' -f $ConfigPath, (Get-Date -Format 'yyyyMMddHHmmss')
     Copy-Item -LiteralPath $ConfigPath -Destination $backup
     Write-Host "  Poprzedni plik: $backup"
 }
-Write-WmConfigFile -Path $ConfigPath -Text $text
-$null = Import-PowerShellDataFile -LiteralPath $ConfigPath   # the result must stay a valid data file
+Move-Item -LiteralPath $new -Destination $ConfigPath -Force
 if ($certCopy) {
     Copy-Item -LiteralPath $certCopy -Destination (Join-Path $configDir $certName) -Force
     Write-Host "  Certyfikat skopiowany obok konfiguracji: $certName"
