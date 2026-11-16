@@ -52,11 +52,6 @@ Initialize-WmLanguage -Lang $Lang
 # Helper steps
 # ---------------------------------------------------------------------------
 
-function Test-WmComputerName {
-    param([string]$Name)
-    # NetBIOS: 1-15 characters, letters/digits/hyphen, not all digits, no hyphen at the start or end
-    return ($Name -match '^(?![0-9]+$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?$')
-}
 
 function Resolve-WmComputerName {
     param([string]$Requested, [bool]$Prompt)

@@ -74,7 +74,7 @@ changing anything.
 | `choco-reqs.txt` | Package list (when there is no management source) |
 | `lang\<code>\*.psd1` | Messages in each language (see [Languages](#languages)) |
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks, the configuration wizard |
-| `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
+| `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts and jobs; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
 | `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
@@ -307,8 +307,36 @@ On Linux (needs `openssl`, `osslsigncode`: `sudo apt install osslsigncode`):
 
 ### Making a change
 
+Edit the files by hand, or let `tools/groups.ps1` do it (PowerShell 7, `pwsh`, on Linux or macOS; Windows PowerShell
+5.1 works too). It reads the source with the same code as the computers, and its edits change one entry and keep the
+rest of each file as it is (comments, order, BOM, line endings):
+
 ```bash
-# edit files in the management folder, then:
+src=~/path/to/management
+pwsh tools/groups.ps1 $src show                              # groups, computers, how many packages, scripts and jobs
+pwsh tools/groups.ps1 $src show OFFICE-03                    # what that computer gets, and which entry wins
+pwsh tools/groups.ps1 $src add-computer OFFICE-03 accounting floor-1
+pwsh tools/groups.ps1 $src remove-computer OFFICE-03 floor-1 # without groups: out of groups.psd1 altogether
+pwsh tools/groups.ps1 $src add-package accounting 'adobereader !noupdate'   # or replaces the line of that package
+pwsh tools/groups.ps1 $src add-package common '7zip@24.8.0'
+pwsh tools/groups.ps1 $src remove-package floor-1 vlc
+pwsh tools/groups.ps1 $src new-script accounting printers    # groups/accounting/scripts/20-printers.ps1
+pwsh tools/groups.ps1 $src new-job all weekly cleanup        # groups/all/jobs/weekly/cleanup.ps1
+pwsh tools/groups.ps1 $src check
+```
+
+Quote package lines with `' '` (in bash `!` inside `" "` is history expansion). New scripts and jobs come from a
+template, as UTF-8 with BOM and CRLF, and scripts are numbered in tens after the last one (they run in name order).
+`check` reports what the computers would reject: a `groups.psd1` or package list that doesn't parse, a script with a
+syntax error, a file name they don't accept. It also warns about what they would ignore or do differently than you
+might expect: a group without a folder, a folder no computer uses, scripts and jobs in the wrong folder, a script
+with non-ASCII characters and no BOM, a package two groups of one computer describe differently. Scripts are parsed
+by the PowerShell you run it with; PowerShell 7 accepts some syntax (e.g. `??`, `? :`) that 5.1 on the computers
+doesn't.
+
+Then sign and publish:
+
+```bash
 tools/publish.sh ~/path/to/management     # asks for the key passphrase
 # in a Git repository:
 cd ~/path/to/management && git add -A && git commit -m "..." && git push
@@ -318,11 +346,10 @@ rsync -a --exclude manifest.psd1 --exclude '.*' ~/path/to/management/ server:/va
 ```
 
 In a Git repository `publish.sh` takes the files git will push (tracked ones and new ones that aren't ignored); in a
-plain folder, every file except hidden ones. It checks their names
-(letters, digits, `.`, `-`, `_`), refuses links, Git LFS files and a repository without `* -text`, warns about scripts
-without a BOM, writes the manifest with a new `Serial` and signs it. It doesn't check PowerShell syntax: an invalid
-`groups.psd1` or list is rejected by the computers (the previous version keeps working, and the error shows in the log,
-Loki and Healthchecks).
+plain folder, every file except hidden ones. It runs `tools/groups.ps1 check` on exactly these files and doesn't sign
+a source with errors (without `pwsh` it warns and checks only file names and BOMs). It checks the names (letters,
+digits, `.`, `-`, `_`), refuses links, Git LFS files and a repository without `* -text`, writes the manifest with a new
+`Serial` and signs it.
 
 Notes:
 
