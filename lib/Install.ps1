@@ -8,7 +8,8 @@
 param(
     [string]$Folder,
     [string]$ComputerName,
-    [string]$Config
+    [string]$Config,
+    [string]$Lang
 )
 
 # A path pasted from Explorer ("Copy as path") comes in quotes.
@@ -34,18 +35,18 @@ function Get-WmSiblingLocation {
 # settings are checked by the same functions provisioning uses (lib\Common.ps1).
 function Copy-WmConfiguration {
     param([Parameter(Mandatory = $true)][string]$Location, [string]$AuthHeader, [Parameter(Mandatory = $true)][string]$Folder)
-    if ($Location -match '^[A-Za-z][A-Za-z0-9+.-]*://' -and $Location -notmatch '^https://') { throw "Konfiguracja: tylko adres https:// ('$Location')." }
+    if ($Location -match '^[A-Za-z][A-Za-z0-9+.-]*://' -and $Location -notmatch '^https://') { throw (New-WmError 'install.config_https_only' @($Location)) }
     $file = Join-Path $Folder 'provision.config.psd1'
     Get-WmRemoteFile -Location $Location -Destination $file -AuthHeader $AuthHeader
     # -ErrorAction Stop: with the default preference a broken file is only an error message
     $why = ''
-    try { $cfg = Import-PowerShellDataFile -LiteralPath $file -ErrorAction Stop } catch { $cfg = $null; $why = $_.Exception.Message }
-    if (-not ($cfg -is [hashtable])) { throw "Pobrany plik nie jest poprawną konfiguracją wmanagera: $why" }
+    try { $cfg = Import-PowerShellDataFile -LiteralPath $file -ErrorAction Stop } catch { $cfg = $null; $why = Get-WmErrorText $_ }
+    if (-not ($cfg -is [hashtable])) { throw (New-WmError 'install.config_invalid' @($why)) }
     $cert = Get-WmCertificateFileName $cfg   # $null without a management source; throws on a bad one
     if ($cert) {
         $from = Get-WmSiblingLocation -Location $Location -Name $cert
         try { Get-WmRemoteFile -Location $from -Destination (Join-Path $Folder $cert) -AuthHeader $AuthHeader }
-        catch { throw "Konfiguracja ma źródło grup, ale obok niej nie ma certyfikatu $cert ($from): $($_.Exception.Message)" }
+        catch { throw (New-WmError 'install.config_cert_missing' @($cert, $from, (Get-WmErrorText $_))) }
     }
 }
 
@@ -53,6 +54,7 @@ if (-not $Folder) { return }
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $Folder 'lib\Common.ps1')
+Initialize-WmLanguage -Lang $Lang   # install.ps1 passes its -Lang in WMANAGER_LANG, which provisioning inherits too
 # Taken over and removed at once: provisioning, Chocolatey, package scripts and group scripts must not inherit them
 $auth = [string]$env:WM_INSTALL_AUTH
 if (-not $Config) { $Config = [string]$env:WM_INSTALL_CONFIG }
@@ -65,27 +67,27 @@ for ($try = 1; ; $try++) {
     try {
         if ($asked) {
             Write-Host ''
-            Write-Host 'Plik konfiguracji (provision.config.psd1 z init.cmd): ścieżka, np. E:\provision.config.psd1 albo'
-            Write-Host '\\serwer\udział\wmanager\provision.config.psd1, albo adres https://. Enter = konfiguracja przykładowa'
-            Write-Host '(bez Loki, Healthchecks i grup).'
-            $Config = [string](Read-Host 'Konfiguracja')
+            Write-Host (Get-WmText 'install.config_question')
+            Write-Host (Get-WmText 'install.config_question_more')
+            Write-Host (Get-WmText 'install.config_question_enter')
+            $Config = [string](Read-Host (Get-WmText 'install.config_prompt'))
         }
         $Config = ConvertFrom-WmPastedPath $Config
         if ($Config -and $Config -ne '-') {
             if ($Config -match '^https://' -and -not $auth) {
-                $ss = Read-Host 'Nagłówek Authorization, np. token github_pat_... (Enter = bez)' -AsSecureString
+                $ss = Read-Host (Get-WmText 'install.auth_header') -AsSecureString
                 $auth = ([Net.NetworkCredential]::new('', $ss).Password).Trim()
             }
             Copy-WmConfiguration -Location $Config -AuthHeader $auth -Folder $Folder
-            Write-Host '  Konfiguracja pobrana.'
+            Write-Host ('  ' + (Get-WmText 'install.config_fetched'))
         } else {
-            Write-Host '  Bez pliku konfiguracji: provisioning użyje przykładowej.'
+            Write-Host ('  ' + (Get-WmText 'install.config_example'))
         }
         break
     } catch {
-        Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  $(Format-WmErrorText $_)" -ForegroundColor Red
         if (-not $asked -or $try -ge 3) {
-            Write-Host 'Instalacja przerwana.' -ForegroundColor Red
+            Write-Host (Get-WmText 'install.stopped') -ForegroundColor Red
             exit 90
         }
         $auth = ''   # a wrong header may be the reason: ask for it again with the next address

@@ -9,6 +9,7 @@ BeforeAll {
     . (Join-Path $root 'install.ps1')
     . (Join-Path $root 'lib\Common.ps1')
     . (Join-Path $root 'lib\Install.ps1')   # without -Folder it only defines its functions
+    Initialize-WmLanguage -Lang 'en' -Root $root   # English messages, whatever the language of the computer
 }
 
 Describe 'Get-WmZipName' {
@@ -38,9 +39,9 @@ Describe 'Assert-WmSha256' {
 
     It 'refuses a changed file and a list without the file' {
         Set-Content -LiteralPath $script:sums -Value "$('a' * 64)  wmanager-v0.1.0.zip"
-        { Assert-WmSha256 -File $script:file -SumsFile $script:sums } | Should -Throw '*nie zgadza*'
+        { Assert-WmSha256 -File $script:file -SumsFile $script:sums } | Should -Throw '*does not match*'
         Set-Content -LiteralPath $script:sums -Value "$($script:hash)  other.zip"
-        { Assert-WmSha256 -File $script:file -SumsFile $script:sums } | Should -Throw '*nie zawiera*'
+        { Assert-WmSha256 -File $script:file -SumsFile $script:sums } | Should -Throw '*no checksum*'
     }
 }
 
@@ -89,15 +90,15 @@ Describe 'Copy-WmConfiguration' {
     It 'refuses what provisioning would refuse: a certificate path, a bad source identifier' {
         Set-Content -LiteralPath $script:cfg -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'abcdefgh'; Certificate = '..\x.cer' } }"
         { Copy-WmConfiguration -Location $script:cfg -Folder $script:dst } | Should -Throw '*Certificate*'
-        Set-Content -LiteralPath $script:cfg -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'zle id' } }"
+        Set-Content -LiteralPath $script:cfg -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'bad id' } }"
         { Copy-WmConfiguration -Location $script:cfg -Folder $script:dst } | Should -Throw '*SourceId*'
     }
 
     It 'stops on a missing certificate, a file that is not a configuration and a plain http address' {
         Set-Content -LiteralPath $script:cfg -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'abcdefgh' } }"
         { Copy-WmConfiguration -Location $script:cfg -Folder $script:dst } | Should -Throw '*wmanager-signing.cer*'
-        Set-Content -LiteralPath (Join-Path $script:src 'bad.psd1') -Value 'to nie jest konfiguracja ('
-        { Copy-WmConfiguration -Location (Join-Path $script:src 'bad.psd1') -Folder $script:dst } | Should -Throw '*poprawną konfiguracją*'
+        Set-Content -LiteralPath (Join-Path $script:src 'bad.psd1') -Value 'not a configuration ('
+        { Copy-WmConfiguration -Location (Join-Path $script:src 'bad.psd1') -Folder $script:dst } | Should -Throw '*not a valid wmanager configuration*'
         { Copy-WmConfiguration -Location 'http://example/provision.config.psd1' -Folder $script:dst } | Should -Throw '*https*'
     }
 }

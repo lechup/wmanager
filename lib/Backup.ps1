@@ -44,15 +44,19 @@ $script:WmBackupUserKeys = @(
 # HKEY_CURRENT_USER, so that user can import it. Returns a line for manifest.txt.
 function Export-WmRegKey {
     param([Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$File, [string]$HiveRoot)
-    if (-not (Test-Path -LiteralPath "Registry::$Key")) { return "BRAK      $Key" }
+    if (-not (Test-Path -LiteralPath "Registry::$Key")) { return "MISSING   $Key" }
     & reg.exe export $Key $File /y 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { return "BŁĄD      $Key (reg export $LASTEXITCODE)" }
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        Write-WmLog -Key 'backup.reg_export_failed' -Arguments @($Key, $code) -Level warn
+        return "ERROR     $Key (reg export $code)"
+    }
     if ($HiveRoot) {
         $text = [IO.File]::ReadAllText($File)
         $text = [regex]::Replace($text, '(?im)^\[(-?)' + [regex]::Escape($HiveRoot) + '\\', '[${1}HKEY_CURRENT_USER\')
         [IO.File]::WriteAllText($File, $text, [Text.Encoding]::Unicode)
     }
-    return "ZAPISANO  $Key -> $(Split-Path $File -Leaf)"
+    return "SAVED     $Key -> $(Split-Path $File -Leaf)"
 }
 
 # Writes a new backup folder and returns its path. Throws if the app lists can't be saved.
@@ -74,10 +78,10 @@ function Backup-WmState {
     # (dism /Export-DefaultAppAssociations would export the current user's choices instead.)
     if (Test-Path -LiteralPath $script:WmOemAssocFile) {
         Copy-Item -LiteralPath $script:WmOemAssocFile -Destination (Join-Path $dir 'oem-default-associations.xml') -ErrorAction Stop
-        $manifest.Add('ZAPISANO  domyślne aplikacje dla nowych kont -> oem-default-associations.xml')
+        $manifest.Add('SAVED     default apps for new accounts -> oem-default-associations.xml')
     } else {
         [IO.File]::WriteAllText((Join-Path $dir 'oem-default-associations.none'), '')
-        $manifest.Add('BRAK      domyślne aplikacje dla nowych kont (ustawienia Windows) -> oem-default-associations.none')
+        $manifest.Add('MISSING   default apps for new accounts (Windows defaults) -> oem-default-associations.none')
     }
 
     $n = 0
@@ -97,10 +101,9 @@ function Backup-WmState {
             $file = Join-Path $dir ('user-{0}-{1:D2}.reg' -f $label, $m)
             $manifest.Add((Export-WmRegKey -Key "$hive\$k" -File $file -HiveRoot $hive))
         }
-        $manifest.Add("PROFIL    $name -> user-$label-*.reg (SID: $sid)")
+        $manifest.Add("PROFILE   $name -> user-$label-*.reg (SID: $sid)")
     }
     [IO.File]::WriteAllLines((Join-Path $dir 'manifest.txt'), $manifest.ToArray(), (New-Object System.Text.UTF8Encoding($true)))
-    foreach ($line in $manifest) { if ($line -like 'BŁĄD*') { Write-WmLog "Kopia: $line" -Level warn } }
 
     # Keep the first backup (state before the first provisioning) and this one. The first is marked
     # with first.txt rather than found by date: the clock of a new computer may be wrong.
@@ -139,8 +142,8 @@ function Restore-WmDefaultAssociations {
     } else {
         return
     }
-    if ($LASTEXITCODE -eq 0) { Write-WmLog 'Domyślne aplikacje dla nowych kont przywrócone.' }
-    else { Write-WmLog "DISM nie przywrócił domyślnych aplikacji dla nowych kont (kod $LASTEXITCODE): $($out -join ' ')" -Level warn }
+    if ($LASTEXITCODE -eq 0) { Write-WmLog -Key 'backup.default_apps_restored' }
+    else { Write-WmLog -Key 'backup.default_apps_restore_failed' -Arguments @($LASTEXITCODE, ($out -join ' ')) -Level warn }
 }
 
 # ---------------------------------------------------------------------------
@@ -152,11 +155,11 @@ function Restore-WmDefaultAssociations {
 function Read-WmJournal {
     if (-not (Test-Path -LiteralPath $script:WmJournalFile)) { return }
     $owner = (Get-Acl -LiteralPath $script:WmJournalFile).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-    if ($script:WmAdminSids -notcontains $owner) { throw "Dziennik zmian $($script:WmJournalFile) ma obcego właściciela ($owner)." }
+    if ($script:WmAdminSids -notcontains $owner) { throw (New-WmError 'backup.journal_foreign_owner' @($script:WmJournalFile, $owner)) }
     foreach ($line in [IO.File]::ReadAllLines($script:WmJournalFile)) {
         if (-not $line.Trim()) { continue }
         try { ConvertFrom-Json -InputObject $line }
-        catch { Write-WmLog 'Dziennik zmian: pomijam uszkodzoną linię.' -Level warn }
+        catch { Write-WmLog -Key 'backup.journal_bad_line' -Level warn }
     }
 }
 
@@ -232,7 +235,7 @@ function Restore-WmJournalEntry {
         }
         return $true
     } catch {
-        Write-WmLog "Nie udało się przywrócić $keyPath\$($Entry.Name) : $($_.Exception.Message)" -Level warn
+        Write-WmLog -Key 'backup.value_restore_failed' -Arguments @("$keyPath\$($Entry.Name)", (Get-WmErrorText $_)) -Level warn
         return $false
     } finally {
         if ($k) { $k.Close() }

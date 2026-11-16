@@ -6,6 +6,7 @@ BeforeAll {
     $root = Split-Path $PSScriptRoot -Parent
     . (Join-Path $root 'lib\Common.ps1')
     . (Join-Path $root 'lib\Debloat.ps1')
+    Initialize-WmLanguage -Lang 'en'   # the warnings are checked in English
 }
 
 Describe 'Remove-WmAppxPackages' {
@@ -16,7 +17,7 @@ Describe 'Remove-WmAppxPackages' {
         $script:image = [System.Collections.ArrayList]@('Microsoft.BingNews', 'Microsoft.Todos', 'Microsoft.WindowsMaps')
         $script:ops = [System.Collections.ArrayList]@()
         $script:warnings = [System.Collections.ArrayList]@()
-        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } }
+        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($(if ($Key) { Get-WmText -Key $Key -Arguments $Arguments -English } else { $Message })) } }
         Mock Get-AppxPackage {
             $script:apps | Where-Object { $_ -like $Name } |
                 ForEach-Object { [pscustomobject]@{ Name = $_; PackageFullName = "${_}_1.0.0.0_x64__8wekyb3d8bbwe" } }
@@ -33,7 +34,7 @@ Describe 'Remove-WmAppxPackages' {
         }
         Mock Remove-AppxProvisionedPackage {
             $n = ([string]$PackageName).Split('_')[0]
-            if ($n -notin $script:image) { throw 'System nie może odnaleźć określonej ścieżki.' }
+            if ($n -notin $script:image) { throw 'The system cannot find the path specified.' }
             [void]$script:ops.Add("image:$n")
             $script:image.Remove($n)
         }
@@ -62,10 +63,10 @@ Describe 'Remove-WmAppxPackages' {
     }
 
     It 'warns when removing from the image really fails' {
-        Mock Remove-AppxProvisionedPackage { throw 'Odmowa dostępu.' }
+        Mock Remove-AppxProvisionedPackage { throw 'Access is denied.' }
         Remove-WmAppxPackages -Patterns @('Microsoft.Todos')
         $script:warnings.Count | Should -Be 1
-        $script:warnings[0] | Should -BeLike '*z obrazu Microsoft.Todos*Odmowa*'
+        $script:warnings[0] | Should -BeLike '*Microsoft.Todos from the image*Access is denied*'
     }
 
     It 'counts an image entry that disappeared after the list was read as removed' {
@@ -82,11 +83,11 @@ Describe 'Remove-WmAppxPackages' {
     }
 
     It 'warns when the installed apps cannot be read and still cleans the image' {
-        Mock Get-AppxPackage { throw 'Usługa AppX jest niedostępna.' }
+        Mock Get-AppxPackage { throw 'The AppX service is unavailable.' }
         Remove-WmAppxPackages -Patterns @('Microsoft.Todos')
         $script:image | Should -Not -Contain 'Microsoft.Todos'
         $script:warnings.Count | Should -Be 1
-        $script:warnings[0] | Should -BeLike '*zainstalowanych*AppX*'
+        $script:warnings[0] | Should -BeLike '*installed apps*AppX*'
     }
 
     It 'does nothing without patterns' {
@@ -96,11 +97,11 @@ Describe 'Remove-WmAppxPackages' {
     }
 
     It 'warns when the image cannot be read and still removes the installed apps' {
-        Mock Get-AppxProvisionedPackage { throw 'DISM jest zajęty.' }
+        Mock Get-AppxProvisionedPackage { throw 'DISM is busy.' }
         Remove-WmAppxPackages -Patterns @('Microsoft.BingNews', 'Microsoft.Todos')
         $script:apps.Count | Should -Be 0
         $script:warnings.Count | Should -Be 1
-        $script:warnings[0] | Should -BeLike '*odczytać*DISM*'
+        $script:warnings[0] | Should -BeLike '*system image*DISM*'
     }
 }
 
@@ -116,7 +117,7 @@ Describe 'Disable-WmAppReinstall' {
         $script:WmJournalOn = $false   # as in the scheduled update; provisioning turns it on
         $script:WmJournalSeen = @{}
         $script:journalWorks = $true
-        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } }
+        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($(if ($Key) { Get-WmText -Key $Key -Arguments $Arguments -English } else { $Message })) } }
         Mock Open-WmRegKey {
             $leaf = Split-Path $Path -Leaf
             if (-not $script:keys.ContainsKey($leaf)) { return $null }
@@ -193,10 +194,10 @@ Describe 'Disable-WmAppReinstall' {
     }
 
     It 'warns about a key it cannot read and goes on with the next one' {
-        Mock Open-WmRegKey { throw 'Żądany dostęp do rejestru jest niedozwolony.' } -ParameterFilter { $Path -like '*DevHomeUpdate' }
+        Mock Open-WmRegKey { throw 'Requested registry access is not allowed.' } -ParameterFilter { $Path -like '*DevHomeUpdate' }
         Disable-WmAppReinstall -Patterns @('Microsoft.Windows.DevHome', 'Microsoft.OutlookForWindows')
         $script:removed | Should -Be @('OutlookUpdate')
         $script:warnings.Count | Should -Be 1
-        $script:warnings[0] | Should -BeLike '*DevHomeUpdate*niedozwolony*'
+        $script:warnings[0] | Should -BeLike '*DevHomeUpdate*not allowed*'
     }
 }

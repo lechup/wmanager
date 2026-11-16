@@ -29,8 +29,11 @@ Describe 'New-WmUpdateTrigger' {
 }
 
 Describe 'Format-WmUpdateDays' {
-    It 'says codziennie for all seven days, in any order' {
-        Format-WmUpdateDays @('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday') | Should -Be 'codziennie'
+    It 'says every day for all seven days, in any order, in the language of the screen' {
+        $text = Format-WmUpdateDays @('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday')
+        Get-WmText -Key 'test.days' -Arguments @($text) -English | Should -Be '[test.days] every day'
+        Initialize-WmLanguage -Lang 'pl'
+        try { Get-WmText -Key $text.Key | Should -Be 'codziennie' } finally { Initialize-WmLanguage -Lang 'en' }
     }
 
     It 'lists the days otherwise' {

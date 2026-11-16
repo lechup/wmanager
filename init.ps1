@@ -3,42 +3,61 @@
     wmanager: configuration wizard. Writes provision.config.psd1 next to run.cmd.
 
 .DESCRIPTION
-    Asks in Polish for the settings most computers need (update time, Grafana Cloud Loki, Healthchecks.io,
-    the management source of computer groups), checks them (a test line to Loki, an optional test ping, the
-    signed manifest of the source) and writes provision.config.psd1. It starts from the existing file (or from
-    provision.config.example.psd1) and changes only those values, so comments and the other settings stay; the
+    Asks, in the user's language, for the settings most computers need (update time, Grafana Cloud Loki,
+    Healthchecks.io, the management source of computer groups), checks them (a test line to Loki, an optional test
+    ping, the signed manifest of the source) and writes provision.config.psd1. It starts from the existing file (or
+    from provision.config.example.psd1) and changes only those values, so comments and the other settings stay; the
     previous file is kept as provision.config.psd1.bak-<time>. Runs in Windows PowerShell 5.1 and PowerShell 7
     (Windows or Linux); it needs no administrator rights and changes nothing else.
 
 .PARAMETER ConfigPath
     Where to write the configuration. Defaults to provision.config.psd1 next to this script.
 
+.PARAMETER Lang
+    Language of the questions: en, de, fr, es, it, pl, nl, pt, ro, cs. Without it: WMANAGER_LANG, then the display
+    language, then English. Yes/no questions also take y and n.
+
 .EXAMPLE
     .\init.cmd
 .EXAMPLE
-    pwsh ./init.ps1
+    pwsh ./init.ps1 -Lang pl
 #>
 [CmdletBinding()]
-param([string]$ConfigPath)
+param([string]$ConfigPath, [string]$Lang)
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path (Join-Path $PSScriptRoot 'lib') 'Lang.ps1')
 . (Join-Path (Join-Path $PSScriptRoot 'lib') 'Init.ps1')
+Initialize-WmLanguage -Lang $Lang
 if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot 'provision.config.psd1' }
 $ConfigPath = [IO.Path]::GetFullPath($ConfigPath)
 $configDir = Split-Path $ConfigPath -Parent
 $example = Join-Path $PSScriptRoot 'provision.config.example.psd1'
 
+# An error that stops the wizard: the text of New-WmError in the user's language (its message is English);
+# anything else as PowerShell shows it, with where it happened.
+trap {
+    $reason = $null
+    try { $reason = Get-WmErrorText $_ } catch { }
+    if ($null -eq $reason -or $reason -is [string]) { break }
+    Write-Host ''
+    Write-Host (Get-WmText -Key $reason.Key -Arguments $reason.Arguments) -ForegroundColor Red
+    exit 1
+}
+
 # --- Questions ------------------------------------------------------------------------------------------------
 $script:EmptyReads = 0
 
+# $Prompt and $Hint are texts already in the user's language; no $Hint = "invalid answer".
 function Read-Answer {
-    param([string]$Prompt, [string]$Default = '', [scriptblock]$Valid, [string]$Hint = 'Niepoprawna odpowiedź.')
+    param([string]$Prompt, [string]$Default = '', [scriptblock]$Valid, [string]$Hint)
+    if (-not $Hint) { $Hint = Get-WmText 'init.invalid_answer' }
     while ($true) {
         $shown = if ($Default) { "$Prompt [$Default]" } else { $Prompt }
         $a = Read-Host $shown
         if ($null -eq $a) {
             # end of redirected input: don't ask forever
-            if (++$script:EmptyReads -gt 3) { throw 'Brak odpowiedzi; kreator przerwany.' }
+            if (++$script:EmptyReads -gt 3) { throw (New-WmError 'init.no_answer') }
             $a = ''
         }
         $a = $a.Trim()
@@ -54,22 +73,23 @@ function Read-Secret {
     try { $redirected = [Console]::IsInputRedirected } catch { }
     if ($redirected) {
         $a = Read-Host $Prompt
-        if ($null -eq $a -and ++$script:EmptyReads -gt 3) { throw 'Brak odpowiedzi; kreator przerwany.' }
+        if ($null -eq $a -and ++$script:EmptyReads -gt 3) { throw (New-WmError 'init.no_answer') }
     } else { $a = [Net.NetworkCredential]::new('', (Read-Host $Prompt -AsSecureString)).Password }
     return ([string]$a).Trim()
 }
 
+# Yes or no in the user's language; y/yes and n/no always work.
 function Read-YesNo {
     param([string]$Prompt, [bool]$Default)
-    $hint = if ($Default) { '[T/n]' } else { '[t/N]' }
-    $a = Read-Answer "$Prompt $hint" '' { $args[0] -match '^(|t|tak|y|yes|n|nie|no)$' } 'Odpowiedz t albo n.'
+    $hint = if ($Default) { Get-WmText 'common.hint_default_yes' } else { Get-WmText 'common.hint_default_no' }
+    $a = Read-Answer "$Prompt $hint" '' { (-not $args[0]) -or ($null -ne (ConvertFrom-WmYesNo $args[0])) } (Get-WmText 'init.answer_yes_no')
     if (-not $a) { return $Default }
-    return $a -match '^(t|tak|y|yes)$'
+    return ((ConvertFrom-WmYesNo $a) -eq $true)
 }
 
 function Write-Section { param([string]$Title) Write-Host ''; Write-Host "--- $Title ---" -ForegroundColor Cyan }
 function Write-Ok { param([string]$Text) Write-Host "  OK: $Text" -ForegroundColor Green }
-function Write-Problem { param([string]$Text) Write-Host "  Uwaga: $Text" -ForegroundColor Yellow }
+function Write-Problem { param([string]$Text) Write-Host ('  ' + (Get-WmText 'init.warning' @($Text))) -ForegroundColor Yellow }
 
 # A setting of the current configuration (empty when missing).
 function Get-Current {
@@ -79,107 +99,107 @@ function Get-Current {
 }
 
 # --- Start ------------------------------------------------------------------------------------------------------
-Write-Host 'wmanager: kreator konfiguracji' -ForegroundColor Cyan
-Write-Host "Zapisze: $ConfigPath"
-Write-Host 'Enter przyjmuje wartość w nawiasie. Tokeny i klucze nie są wyświetlane przy wpisywaniu.'
+Write-Host (Get-WmText 'init.title') -ForegroundColor Cyan
+Write-Host (Get-WmText 'init.will_write' @($ConfigPath))
+Write-Host (Get-WmText 'init.enter_default')
 
 # The settings the wizard writes; it changes them in place, so they must be in the file, one per line
 $names = @('UpdateTime', 'UpdateDays', 'LokiUrl', 'LokiUser', 'LokiToken', 'HealthchecksPingKey', 'HealthchecksSlugPrefix',
            'Source', 'SourceId', 'AuthHeader', 'Certificate')
 $base = $example
 if (Test-Path -LiteralPath $ConfigPath) {
-    if (Read-YesNo 'Ten plik już istnieje. Zmienić jego ustawienia (n = zacząć od pliku przykładowego)?' $true) { $base = $ConfigPath }
+    if (Read-YesNo (Get-WmText 'init.file_exists') $true) { $base = $ConfigPath }
 }
 $script:cur = Import-PowerShellDataFile -LiteralPath $base
 $text = [IO.File]::ReadAllText($base)
 $missing = @(Get-WmConfigTextProblems -Text $text -Names $names)
 if ($missing.Count -gt 0 -and $base -ne $example) {
     # e.g. a file from before computer groups: start from the example, keeping these answers as the defaults
-    Write-Problem "w tym pliku brakuje ustawień albo są zapisane w kilku liniach: $($missing -join ', ')."
-    if (-not (Read-YesNo 'Zacząć od pliku przykładowego? Odpowiedzi z obecnego pliku będą domyślne; inne własne zmiany przeniesiesz ręcznie ze starego pliku (zostanie jako .bak).' $true)) {
-        throw 'Przerwano: dopisz brakujące ustawienia (wzór: provision.config.example.psd1) albo zacznij od pliku przykładowego.'
+    Write-Problem (Get-WmText 'init.file_lacks_settings' @($missing -join ', '))
+    if (-not (Read-YesNo (Get-WmText 'init.start_from_example') $true)) {
+        throw (New-WmError 'init.stopped_missing_settings')
     }
     $text = [IO.File]::ReadAllText($example)
     $missing = @(Get-WmConfigTextProblems -Text $text -Names $names)
 }
-if ($missing.Count -gt 0) { throw "Plik przykładowy nie ma ustawień: $($missing -join ', ')." }
+if ($missing.Count -gt 0) { throw (New-WmError 'init.example_lacks_settings' @($missing -join ', ')) }
 $management = Get-Current 'Management' @{}
 if (-not ($management -is [hashtable])) { $management = @{} }
 
 # --- 1. Scheduled update ----------------------------------------------------------------------------------------
-Write-Section 'Aktualizacja programów'
-$time = Read-Answer 'Godzina aktualizacji (HH:mm), najlepiej gdy komputery są zwykle włączone' (Get-Current 'UpdateTime' '12:00') `
-    { Test-WmUpdateTime $args[0] } 'Podaj godzinę w formacie HH:mm, np. 12:00.'
+Write-Section (Get-WmText 'init.section_update')
+$time = Read-Answer (Get-WmText 'init.update_time') (Get-Current 'UpdateTime' '12:00') `
+    { Test-WmUpdateTime $args[0] } (Get-WmText 'init.update_time_hint')
 $currentDays = @(Get-Current 'UpdateDays' $script:WmEveryDay)
 if ($currentDays.Count -eq 0) { $currentDays = $script:WmEveryDay }   # @() schedules nothing; offer the default
 $label = Get-WmUpdateDaysLabel $currentDays
-$choicePrompt = 'Dni: c = codziennie, r = robocze (pn-pt), p = tylko poniedziałek'
-if (-not $label) { $choicePrompt += " (Enter = bez zmian: $($currentDays -join ', '))" }
-$choice = Read-Answer $choicePrompt $label { (-not $args[0]) -or @(Get-WmUpdateDaysChoice $args[0]).Count -gt 0 } 'Wpisz c, r albo p.'
+$choicePrompt = Get-WmText 'init.days'
+if (-not $label) { $choicePrompt += ' ' + (Get-WmText 'init.days_keep' @($currentDays -join ', ')) }
+$choice = Read-Answer $choicePrompt $label { (-not $args[0]) -or @(Get-WmUpdateDaysChoice $args[0]).Count -gt 0 } (Get-WmText 'init.days_hint')
 $days = if ($choice) { @(Get-WmUpdateDaysChoice $choice) } else { $currentDays }
 $text = Set-WmConfigText $text 'UpdateTime' (ConvertTo-WmPsdString $time)
 $text = Set-WmConfigText $text 'UpdateDays' (ConvertTo-WmPsdArray $days)
 
 # --- 2. Loki ----------------------------------------------------------------------------------------------------
-Write-Section 'Grafana Cloud Loki: logi z komputerów (opcjonalnie)'
+Write-Section (Get-WmText 'init.section_loki')
 $lokiUrl = [string](Get-Current 'LokiUrl')
-$off = if ($lokiUrl) { ' (- = bez Loki)' } else { ' (Enter = bez Loki)' }
-$lokiUrl = Read-Answer "Adres Loki, np. https://logs-prod-012.grafana.net$off" $lokiUrl `
-    { $args[0] -eq '-' -or -not $args[0] -or $args[0] -match '^https://' } 'Adres musi zaczynać się od https://'
+$off = if ($lokiUrl) { Get-WmText 'init.loki_off_dash' } else { Get-WmText 'init.loki_off_enter' }
+$lokiUrl = Read-Answer (Get-WmText 'init.loki_url' @($off)) $lokiUrl `
+    { $args[0] -eq '-' -or -not $args[0] -or $args[0] -match '^https://' } (Get-WmText 'init.loki_url_hint')
 if ($lokiUrl -and $lokiUrl -ne '-') {
-    $lokiUser = Read-Answer 'User (liczba z Grafana Cloud)' ([string](Get-Current 'LokiUser')) { $args[0] -match '^\d+$' } 'Podaj sam numer użytkownika.'
+    $lokiUser = Read-Answer (Get-WmText 'init.loki_user') ([string](Get-Current 'LokiUser')) { $args[0] -match '^\d+$' } (Get-WmText 'init.loki_user_hint')
     $lokiToken = [string](Get-Current 'LokiToken')
-    $prompt = if ($lokiToken) { 'Token z zakresem logs:write (Enter = bez zmian)' } else { 'Token z zakresem logs:write' }
+    $prompt = if ($lokiToken) { Get-WmText 'init.loki_token_keep' } else { Get-WmText 'init.loki_token' }
     do { $t = Read-Secret $prompt; if ($t) { $lokiToken = $t } } while (-not $lokiToken)
-    Write-Host '  Wysyłam do Loki linię testową (job="init")...'
+    Write-Host ('  ' + (Get-WmText 'init.loki_sending'))
     $problem = Test-WmLoki -Url $lokiUrl -User $lokiUser -Token $lokiToken
     if ($problem) {
         Write-Problem $problem
-        if (-not (Read-YesNo 'Zapisać te ustawienia Loki mimo to?' $false)) { throw 'Przerwano: popraw ustawienia Loki i uruchom kreator jeszcze raz.' }
-    } else { Write-Ok 'Loki przyjął linię testową.' }
+        if (-not (Read-YesNo (Get-WmText 'init.loki_save_anyway') $false)) { throw (New-WmError 'init.stopped_loki') }
+    } else { Write-Ok (Get-WmText 'init.loki_ok') }
 } else { $lokiUrl = ''; $lokiUser = ''; $lokiToken = '' }
 $text = Set-WmConfigText $text 'LokiUrl' (ConvertTo-WmPsdString $lokiUrl)
 $text = Set-WmConfigText $text 'LokiUser' (ConvertTo-WmPsdString $lokiUser)
 $text = Set-WmConfigText $text 'LokiToken' (ConvertTo-WmPsdString $lokiToken)
 
 # --- 3. Healthchecks --------------------------------------------------------------------------------------------
-Write-Section 'Healthchecks.io: alarm, gdy komputer przestanie się aktualizować (opcjonalnie)'
+Write-Section (Get-WmText 'init.section_healthchecks')
 $savedKey = [string](Get-Current 'HealthchecksPingKey')
-$prompt = if ($savedKey) { 'Ping key projektu (Enter = bez zmian, - = bez Healthchecks)' } else { 'Ping key projektu (Enter = bez Healthchecks)' }
+$prompt = if ($savedKey) { Get-WmText 'init.healthchecks_key_keep' } else { Get-WmText 'init.healthchecks_key' }
 while ($true) {
     $k = Read-Secret $prompt
     if ($k -eq '-') { $pingKey = ''; break }
     if (-not $k) { $pingKey = $savedKey; break }   # a mistyped key before doesn't throw the saved one away
     if (Test-WmPingKey $k) { $pingKey = $k; break }
-    Write-Problem 'Ping key ma 22 znaki (litery, cyfry, - i _).'
+    Write-Problem (Get-WmText 'init.healthchecks_key_hint')
 }
 $prefix = [string](Get-Current 'HealthchecksSlugPrefix')
 if ($pingKey) {
-    $prefix = Read-Answer 'Przedrostek nazw checków, np. wm- (Enter = bez)' $prefix { $args[0] -match '^[A-Za-z0-9_-]*$' } 'Tylko litery, cyfry, - i _.'
-    if (Read-YesNo "Wysłać testowy ping? Healthchecks utworzy check '$($prefix.ToLowerInvariant())init', który potem możesz usunąć." $false) {
+    $prefix = Read-Answer (Get-WmText 'init.healthchecks_prefix') $prefix { $args[0] -match '^[A-Za-z0-9_-]*$' } (Get-WmText 'init.healthchecks_prefix_hint')
+    if (Read-YesNo (Get-WmText 'init.healthchecks_test_ping' @($prefix.ToLowerInvariant() + 'init')) $false) {
         $problem = Test-WmHealthchecks -BaseUrl ([string](Get-Current 'HealthchecksBaseUrl' 'https://hc-ping.com')) -PingKey $pingKey -SlugPrefix $prefix
         if ($problem) {
             Write-Problem $problem
-            if (-not (Read-YesNo 'Zapisać ten klucz mimo to?' $false)) { throw 'Przerwano: popraw klucz Healthchecks i uruchom kreator jeszcze raz.' }
-        } else { Write-Ok 'Healthchecks przyjął ping.' }
+            if (-not (Read-YesNo (Get-WmText 'init.healthchecks_save_anyway') $false)) { throw (New-WmError 'init.stopped_healthchecks') }
+        } else { Write-Ok (Get-WmText 'init.healthchecks_ok') }
     }
 }
 $text = Set-WmConfigText $text 'HealthchecksPingKey' (ConvertTo-WmPsdString $pingKey)
 $text = Set-WmConfigText $text 'HealthchecksSlugPrefix' (ConvertTo-WmPsdString $prefix)
 
 # --- 4. Management source of computer groups --------------------------------------------------------------------
-Write-Section 'Grupy komputerów: podpisane źródło zarządzania (opcjonalnie, README: Computer groups)'
+Write-Section (Get-WmText 'init.section_groups')
 $source = [string]$management.Source
-$off = if ($source) { ' (- = bez grup)' } else { ' (Enter = bez grup)' }
-$source = Read-Answer "Źródło: adres https:// folderu albo pełna ścieżka$off" $source `
-    { $args[0] -eq '-' -or -not $args[0] -or (Test-WmManagementSource $args[0]) } 'Podaj adres https:// albo pełną ścieżkę folderu.'
+$off = if ($source) { Get-WmText 'init.groups_off_dash' } else { Get-WmText 'init.groups_off_enter' }
+$source = Read-Answer (Get-WmText 'init.source' @($off)) $source `
+    { $args[0] -eq '-' -or -not $args[0] -or (Test-WmManagementSource $args[0]) } (Get-WmText 'init.source_hint')
 $sourceId = ''; $authHeader = ''; $certName = [string]$management.Certificate
 if (-not $certName) { $certName = 'wmanager-signing.cer' }
 $certCopy = $null
 if ($source -and $source -ne '-') {
     $authHeader = [string]$management.AuthHeader
     if ($source -match '^https://') {
-        $prompt = if ($authHeader) { 'Nagłówek Authorization (Enter = bez zmian, - = bez)' } else { 'Nagłówek Authorization dla prywatnego repo, np. token github_pat_... (Enter = bez)' }
+        $prompt = if ($authHeader) { Get-WmText 'init.auth_header_keep' } else { Get-WmText 'init.auth_header' }
         $a = Read-Secret $prompt
         if ($a -eq '-') { $authHeader = '' } elseif ($a) { $authHeader = $a }
     } else { $authHeader = '' }
@@ -187,31 +207,31 @@ if ($source -and $source -ne '-') {
     $certDest = Join-Path $configDir $certName
     $certDefault = if (Test-Path -LiteralPath $certDest) { $certDest } else { '' }
     do {
-        $certPath = Read-Answer 'Plik certyfikatu podpisu (wmanager-signing.cer z tools/new-signing-cert.sh)' $certDefault `
-            { $args[0] -and (Test-Path -LiteralPath $args[0] -PathType Leaf) } 'Nie ma takiego pliku.'
+        $certPath = Read-Answer (Get-WmText 'init.cert_file') $certDefault `
+            { $args[0] -and (Test-Path -LiteralPath $args[0] -PathType Leaf) } (Get-WmText 'init.cert_file_hint')
         $certPath = (Resolve-Path -LiteralPath $certPath).ProviderPath   # also ~ and relative paths
         $cert = Import-WmCertificateFile $certPath
-        $problem = if ($cert) { Get-WmSigningCertificateProblem $cert } else { 'to nie jest plik certyfikatu (.cer)' }
+        $problem = if ($cert) { Get-WmSigningCertificateProblem $cert } else { Get-WmText 'init.cert_not_certificate' }
         if ($problem) { Write-Problem $problem; $certDefault = '' }
     } while ($problem)
-    Write-Host "  Certyfikat: $($cert.Subject), odcisk $($cert.Thumbprint), ważny do $($cert.NotAfter.ToString('yyyy-MM-dd'))"
+    Write-Host ('  ' + (Get-WmText 'init.cert_info' @($cert.Subject, $cert.Thumbprint, $cert.NotAfter.ToString('yyyy-MM-dd'))))
     if ($certPath -ne [IO.Path]::GetFullPath($certDest)) { $certCopy = $certPath }
 
     $manifest = $null; $manifestId = ''; $signer = $null
     if ($source -notmatch '^https://' -and -not $script:WmIsWindows) {
-        Write-Host '  Ścieżki Windows nie sprawdzę z tego systemu; sprawdzi ją komputer przy provisioningu.'
+        Write-Host ('  ' + (Get-WmText 'init.source_path_unchecked'))
         $manifestId = '-'
     } else { try {
         $manifest = Get-WmSourceManifest -Source $source -AuthHeader $authHeader
         $data = Import-PowerShellDataFile -LiteralPath $manifest
         $manifestId = [string]$data.SourceId
-        Write-Ok "manifest $($data.Serial), plików: $(@($data.Files.Keys).Count), identyfikator źródła $manifestId"
+        Write-Ok (Get-WmText 'init.manifest_info' @($data.Serial, @($data.Files.Keys).Count, $manifestId))
         $signer = Test-WmManifestSigner -ManifestPath $manifest -CertificatePath $certPath
-        if ($signer -eq 'ok') { Write-Ok 'manifest jest podpisany tym certyfikatem.' }
-        elseif ($signer -eq 'skipped') { Write-Host '  Podpisu nie sprawdzam (Authenticode jest tylko w Windows); sprawdzi go komputer przy provisioningu.' }
+        if ($signer -eq 'ok') { Write-Ok (Get-WmText 'init.manifest_signed') }
+        elseif ($signer -eq 'skipped') { Write-Host ('  ' + (Get-WmText 'init.signature_unchecked')) }
         else { Write-Problem $signer }
     } catch {
-        Write-Problem "nie udało się pobrać manifest.psd1: $($_.Exception.Message)"
+        Write-Problem (Get-WmText 'init.manifest_failed' @(Get-WmErrorText $_))
     } finally {
         if ($manifest) { Remove-Item -LiteralPath $manifest -Force -ErrorAction SilentlyContinue }
     } }
@@ -222,14 +242,13 @@ if ($source -and $source -ne '-') {
     $savedId = [string]$management.SourceId
     $idDefault = if ($manifestId) { $manifestId } else { $savedId }
     if ($manifestId -and $savedId -and $manifestId -ne $savedId -and $source -eq [string]$management.Source) {
-        Write-Problem "to samo źródło ma teraz inny identyfikator niż zapisany ($savedId); upewnij się, że nikt go nie podmienił."
+        Write-Problem (Get-WmText 'init.source_id_changed' @($savedId))
     }
-    $sourceId = Read-Answer 'Identyfikator źródła (source-id.txt, wypisał go tools/publish.sh)' $idDefault { Test-WmSourceId $args[0] } `
-        '8-64 znaki: litery, cyfry, . - _'
-    if ($manifestId -and $sourceId -ne $manifestId) { Write-Problem "manifest ma inny identyfikator ($manifestId): komputer go odrzuci." }
+    $sourceId = Read-Answer (Get-WmText 'init.source_id') $idDefault { Test-WmSourceId $args[0] } (Get-WmText 'init.source_id_hint')
+    if ($manifestId -and $sourceId -ne $manifestId) { Write-Problem (Get-WmText 'init.source_id_mismatch' @($manifestId)) }
     if (-not $unchecked -and (-not $manifestId -or $sourceId -ne $manifestId -or ($signer -and $signer -notin @('ok', 'skipped'))) -and
-        -not (Read-YesNo 'Zapisać to źródło mimo to?' $false)) {
-        throw 'Przerwano: popraw źródło grup i uruchom kreator jeszcze raz.'
+        -not (Read-YesNo (Get-WmText 'init.source_save_anyway') $false)) {
+        throw (New-WmError 'init.stopped_source')
     }
 } else { $source = '' }
 $text = Set-WmConfigText $text 'Source' (ConvertTo-WmPsdString $source)
@@ -238,24 +257,24 @@ $text = Set-WmConfigText $text 'AuthHeader' (ConvertTo-WmPsdString $authHeader)
 $text = Set-WmConfigText $text 'Certificate' (ConvertTo-WmPsdString $certName)
 
 # --- Saving -----------------------------------------------------------------------------------------------------
-Write-Section 'Zapis'
+Write-Section (Get-WmText 'init.section_save')
 # The new file must be a valid data file before it replaces the old one
 $new = "$ConfigPath.new"
 Write-WmConfigFile -Path $new -Text $text
 try { $null = Import-PowerShellDataFile -LiteralPath $new }
-catch { Remove-Item -LiteralPath $new -Force; throw "Nowa konfiguracja jest niepoprawna, nic nie zmieniłem: $($_.Exception.Message)" }
+catch { Remove-Item -LiteralPath $new -Force; throw (New-WmError 'init.new_config_invalid' @(Get-WmErrorText $_)) }
 if (Test-Path -LiteralPath $ConfigPath) {
     $backup = '{0}.bak-{1}' -f $ConfigPath, (Get-Date -Format 'yyyyMMddHHmmss')
     Copy-Item -LiteralPath $ConfigPath -Destination $backup
-    Write-Host "  Poprzedni plik: $backup"
+    Write-Host ('  ' + (Get-WmText 'init.previous_file' @($backup)))
 }
 Move-Item -LiteralPath $new -Destination $ConfigPath -Force
 if ($certCopy) {
     Copy-Item -LiteralPath $certCopy -Destination (Join-Path $configDir $certName) -Force
-    Write-Host "  Certyfikat skopiowany obok konfiguracji: $certName"
+    Write-Host ('  ' + (Get-WmText 'init.cert_copied' @($certName)))
 }
-Write-Ok "zapisano $ConfigPath"
+Write-Ok (Get-WmText 'init.saved' @($ConfigPath))
 Write-Host ''
-Write-Host 'Dalej: skopiuj cały folder wmanagera razem z tym plikiem na pendrive albo udział i na komputerze uruchom run.cmd.'
-Write-Host 'Plik zawiera tokeny: trzymaj pendrive pod kontrolą. Pozostałe ustawienia (aplikacje do usunięcia, przeglądarka,'
-Write-Host 'źródła Chocolatey) zmienisz w tym pliku ręcznie; listę programów w choco-reqs.txt.'
+Write-Host (Get-WmText 'init.next_copy')
+Write-Host (Get-WmText 'init.next_tokens')
+Write-Host (Get-WmText 'init.next_other_settings')

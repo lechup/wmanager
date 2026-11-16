@@ -16,11 +16,15 @@
     Not undone: removed Store apps and OneDrive, installed Chocolatey packages, the effects of group
     scripts, the computer name. A restart is needed afterwards.
 
+.PARAMETER Lang
+    Language of the screen: en, de, fr, es, it, pl, nl, pt, ro, cs. Without it: WMANAGER_LANG, then the Windows
+    display language, then English. The log file and Loki are always in English.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File C:\ProgramData\wmanager\Restore-Backup.ps1
 #>
 [CmdletBinding()]
-param()
+param([string]$Lang)
 
 $ErrorActionPreference = 'Continue'
 $here = $PSScriptRoot
@@ -28,18 +32,19 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Backup.ps1')
 . (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
+Initialize-WmLanguage -Lang $Lang
 
 if (-not (Test-Path -LiteralPath $script:WmBackupDir)) {
-    Write-Host "Brak kopii w $($script:WmBackupDir): wmanager nie był tu uruchamiany." -ForegroundColor Red
+    Write-Host (Get-WmText 'restore.no_backup' @($script:WmBackupDir)) -ForegroundColor Red
     exit 2
 }
 
 $lock = Enter-WmLock
 if (-not $lock) {
-    Write-Host 'Trwa inny przebieg wmanager (np. joby grup); czekam do 10 minut...' -ForegroundColor Yellow
+    Write-Host (Get-WmText 'restore.lock_wait') -ForegroundColor Yellow
     $lock = Enter-WmLock -WaitSeconds 600
 }
-if (-not $lock) { Write-Host 'Inny przebieg wmanager wciąż trwa. Spróbuj za chwilę.' -ForegroundColor Red; exit 3 }
+if (-not $lock) { Write-Host (Get-WmText 'restore.lock_busy') -ForegroundColor Red; exit 3 }
 
 Initialize-WmLog 'restore'
 $config = @{}
@@ -51,16 +56,16 @@ if (Test-Path -LiteralPath $configFile) {
 try {
     $journal = @(Read-WmJournal)
 } catch {
-    Write-WmLog "Nie mogę odczytać dziennika zmian: $($_.Exception.Message)" -Level error
+    Write-WmLog -Key 'restore.journal_read_failed' -Arguments @(Get-WmErrorText $_) -Level error
     Exit-WmLock $lock
     exit 1
 }
 $backups = @(Get-ChildItem -LiteralPath $script:WmBackupDir -Directory -ErrorAction SilentlyContinue)
 $machine = @($journal | Where-Object { $_.Scope -eq 'machine' })
 $user    = @($journal | Where-Object { $_.Scope -eq 'user' })
-Write-WmLog "$(Get-WmName): przywracanie na $($script:WmHostName). Dziennik: $($machine.Count) wartości komputera, $($user.Count) wartości użytkowników; kopii: $($backups.Count)."
-if (-not (Confirm-WmContinue 'Cofnąć zmiany wmanagera?')) {
-    Write-WmLog 'Anulowano, nic nie zmieniono.'
+Write-WmLog -Key 'restore.start' -Arguments @((Get-WmName), $script:WmHostName, $machine.Count, $user.Count, $backups.Count)
+if (-not (Confirm-WmContinue 'restore.confirm')) {
+    Write-WmLog -Key 'restore.cancelled'
     Exit-WmLock $lock
     exit 0
 }
@@ -87,8 +92,8 @@ try {
     }
     $notFound = @($user | Where-Object { -not $seenProfiles.ContainsKey([string]$_.Sid + '|' + $_.Profile) } |
                   ForEach-Object { $_.Profile } | Sort-Object -Unique)
-    foreach ($p in $notFound) { Write-WmLog "Profil $p nie istnieje albo nie dało się go wczytać; jego ustawień nie przywrócono." -Level warn }
-    Write-WmLog "Rejestr: przywrócono $($count.Ok) z $($journal.Count) wartości."
+    foreach ($p in $notFound) { Write-WmLog -Key 'restore.profile_not_found' -Arguments @($p) -Level warn }
+    Write-WmLog -Key 'restore.registry_summary' -Arguments @($count.Ok, $journal.Count)
 
     # --- Default apps for new accounts, from the first backup ------------------
     $first = Get-WmFirstBackup
@@ -103,49 +108,49 @@ try {
             $now = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Sort-Object -Unique)
             $removed = @($before | Where-Object { $now -notcontains $_ })
             if ($removed.Count -gt 0) {
-                Write-WmLog "Aplikacje ze Sklepu usunięte od kopii $($first.Name) ($($removed.Count)); w razie potrzeby zainstaluj je ze Sklepu:" -Level warn
+                Write-WmLog -Key 'restore.store_apps_removed' -Arguments @($first.Name, $removed.Count) -Level warn
                 foreach ($r in $removed) { Write-WmLog "  $r" }
             }
         }
     }
     if ($machine | Where-Object { $_.Name -eq 'DisableFileSyncNGSC' }) {
-        Write-WmLog 'OneDrive był odinstalowany; jeśli jest potrzebny, zainstaluj go ponownie ze strony Microsoftu.' -Level warn
+        Write-WmLog -Key 'restore.onedrive_removed' -Level warn
     }
 
     # --- Scheduled tasks and the signing certificate (the scheduled update needs it) ------
     $tasksOff = $true
     $tasks = @(Get-ScheduledTask -TaskPath $script:WmTaskPath -ErrorAction SilentlyContinue)
     if ($tasks.Count -gt 0) {
-        if (Confirm-WmContinue 'Wyłączyć zadania wmanager? Inaczej zaplanowana aktualizacja znowu usunie aplikacje i zmieni ustawienia.' -DefaultYes) {
+        if (Confirm-WmContinue 'restore.confirm_disable_tasks' -DefaultYes) {
             $tasks | Disable-ScheduledTask -ErrorAction Stop | Out-Null
-            Write-WmLog "Zadania wmanager wyłączone ($($tasks.Count))."
+            Write-WmLog -Key 'restore.tasks_disabled' -Arguments @($tasks.Count)
         } else {
             $tasksOff = $false
-            Write-WmLog 'Zadania wmanager zostają włączone; zaplanowana aktualizacja znowu zastosuje ustawienia.' -Level warn
+            Write-WmLog -Key 'restore.tasks_kept' -Level warn
         }
     }
     if ($tasksOff) {
         try {
             $n = Remove-WmSigningCertificates
-            if ($n -gt 0) { Write-WmLog "Certyfikat podpisu wmanager usunięty z zaufanych ($n)." }
+            if ($n -gt 0) { Write-WmLog -Key 'restore.certificate_removed' -Arguments @($n) }
         } catch {
-            Write-WmLog "Nie udało się usunąć certyfikatu podpisu wmanager z zaufanych: $($_.Exception.Message)" -Level warn
+            Write-WmLog -Key 'restore.certificate_remove_failed' -Arguments @(Get-WmErrorText $_) -Level warn
         }
     }
 } catch {
     $failed = $true
-    Write-WmLog "Przywracanie przerwane: $($_.Exception.Message)" -Level error
+    Write-WmLog -Key 'restore.stopped' -Arguments @(Get-WmErrorText $_) -Level error
 } finally {
     if ($script:WmErrors -gt 0) { $failed = $true }
-    Write-WmLog ("Koniec: ostrzeżenia {0}, błędy {1}. Log: {2}" -f $script:WmWarnings, $script:WmErrors, $script:WmLogFile)
+    Write-WmLog -Key 'restore.summary' -Arguments @($script:WmWarnings, $script:WmErrors, $script:WmLogFile)
     Send-WmLokiLog -Config $config
     Exit-WmLock $lock
 }
 
 Write-Host ''
 if ($failed) {
-    Write-Host 'Przywracanie zakończone z błędami. Sprawdź log powyżej.' -ForegroundColor Yellow
+    Write-Host (Get-WmText 'restore.finished_with_errors') -ForegroundColor Yellow
     exit 1
 }
-Write-Host 'Przywracanie zakończone. Uruchom ponownie komputer, żeby ustawienia zadziałały.' -ForegroundColor Green
+Write-Host (Get-WmText 'restore.finished') -ForegroundColor Green
 exit 0

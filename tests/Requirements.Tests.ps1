@@ -6,6 +6,7 @@ BeforeAll {
     $root = Split-Path $PSScriptRoot -Parent
     . (Join-Path $root 'lib\Common.ps1')
     . (Join-Path $root 'lib\Choco.ps1')
+    Initialize-WmLanguage -Lang 'en'   # the errors are checked in English
 }
 
 Describe 'ConvertFrom-WmRequirements' {
@@ -50,20 +51,20 @@ Describe 'ConvertFrom-WmRequirements' {
     }
 
     It 'returns an empty list for an empty file' {
-        $r = ConvertFrom-WmRequirements -Text "# tylko komentarz`n"
+        $r = ConvertFrom-WmRequirements -Text "# only a comment`n"
         $r.Count | Should -Be 0
     }
 
     It 'rejects an unknown option' {
-        { ConvertFrom-WmRequirements -Text 'vlc !cos' } | Should -Throw
+        { ConvertFrom-WmRequirements -Text 'vlc !cos' } | Should -Throw -ExpectedMessage "Line 1: unknown option '!cos'*"
     }
 
     It 'rejects a duplicate package' {
-        { ConvertFrom-WmRequirements -Text "vlc`nVLC@3.0.21" } | Should -Throw
+        { ConvertFrom-WmRequirements -Text "vlc`nVLC@3.0.21" } | Should -Throw -ExpectedMessage "Line 2: package 'VLC' appears a second time (first in line 1)"
     }
 
     It 'rejects an invalid version' {
-        { ConvertFrom-WmRequirements -Text 'vlc@abc' } | Should -Throw
+        { ConvertFrom-WmRequirements -Text 'vlc@abc' } | Should -Throw -ExpectedMessage "Line 1: invalid version 'abc' for 'vlc'"
     }
 
     It 'reads the bundled choco-reqs.txt without errors' {

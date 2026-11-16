@@ -20,6 +20,10 @@
     Don't create a system restore point. Without it, a failed restore point stops provisioning
     unless the person at the console confirms going on without one.
 
+.PARAMETER Lang
+    Language of the screen: en, de, fr, es, it, pl, nl, pt, ro, cs. Without it: WMANAGER_LANG, then the Windows
+    display language, then English. The log file and Loki are always in English.
+
 .EXAMPLE
     .\Provision.ps1
 .EXAMPLE
@@ -29,7 +33,8 @@
 param(
     [string]$ComputerName,
     [string]$ConfigPath,
-    [switch]$SkipRestorePoint
+    [switch]$SkipRestorePoint,
+    [string]$Lang
 )
 
 $ErrorActionPreference = 'Continue'
@@ -41,6 +46,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Choco.ps1')
 . (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
+Initialize-WmLanguage -Lang $Lang
 
 # ---------------------------------------------------------------------------
 # Helper steps
@@ -57,16 +63,16 @@ function Resolve-WmComputerName {
     $current = $env:COMPUTERNAME
     if ($Requested) {
         if (-not (Test-WmComputerName $Requested)) {
-            throw "Niepoprawna nazwa komputera '$Requested' (1-15 znaków: litery, cyfry, myślnik; nie same cyfry)."
+            throw (New-WmError 'provision.computer_name_invalid' @($Requested))
         }
         return $Requested.ToUpper()
     }
     if (-not $Prompt -or -not (Test-WmInteractive)) { return $current }
     while ($true) {
-        $answer = (Read-Host "Nazwa komputera [$current] (Enter = bez zmian)").Trim()
+        $answer = (Read-Host (Get-WmText 'provision.computer_name_prompt' @($current))).Trim()
         if (-not $answer) { return $current }
         if (Test-WmComputerName $answer) { return $answer.ToUpper() }
-        Write-Host 'Niepoprawna nazwa: 1-15 znaków, litery, cyfry i myślnik, nie same cyfry.' -ForegroundColor Yellow
+        Write-Host (Get-WmText 'provision.computer_name_retry') -ForegroundColor Yellow
     }
 }
 
@@ -79,10 +85,10 @@ function New-WmRestorePoint {
         # Windows allows one restore point per 24 h; lift the limit for the duration of provisioning
         Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' 0 | Out-Null
         Checkpoint-Computer -Description 'wmanager: before provisioning' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
-        Write-WmLog 'Utworzono punkt przywracania systemu.'
+        Write-WmLog -Key 'provision.restore_point_created'
         return $true
     } catch {
-        Write-WmLog "Nie udało się utworzyć punktu przywracania: $($_.Exception.Message)" -Level warn
+        Write-WmLog -Key 'provision.restore_point_failed' -Arguments @(Get-WmErrorText $_) -Level warn
         return $false
     } finally {
         if ($null -eq $old) { Remove-WmRegValue $sr 'SystemRestorePointCreationFrequency' } else { Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' $old | Out-Null }
@@ -103,15 +109,19 @@ function Install-WmFiles {
             Remove-Item -LiteralPath (Join-Path $dst 'VERSION') -Force -ErrorAction SilentlyContinue
         }
         Copy-Item -Path (Join-Path $src 'lib\*.ps1') -Destination (Join-Path $dst 'lib') -Force -ErrorAction Stop
+        # The catalogs of the messages: the scheduled tasks and the notification run from this copy
+        $dstLang = Join-Path $dst 'lang'
+        New-Item -ItemType Directory -Force -Path $dstLang -ErrorAction Stop | Out-Null
+        Copy-Item -Path (Join-Path $src 'lang\*') -Destination $dstLang -Recurse -Force -ErrorAction Stop
         Get-ChildItem -LiteralPath $dst -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
-        Write-WmLog "Pliki skopiowane do $dst"
+        Write-WmLog -Key 'provision.files_copied' -Arguments @($dst)
     }
     # The config is copied whenever it comes from elsewhere, also when running from $dst itself with -ConfigPath
     $dstConfig = Join-Path $dst 'provision.config.psd1'
     $srcConfig = (Resolve-Path -LiteralPath $ConfigFile).Path
     if ($srcConfig -ne $dstConfig) {
         Copy-Item -LiteralPath $srcConfig -Destination $dstConfig -Force -ErrorAction Stop
-        Write-WmLog "Konfiguracja skopiowana z $srcConfig"
+        Write-WmLog -Key 'provision.config_copied' -Arguments @($srcConfig)
     }
     # The signing certificate travels with the config; the scheduled update and the hourly run check the source with it
     $cert = Get-WmCertificateFileName $Config
@@ -120,7 +130,7 @@ function Install-WmFiles {
         $dstCert = Join-Path $dst $cert
         if ($srcCert -ne $dstCert) {
             Copy-Item -LiteralPath $srcCert -Destination $dstCert -Force -ErrorAction Stop
-            Write-WmLog "Certyfikat podpisu skopiowany z $srcCert"
+            Write-WmLog -Key 'provision.certificate_copied' -Arguments @($srcCert)
         }
     }
     Set-WmFolderAcl -Path $dst -ConfigFile (Join-Path $dst 'provision.config.psd1')
@@ -141,14 +151,14 @@ function Write-WmPublicState {
 
 $os = Get-CimInstance -ClassName Win32_OperatingSystem
 if ([int]$os.BuildNumber -lt 22000) {
-    Write-Host "To nie jest Windows 11 ($($os.Caption), build $($os.BuildNumber)). Przerywam." -ForegroundColor Red
+    Write-Host (Get-WmText 'provision.not_windows11' @($os.Caption, $os.BuildNumber)) -ForegroundColor Red
     exit 2
 }
 
 if (-not $ConfigPath) { $ConfigPath = Join-Path $here 'provision.config.psd1' }
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
     $example = Join-Path $here 'provision.config.example.psd1'
-    Write-Host "Brak $ConfigPath, używam provision.config.example.psd1 (bez Loki i Healthchecks)." -ForegroundColor Yellow
+    Write-Host (Get-WmText 'provision.config_example' @($ConfigPath)) -ForegroundColor Yellow
     Copy-Item -LiteralPath $example -Destination $ConfigPath
 }
 $config = Import-WmConfig $ConfigPath
@@ -156,28 +166,33 @@ $config = Import-WmConfig $ConfigPath
 try {
     Test-WmManagementConfig -Config $config -ConfigDir (Split-Path (Resolve-Path -LiteralPath $ConfigPath).Path -Parent)
 } catch {
-    Write-Host "Błąd w ustawieniach Management: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host (Get-WmText 'provision.management_config_error' @(Get-WmErrorText $_)) -ForegroundColor Red
     exit 2
 }
 
-$newName = Resolve-WmComputerName -Requested $ComputerName -Prompt ([bool](Get-WmSetting $config 'PromptComputerName' $true))
+try {
+    $newName = Resolve-WmComputerName -Requested $ComputerName -Prompt ([bool](Get-WmSetting $config 'PromptComputerName' $true))
+} catch {
+    Write-Host (Get-WmText 'provision.stopped' @(Get-WmErrorText $_)) -ForegroundColor Red
+    exit 1
+}
 
 $lock = Enter-WmLock
 if (-not $lock) {
-    Write-Host 'Trwa inny przebieg wmanager (np. joby grup); czekam do 10 minut...' -ForegroundColor Yellow
+    Write-Host (Get-WmText 'provision.lock_wait') -ForegroundColor Yellow
     $lock = Enter-WmLock -WaitSeconds 600
 }
-if (-not $lock) { Write-Host 'Inny przebieg wmanager wciąż trwa. Spróbuj za chwilę.' -ForegroundColor Red; exit 3 }
+if (-not $lock) { Write-Host (Get-WmText 'provision.lock_busy') -ForegroundColor Red; exit 3 }
 
 try {
     Initialize-WmRoot
 } catch {
-    Write-Host "Nie mogę przygotować $($script:WmRoot): $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host (Get-WmText 'provision.root_failed' @($script:WmRoot, (Get-WmErrorText $_))) -ForegroundColor Red
     Exit-WmLock $lock
     exit 4
 }
 Initialize-WmLog 'provision'
-Write-WmLog "$(Get-WmName) provisioning: $($os.Caption) build $($os.BuildNumber), komputer $env:COMPUTERNAME"
+Write-WmLog -Key 'provision.start' -Arguments @((Get-WmName), $os.Caption, $os.BuildNumber, $env:COMPUTERNAME)
 $failed = $false
 $hcStarted = $false
 
@@ -187,44 +202,44 @@ try {
     $offline = $false
     $unreachable = @(Get-WmUnreachableHosts -Config $config)
     if ($unreachable.Count -gt 0) {
-        Write-WmLog "Brak połączenia z: $($unreachable -join ', ')" -Level warn
-        if (-not (Confirm-WmContinue 'Brak internetu. Kontynuować bez instalacji programów (doinstaluje je zaplanowana aktualizacja)?')) {
-            throw 'Brak internetu; provisioning przerwany przed zmianami.'
+        Write-WmLog -Key 'provision.no_connection' -Arguments @($unreachable -join ', ') -Level warn
+        if (-not (Confirm-WmContinue 'provision.confirm_offline')) {
+            throw (New-WmError 'provision.stopped_offline')
         }
         $offline = $true
-        Write-WmLog 'Kontynuuję bez internetu: Chocolatey i programy zostaną pominięte.' -Level warn
+        Write-WmLog -Key 'provision.continue_offline' -Level warn
     }
 
     # Nothing is changed before this point. Without a restore point the person at the console decides.
     if ($SkipRestorePoint) {
-        Write-WmLog 'Punkt przywracania pominięty (-SkipRestorePoint).'
+        Write-WmLog -Key 'provision.restore_point_skipped'
     } elseif (-not (New-WmRestorePoint)) {
-        if (-not (Confirm-WmContinue 'Nie udało się utworzyć punktu przywracania. Kontynuować bez niego?')) {
-            throw 'Brak punktu przywracania; provisioning przerwany przed zmianami.'
+        if (-not (Confirm-WmContinue 'provision.confirm_no_restore_point')) {
+            throw (New-WmError 'provision.stopped_no_restore_point')
         }
-        Write-WmLog 'Kontynuuję bez punktu przywracania (potwierdzone w konsoli).' -Level warn
+        Write-WmLog -Key 'provision.continue_no_restore_point' -Level warn
     }
 
     # Backup (Store apps, registry branches) and the undo journal for Restore-Backup.ps1; see lib\Backup.ps1
     $backupOk = $true
     try {
         $backupDir = Backup-WmState
-        Write-WmLog "Kopia ustawień zapisana w $backupDir"
+        Write-WmLog -Key 'provision.backup_saved' -Arguments @($backupDir)
     } catch {
         $backupOk = $false
-        Write-WmLog "Nie udało się zrobić kopii ustawień: $($_.Exception.Message)" -Level warn
+        Write-WmLog -Key 'provision.backup_failed' -Arguments @(Get-WmErrorText $_) -Level warn
     }
     try {
         Start-WmJournal
     } catch {
         $backupOk = $false
-        Write-WmLog "Nie udało się uruchomić dziennika zmian: $($_.Exception.Message)" -Level warn
+        Write-WmLog -Key 'provision.journal_failed' -Arguments @(Get-WmErrorText $_) -Level warn
     }
     if (-not $backupOk) {
-        if (-not (Confirm-WmContinue 'Kopia ustawień jest niepełna. Kontynuować mimo to?')) {
-            throw 'Brak kopii ustawień; provisioning przerwany przed zmianami.'
+        if (-not (Confirm-WmContinue 'provision.confirm_incomplete_backup')) {
+            throw (New-WmError 'provision.stopped_no_backup')
         }
-        Write-WmLog 'Kontynuuję z niepełną kopią ustawień (potwierdzone w konsoli).' -Level warn
+        Write-WmLog -Key 'provision.continue_incomplete_backup' -Level warn
     }
 
     # The scheduled tasks run the copied files, so if copying fails the run stops here
@@ -235,12 +250,12 @@ try {
         try {
             Rename-Computer -NewName $newName -Force -ErrorAction Stop
             $script:WmHostName = $newName
-            Write-WmLog "Nazwa komputera zmieniona: $env:COMPUTERNAME -> $newName (działa po restarcie)."
+            Write-WmLog -Key 'provision.renamed' -Arguments @($env:COMPUTERNAME, $newName)
         } catch {
-            Write-WmLog "Nie udało się zmienić nazwy na $newName : $($_.Exception.Message)" -Level error
+            Write-WmLog -Key 'provision.rename_failed' -Arguments @($newName, (Get-WmErrorText $_)) -Level error
         }
     } else {
-        Write-WmLog "Nazwa komputera bez zmian: $env:COMPUTERNAME"
+        Write-WmLog -Key 'provision.name_unchanged' -Arguments @($env:COMPUTERNAME)
     }
     # Pinged only once the final name is known, so start and end go to the same check
     Send-WmHealthcheck -Config $config -Signal start
@@ -248,32 +263,32 @@ try {
 
     # Each stage on its own: a failure (e.g. no network for Chocolatey) is logged as an error,
     # but the scheduled tasks still get registered, so the scheduled update can finish the job.
-    $null = Invoke-WmStep 'Debloat' { Invoke-WmDebloat -Config $config }
-    if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'Prywatność' { Invoke-WmPrivacy } }
+    $null = Invoke-WmStep 'step.debloat' { Invoke-WmDebloat -Config $config }
+    if (Get-WmSetting $config 'Privacy' $true) { $null = Invoke-WmStep 'step.privacy' { Invoke-WmPrivacy } }
 
     if ($offline) {
-        Write-WmLog 'Pomijam Chocolatey i programy (brak internetu); zainstaluje je zaplanowana aktualizacja.' -Level warn
-    } elseif (Invoke-WmStep 'Chocolatey' { Install-WmChocolatey -Config $config }) {
-        $null = Invoke-WmStep 'Paczki' {
+        Write-WmLog -Key 'provision.skip_programs_offline' -Level warn
+    } elseif (Invoke-WmStep 'step.chocolatey' { Install-WmChocolatey -Config $config }) {
+        $null = Invoke-WmStep 'step.packages' {
             $reqs = Get-WmRequirements -Config $config -BaseDir $here
             $null = Sync-WmPackages -Requirements $reqs -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
         }
     }
 
-    $null = Invoke-WmStep 'Domyślna przeglądarka' { Set-WmDefaultBrowser -Config $config }
-    $null = Invoke-WmStep 'Ustawienia dla powiadomień' { Write-WmPublicState -Config $config }
-    $null = Invoke-WmStep 'Harmonogram zadań' { Register-WmTasks -Config $config }
+    $null = Invoke-WmStep 'step.default_browser' { Set-WmDefaultBrowser -Config $config }
+    $null = Invoke-WmStep 'step.notify_settings' { Write-WmPublicState -Config $config }
+    $null = Invoke-WmStep 'step.schedule' { Register-WmTasks -Config $config }
     # Group scripts must run as SYSTEM, and provisioning runs as the person at the console
     if (Get-WmManagementSettings $config) {
-        Write-WmLog 'Skrypty i joby grup uruchomi zadanie wmanager-Jobs (SYSTEM) za kilka minut albo zaraz po restarcie; wyniki w logu i Loki.'
+        Write-WmLog -Key 'provision.group_jobs_later'
     }
 } catch {
     $failed = $true
-    Write-WmLog "Provisioning przerwany: $($_.Exception.Message)" -Level error
+    Write-WmLog -Key 'provision.stopped' -Arguments @(Get-WmErrorText $_) -Level error
 } finally {
     Stop-WmJournal
     if ($script:WmErrors -gt 0) { $failed = $true }
-    Write-WmLog ("Koniec: ostrzeżenia {0}, błędy {1}. Log: {2}" -f $script:WmWarnings, $script:WmErrors, $script:WmLogFile)
+    Write-WmLog -Key 'provision.summary' -Arguments @($script:WmWarnings, $script:WmErrors, $script:WmLogFile)
     Remove-WmOldLogs -Days ([int](Get-WmSetting $config 'LogRetentionDays' 90))
     Send-WmLokiLog -Config $config
     # Stopped before the name was settled: no ping. The person at the console sees the result, and a
@@ -288,9 +303,9 @@ try {
 
 Write-Host ''
 if ($failed) {
-    Write-Host 'Provisioning zakończony z błędami. Sprawdź log powyżej i uruchom skrypt ponownie.' -ForegroundColor Yellow
+    Write-Host (Get-WmText 'provision.finished_with_errors') -ForegroundColor Yellow
 } else {
-    Write-Host 'Provisioning zakończony. Uruchom ponownie komputer, żeby wszystkie zmiany zadziałały.' -ForegroundColor Green
+    Write-Host (Get-WmText 'provision.finished') -ForegroundColor Green
 }
 if ($failed) { exit 1 }
 exit 0

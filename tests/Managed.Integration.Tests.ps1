@@ -11,6 +11,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         . (Join-Path $root 'lib\Choco.ps1')
         . (Join-Path $root 'lib\Managed.ps1')
         . (Join-Path $root 'lib\Task.ps1')
+        Initialize-WmLanguage -Lang 'en'
 
         $src = $env:WM_CI_SOURCES
         $id = (Get-Content -LiteralPath (Join-Path $src 'v1\source-id.txt') -Raw).Trim()
@@ -42,7 +43,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
     It 'accepts the osslsigncode signature once the certificate is in the root store' {
         Install-WmSigningCertificate -Certificate (Get-WmSigningCertificate -Config (New-TestConfig (Join-Path $src 'v1')) -Dir $script:WmRoot)
         $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $src 'v1\manifest.psd1')
-        Write-Host "Podpis: $($sig.Status) $($sig.StatusMessage)"
+        Write-Host "Signature: $($sig.Status) $($sig.StatusMessage)"
         $sig.Status | Should -Be 'Valid'
         $sig.SignerCertificate.Thumbprint | Should -Be $thumb
     }
@@ -122,12 +123,12 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
 
     It 'rejects an older version' {
         $settings = (New-TestConfig (Join-Path $src 'v1')).Management
-        { Update-WmManagedCopy -Settings $settings -Thumbprint $thumb } | Should -Throw '*starszy*'
+        { Update-WmManagedCopy -Settings $settings -Thumbprint $thumb } | Should -Throw '*older*'
     }
 
     It 'rejects a manifest of another source signed with the same key' {
         $settings = (New-TestConfig (Join-Path $src 'other')).Management
-        { Update-WmManagedCopy -Settings $settings -Thumbprint $thumb } | Should -Throw '*innego źródła*'
+        { Update-WmManagedCopy -Settings $settings -Thumbprint $thumb } | Should -Throw '*another source*'
     }
 
     It 'rejects a changed file and a changed manifest' {
@@ -144,7 +145,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         $file = Join-Path $changedManifest 'manifest.psd1'
         $text = [IO.File]::ReadAllText($file)
         [IO.File]::WriteAllText($file, $text.Replace('Serial   = ', 'Serial   = 9'), (New-Object System.Text.UTF8Encoding($true)))
-        { Update-WmManagedCopy -Settings (New-TestConfig $changedManifest).Management -Thumbprint $thumb } | Should -Throw '*podpis*'
+        { Update-WmManagedCopy -Settings (New-TestConfig $changedManifest).Management -Thumbprint $thumb } | Should -Throw '*signature*'
 
         Test-Path -LiteralPath $script:WmManagedDir | Should -BeFalse
     }
@@ -172,7 +173,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Register-WmTasks -Config (New-TestConfig (Join-Path $src 'v2'))
         $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs
         $trigger = $task.Triggers | Select-Object -First 1
-        Write-Host "Powtarzanie: co $($trigger.Repetition.Interval), przez '$($trigger.Repetition.Duration)'"
+        Write-Host "Repetition: every $($trigger.Repetition.Interval), for '$($trigger.Repetition.Duration)'"
         $trigger.Repetition.Interval | Should -Be 'PT1H'
         $task.Actions[0].Arguments | Should -BeLike '*Invoke-Jobs.ps1*'
         (Get-ScheduledTaskInfo -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).NextRunTime | Should -Not -BeNullOrEmpty

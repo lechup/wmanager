@@ -2,8 +2,13 @@
 # 1. If a restart is needed after an update: a notification asking for a restart.
 # 2. Once per user: if the default browser differs from the configured one, opens Settings.
 
+param([string]$Lang)
+
 $ErrorActionPreference = 'SilentlyContinue'
 $root       = Join-Path $env:ProgramData 'wmanager'
+# The signed-in user's display language (the task runs in the user's session)
+. (Join-Path $root 'lib\Lang.ps1')
+Initialize-WmLanguage -Lang $Lang -Root $root
 $stateDir   = Join-Path $root 'state'
 $rebootKey  = 'HKLM:\SOFTWARE\wmanager\RebootRequired'   # volatile: Windows removes it at restart
 $publicFile = Join-Path $stateDir 'public.json'
@@ -29,7 +34,7 @@ function Show-WmToast {
 # The flag comes from program updates, from a restart Windows itself waits for, or from a group script,
 # so the text doesn't say which
 if (Test-Path -LiteralPath $rebootKey) {
-    Show-WmToast 'Potrzebny restart komputera' 'Aktualizacje będą gotowe po ponownym uruchomieniu. Uruchom ponownie komputer, gdy będzie Ci wygodnie.'
+    Show-WmToast (Get-WmText 'notify.restart_title') (Get-WmText 'notify.restart_text')
 }
 
 # --- 2. Default browser (one-time) -------------------------------------------
@@ -42,7 +47,7 @@ if (Test-Path -LiteralPath $publicFile) {
     if ($progId -and -not $asked -and (Test-Path -LiteralPath "Registry::HKEY_CLASSES_ROOT\$progId")) {
         $current = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice' -ErrorAction SilentlyContinue).ProgId
         if ($current -ne $progId) {
-            Show-WmToast 'Ustaw domyślną przeglądarkę' "Za chwilę otworzą się Ustawienia. Wybierz $name jako domyślną przeglądarkę."
+            Show-WmToast (Get-WmText 'notify.browser_title') (Get-WmText 'notify.browser_text' @($name))
             Start-Sleep -Seconds 5
             Start-Process "ms-settings:defaultapps?registeredAppMachine=$([uri]::EscapeDataString($name))"
         }
