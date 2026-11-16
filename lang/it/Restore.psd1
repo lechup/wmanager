@@ -1,0 +1,23 @@
+﻿# Messages of Restore-Backup.ps1 (Italian).
+@{
+    'restore.no_backup'                 = 'Nessun backup in {0}: wmanager non è stato eseguito qui.'
+    'restore.lock_wait'                 = 'Un''altra esecuzione di wmanager è in corso (ad es. job dei gruppi); attesa fino a 10 minuti...'
+    'restore.lock_busy'                 = 'Un''altra esecuzione di wmanager è ancora in corso. Riprova tra poco.'
+    'restore.journal_read_failed'       = 'Impossibile leggere il diario delle modifiche: {0}'
+    'restore.start'                     = '{0}: ripristino su {1}. Diario: {2} valori del computer, {3} valori utente; backup: {4}.'
+    'restore.confirm'                   = 'Vuoi annullare le modifiche di wmanager?'
+    'restore.cancelled'                 = 'Annullato, non è stato modificato nulla.'
+    'restore.profile_not_found'         = 'Il profilo {0} non esiste o non è stato possibile caricarlo; le sue impostazioni non sono state ripristinate.'
+    'restore.registry_summary'          = 'Registro di sistema: ripristinati {0} valori su {1}.'
+    'restore.store_apps_removed'        = 'App dello Store rimosse dopo il backup {0} ({1}); se servono, reinstallale dallo Store:'
+    'restore.onedrive_removed'          = 'OneDrive è stato disinstallato; se serve, installalo di nuovo dal sito Microsoft.'
+    'restore.confirm_disable_tasks'     = 'Vuoi disattivare le attività di wmanager? Altrimenti l''aggiornamento pianificato rimuoverà di nuovo le app e modificherà le impostazioni.'
+    'restore.tasks_disabled'            = 'Attività di wmanager disattivate ({0}).'
+    'restore.tasks_kept'                = 'Le attività di wmanager restano attive; l''aggiornamento pianificato applicherà di nuovo le impostazioni.'
+    'restore.certificate_removed'       = 'Certificato di firma di wmanager rimosso dall''archivio dei certificati attendibili ({0}).'
+    'restore.certificate_remove_failed' = 'Impossibile rimuovere il certificato di firma di wmanager dall''archivio dei certificati attendibili: {0}'
+    'restore.stopped'                   = 'Ripristino interrotto: {0}'
+    'restore.summary'                   = 'Fatto: {0} avvisi, {1} errori. Log: {2}'
+    'restore.finished_with_errors'      = 'Ripristino terminato con errori. Controlla il log qui sopra.'
+    'restore.finished'                  = 'Ripristino terminato. Riavvia il computer per rendere effettive le impostazioni.'
+}

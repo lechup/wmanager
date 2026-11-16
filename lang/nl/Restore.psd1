@@ -1,0 +1,23 @@
+﻿# Messages of Restore-Backup.ps1 (Dutch).
+@{
+    'restore.no_backup'                 = 'Geen back-up in {0}: wmanager is hier niet uitgevoerd.'
+    'restore.lock_wait'                 = 'Er loopt al een andere wmanager-uitvoering (bijv. groepsopdrachten); maximaal 10 minuten wachten...'
+    'restore.lock_busy'                 = 'Er loopt nog een andere wmanager-uitvoering. Probeer het zo meteen opnieuw.'
+    'restore.journal_read_failed'       = 'Kan het wijzigingsjournaal niet lezen: {0}'
+    'restore.start'                     = '{0}: herstellen op {1}. Journaal: {2} computerwaarden, {3} gebruikerswaarden; back-ups: {4}.'
+    'restore.confirm'                   = 'De wijzigingen van wmanager ongedaan maken?'
+    'restore.cancelled'                 = 'Geannuleerd, er is niets gewijzigd.'
+    'restore.profile_not_found'         = 'Profiel {0} bestaat niet of kan niet worden geladen; de instellingen ervan zijn niet hersteld.'
+    'restore.registry_summary'          = 'Register: {0} van {1} waarden hersteld.'
+    'restore.store_apps_removed'        = 'Sinds back-up {0} ({1}) verwijderde Store-apps; installeer ze zo nodig opnieuw vanuit de Store:'
+    'restore.onedrive_removed'          = 'OneDrive is verwijderd; installeer het zo nodig opnieuw vanaf de website van Microsoft.'
+    'restore.confirm_disable_tasks'     = 'De wmanager-taken uitschakelen? Anders verwijdert de geplande update de apps weer en wijzigt hij de instellingen opnieuw.'
+    'restore.tasks_disabled'            = 'wmanager-taken uitgeschakeld ({0}).'
+    'restore.tasks_kept'                = 'De wmanager-taken blijven ingeschakeld; de geplande update past de instellingen opnieuw toe.'
+    'restore.certificate_removed'       = 'Ondertekeningscertificaat van wmanager verwijderd uit het vertrouwde certificaatarchief ({0}).'
+    'restore.certificate_remove_failed' = 'Kan het ondertekeningscertificaat van wmanager niet verwijderen uit het vertrouwde certificaatarchief: {0}'
+    'restore.stopped'                   = 'Herstel gestopt: {0}'
+    'restore.summary'                   = 'Klaar: {0} waarschuwingen, {1} fouten. Logboek: {2}'
+    'restore.finished_with_errors'      = 'Herstel voltooid met fouten. Controleer het logboek hierboven.'
+    'restore.finished'                  = 'Herstel voltooid. Start de computer opnieuw op zodat de instellingen van kracht worden.'
+}

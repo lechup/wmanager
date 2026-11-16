@@ -1,0 +1,23 @@
+﻿# Messages of Restore-Backup.ps1 (Czech).
+@{
+    'restore.no_backup'                 = 'V {0} není žádná záloha: wmanager zde nebyl spuštěn.'
+    'restore.lock_wait'                 = 'Probíhá jiný běh wmanager (např. úkoly skupin); čeká se až 10 minut...'
+    'restore.lock_busy'                 = 'Jiný běh wmanager stále probíhá. Zkuste to za chvíli znovu.'
+    'restore.journal_read_failed'       = 'Nelze načíst deník změn: {0}'
+    'restore.start'                     = '{0}: obnovení na počítači {1}. Deník: hodnoty počítače {2}, hodnoty uživatelů {3}; zálohy: {4}.'
+    'restore.confirm'                   = 'Vrátit změny provedené nástrojem wmanager?'
+    'restore.cancelled'                 = 'Zrušeno, nic nebylo změněno.'
+    'restore.profile_not_found'         = 'Profil {0} neexistuje nebo ho nelze načíst; jeho nastavení nebyla obnovena.'
+    'restore.registry_summary'          = 'Registr: obnoveno {0} z {1} hodnot.'
+    'restore.store_apps_removed'        = 'Aplikace z obchodu Microsoft Store odebrané od zálohy {0} ({1}); v případě potřeby je nainstalujte znovu z obchodu Microsoft Store:'
+    'restore.onedrive_removed'          = 'OneDrive byl odinstalován; pokud je potřeba, nainstalujte ho znovu z webu Microsoftu.'
+    'restore.confirm_disable_tasks'     = 'Zakázat úlohy wmanager? Jinak plánovaná aktualizace znovu odebere aplikace a změní nastavení.'
+    'restore.tasks_disabled'            = 'Úlohy wmanager zakázány ({0}).'
+    'restore.tasks_kept'                = 'Úlohy wmanager zůstávají povolené; plánovaná aktualizace nastavení znovu použije.'
+    'restore.certificate_removed'       = 'Podpisový certifikát wmanager odebrán z důvěryhodného úložiště ({0}).'
+    'restore.certificate_remove_failed' = 'Nepodařilo se odebrat podpisový certifikát wmanager z důvěryhodného úložiště: {0}'
+    'restore.stopped'                   = 'Obnovení přerušeno: {0}'
+    'restore.summary'                   = 'Hotovo. Upozornění: {0}, chyby: {1}. Protokol: {2}'
+    'restore.finished_with_errors'      = 'Obnovení skončilo s chybami. Zkontrolujte protokol výše.'
+    'restore.finished'                  = 'Obnovení dokončeno. Restartujte počítač, aby se nastavení projevila.'
+}

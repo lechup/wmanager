@@ -1,0 +1,23 @@
+﻿# Messages of Restore-Backup.ps1 (Portuguese).
+@{
+    'restore.no_backup'                 = 'Nenhuma cópia de segurança em {0}: o wmanager não foi executado aqui.'
+    'restore.lock_wait'                 = 'Está em curso outra execução do wmanager (p. ex. trabalhos de grupo); a aguardar até 10 minutos...'
+    'restore.lock_busy'                 = 'Ainda está em curso outra execução do wmanager. Tente novamente daqui a pouco.'
+    'restore.journal_read_failed'       = 'Não é possível ler o diário de alterações: {0}'
+    'restore.start'                     = '{0}: a restaurar em {1}. Diário: {2} valores do computador, {3} valores de utilizadores; cópias de segurança: {4}.'
+    'restore.confirm'                   = 'Anular as alterações do wmanager?'
+    'restore.cancelled'                 = 'Cancelado, nada foi alterado.'
+    'restore.profile_not_found'         = 'O perfil {0} não existe ou não foi possível carregá-lo; as suas definições não foram restauradas.'
+    'restore.registry_summary'          = 'Valores do registo restaurados: {0} de {1}.'
+    'restore.store_apps_removed'        = 'Aplicações da Store removidas desde a cópia de segurança {0} ({1}); se necessário, reinstale-as a partir da Store:'
+    'restore.onedrive_removed'          = 'O OneDrive foi desinstalado; se for necessário, instale-o novamente a partir do site da Microsoft.'
+    'restore.confirm_disable_tasks'     = 'Desativar as tarefas do wmanager? Caso contrário, a atualização agendada vai voltar a remover as aplicações e a alterar as definições.'
+    'restore.tasks_disabled'            = 'Tarefas do wmanager desativadas ({0}).'
+    'restore.tasks_kept'                = 'As tarefas do wmanager continuam ativas; a atualização agendada vai voltar a aplicar as definições.'
+    'restore.certificate_removed'       = 'Certificado de assinatura do wmanager removido do arquivo de certificados fidedignos ({0}).'
+    'restore.certificate_remove_failed' = 'Não foi possível remover o certificado de assinatura do wmanager do arquivo de certificados fidedignos: {0}'
+    'restore.stopped'                   = 'Restauro interrompido: {0}'
+    'restore.summary'                   = 'Concluído: {0} avisos, {1} erros. Registo: {2}'
+    'restore.finished_with_errors'      = 'O restauro terminou com erros. Verifique o registo acima.'
+    'restore.finished'                  = 'Restauro concluído. Reinicie o computador para que as definições entrem em vigor.'
+}
