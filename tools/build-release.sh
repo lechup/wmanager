@@ -34,7 +34,8 @@ printf '%s\r\n' "$tag" > "$work/wmanager/VERSION"
 stamp=$(git -C "$root" log -1 --format=%ct "$tag^{commit}")
 find "$work/wmanager" -exec touch -h -d "@$stamp" {} +
 rm -f "$out/wmanager-$tag.zip"
-(cd "$work" && find wmanager -print | LC_ALL=C sort | zip -qX -@ "$out/wmanager-$tag.zip")
+# zip stores local time: TZ=UTC makes the ZIP the same on every machine
+(cd "$work" && find wmanager -print | LC_ALL=C sort | TZ=UTC zip -qX -@ "$out/wmanager-$tag.zip")
 cp "$work/wmanager/install.ps1" "$out/install.ps1"
 (cd "$out" && sha256sum "wmanager-$tag.zip" install.ps1 > SHA256SUMS)
 echo "Gotowe: $out/wmanager-$tag.zip, install.ps1, SHA256SUMS"

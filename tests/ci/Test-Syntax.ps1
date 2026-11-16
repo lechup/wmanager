@@ -1,5 +1,5 @@
 ﻿# CI: parses every PowerShell file of the repository with the Windows PowerShell 5.1 parser, and checks that
-# files with non-ASCII characters have a BOM (without one, 5.1 reads them as ANSI).
+# files with non-ASCII characters have a BOM (without one, 5.1 reads them as ANSI); install.ps1 must be plain ASCII.
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $bad = 0
 # Not -Include: together with -LiteralPath, 5.1 ignores it and returns every file
@@ -16,6 +16,14 @@ foreach ($f in $files) {
     }
     $bytes = [IO.File]::ReadAllBytes($f.FullName)
     $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+    if ($rel -eq 'install.ps1') {
+        # "irm | iex" in 5.1 reads it as ISO-8859-1: a BOM or a Polish letter would break the one-liner
+        if ($bytes | Where-Object { $_ -ge 0x80 } | Select-Object -First 1) {
+            Write-Host "::error file=$rel::install.ps1 musi być w czystym ASCII, bez BOM (irm | iex w PowerShell 5.1)"
+            $bad++
+        }
+        continue
+    }
     if (-not $hasBom -and ($bytes | Where-Object { $_ -ge 0x80 } | Select-Object -First 1)) {
         Write-Host "::error file=$rel::znaki spoza ASCII bez BOM"
         $bad++
