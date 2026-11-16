@@ -15,11 +15,20 @@ Microsoft Store, Edge, Defender and Windows Update stay.
 
 ## Quick start
 
-1. Copy `provision.config.example.psd1` to `provision.config.psd1` and fill it in (Loki, Healthchecks, list sources).
-2. Put the whole folder on a USB drive or a network share.
-3. On the computer, run `run.cmd` (it asks for administrator rights by itself).
-4. Enter a computer name, or press Enter to keep the current one.
-5. Restart the computer when it finishes.
+1. Download wmanager: on GitHub **Code → Download ZIP** (or `git clone`), and unpack it.
+2. Optionally edit `choco-reqs.txt`, the list of programs (see [choco-reqs.txt](#choco-reqstxt)).
+3. Run the configuration wizard: `init.cmd` on Windows, or `pwsh ./init.ps1` on Linux or macOS (PowerShell 7).
+   It asks for the update time, Grafana Cloud Loki, Healthchecks.io and the management source of computer groups,
+   checks them (a test line to Loki, an optional test ping, the signed manifest of the source) and writes
+   `provision.config.psd1`. Every answer is optional; without the file at all, provisioning uses the example
+   configuration (no Loki, no Healthchecks). Other settings (apps to remove, default browser, Chocolatey sources)
+   are edited in the file by hand.
+4. Put the whole folder on a USB drive or a network share. `provision.config.psd1` holds the tokens: keep the drive
+   under control.
+5. On the computer, run `run.cmd` (it asks for administrator rights by itself) and enter a computer name, or press
+   Enter to keep the current one.
+6. The first run takes about half an hour, mostly downloading the programs. Restart the computer when it finishes.
+   From then on it updates itself every day at 12:00; logs are in `C:\ProgramData\wmanager\logs`.
 
 You can also pass the name up front: `run.cmd -ComputerName OFFICE-03`.
 Provisioning is meant to be run by a person at the console: when a safety step fails (restore point, backup,
@@ -31,6 +40,7 @@ changing anything.
 | File | Role |
 | --- | --- |
 | `run.cmd` | Double-click launcher; elevates and passes parameters through |
+| `init.cmd`, `init.ps1` | Configuration wizard: writes and checks `provision.config.psd1` (Windows PowerShell 5.1 or PowerShell 7, also on Linux) |
 | `Provision.ps1` | Main script |
 | `Update-Packages.ps1` | Scheduled update, daily by default (`wmanager-Update` task), and retry at sign-in (`wmanager-Retry`) |
 | `Invoke-Jobs.ps1` | Group jobs, every hour (`wmanager-Jobs`, only with a management source) |
@@ -38,10 +48,10 @@ changing anything.
 | `Restore-Backup.ps1` | Undoes the registry changes made by provisioning (see [Backup and restore](#backup-and-restore)) |
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
 | `choco-reqs.txt` | Package list (when there is no management source) |
-| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks |
+| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks, the configuration wizard |
 | `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
-| `tests\` | Pester tests (list parser, management source checks, app removal), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
+| `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
@@ -244,7 +254,9 @@ On Linux (needs `openssl`, `osslsigncode`: `sudo apt install osslsigncode`):
 4. In `provision.config.psd1` set `Management`: `Source` (e.g.
    `https://raw.githubusercontent.com/<owner>/<repo>/main`), `SourceId` (from step 3), `AuthHeader` (e.g.
    `token github_pat_...`: a fine-grained token for this one repository with **Contents: read-only**), and put
-   `wmanager-signing.cer` next to `provision.config.psd1`.
+   `wmanager-signing.cer` next to `provision.config.psd1`. The wizard (`init.cmd` / `pwsh ./init.ps1`) does this:
+   it fetches the manifest, offers its identifier, checks the signature with the certificate (on Windows) and copies
+   the certificate next to the configuration.
 
 ### Making a change
 
@@ -355,7 +367,9 @@ The integration tests (`tests\Managed.Integration.Tests.ps1`) change the compute
    then the integration tests: Windows accepts the osslsigncode signature, rejects an older manifest, a manifest of
    another source, a changed file and a changed manifest; a script runs once per content and a failing one every time;
    jobs run when due, their JSON lines reach the Loki batch with the `task` label; the example system report runs;
-   the hourly task is registered.
+   the hourly task is registered; the wizard accepts the manifest signed with the source certificate and names
+   another signer.
+3. Linux, PowerShell 7: the configuration wizard's tests, since `init.ps1` also runs there.
 
 CI runs on Windows Server, not Windows 11 Home/Pro, so it doesn't replace the checks below.
 
