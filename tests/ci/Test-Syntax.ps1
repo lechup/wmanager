@@ -19,16 +19,16 @@ foreach ($f in $files) {
     if ($rel -eq 'install.ps1') {
         # "irm | iex" in 5.1 reads it as ISO-8859-1: a BOM or a Polish letter would break the one-liner
         if ($bytes | Where-Object { $_ -ge 0x80 } | Select-Object -First 1) {
-            Write-Host "::error file=$rel::install.ps1 musi być w czystym ASCII, bez BOM (irm | iex w PowerShell 5.1)"
+            Write-Host "::error file=$rel::install.ps1 must be plain ASCII, without a BOM (irm | iex in PowerShell 5.1)"
             $bad++
         }
         continue
     }
     if (-not $hasBom -and ($bytes | Where-Object { $_ -ge 0x80 } | Select-Object -First 1)) {
-        Write-Host "::error file=$rel::znaki spoza ASCII bez BOM"
+        Write-Host "::error file=$rel::non-ASCII characters without a BOM"
         $bad++
     }
 }
-Write-Host "Sprawdzono plików: $($files.Count), błędów: $bad."
+Write-Host "Files checked: $($files.Count), errors: $bad."
 if ($bad -gt 0) { exit 1 }
 exit 0

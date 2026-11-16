@@ -10,7 +10,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-[[ $# -eq 1 ]] || { echo "użycie: $0 <folder-wyjściowy>" >&2; exit 1; }
+[[ $# -eq 1 ]] || { echo "usage: $0 <output-folder>" >&2; exit 1; }
 mkdir -p "$1"
 out=$(cd "$1" && pwd)
 work=$(mktemp -d)
@@ -40,4 +40,4 @@ rm "$src/manifest.psd1" "$src/source-id.txt"
 "$root/tools/publish.sh" "$src" "$keys"
 cp -r "$src" "$out/other"
 
-echo "Źródła testowe w $out: v1 ($(cat "$out/v1/source-id.txt")), v2, other ($(cat "$out/other/source-id.txt"))."
+echo "Test sources in $out: v1 ($(cat "$out/v1/source-id.txt")), v2, other ($(cat "$out/other/source-id.txt"))."

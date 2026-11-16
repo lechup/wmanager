@@ -11,17 +11,17 @@
 # can't be used to issue certificates for websites. Requires openssl.
 set -euo pipefail
 
-die() { echo "BŁĄD: $*" >&2; exit 1; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
 dir=${1:-$HOME/.wmanager-signing}
-command -v openssl >/dev/null || die "brak openssl"
-[[ -e $dir/key.pem ]] && die "w $dir już jest key.pem; nie nadpisuję go (nowy klucz = nowy certyfikat na wszystkich komputerach)"
+command -v openssl >/dev/null || die "openssl not found"
+[[ -e $dir/key.pem ]] && die "$dir already holds key.pem; not overwriting it (a new key means a new certificate on every computer)"
 
 mkdir -p "$dir"
 chmod 700 "$dir"
 umask 077
 
-echo "Podaj hasło, którym zostanie zabezpieczony klucz (pytanie pojawi się dwa razy)."
+echo "Enter the passphrase that will protect the key (you will be asked twice)."
 openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -subj "/CN=wmanager signing" \
     -addext "basicConstraints=critical,CA:FALSE" \
     -addext "keyUsage=critical,digitalSignature" \
@@ -33,8 +33,8 @@ chmod 644 "$dir/cert.pem" "$dir/wmanager-signing.cer"
 thumb=$(openssl x509 -in "$dir/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
 cat <<EOF
 
-Gotowe. Odcisk certyfikatu (SHA1): $thumb
-- Skopiuj $dir/wmanager-signing.cer obok provision.config.psd1 (pendrive lub udział).
-- Zrób kopię zapasową $dir/key.pem w bezpiecznym miejscu i zapamiętaj hasło:
-  bez klucza nie podpiszesz kolejnych zmian, a nowy klucz trzeba wgrać na każdy komputer.
+Done. Certificate thumbprint (SHA1): $thumb
+- Copy $dir/wmanager-signing.cer next to provision.config.psd1 (USB drive or share).
+- Back up $dir/key.pem somewhere safe and remember the passphrase:
+  without the key you can't sign further changes, and a new key means a new certificate on every computer.
 EOF

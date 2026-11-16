@@ -11,14 +11,14 @@
 # Needs git, zip and sha256sum.
 set -euo pipefail
 
-die() { echo "BŁĄD: $*" >&2; exit 1; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
-[[ $# -eq 2 ]] || die "użycie: $0 <tag> <folder-wyjściowy>"
+[[ $# -eq 2 ]] || die "usage: $0 <tag> <output-folder>"
 tag=$1
-[[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || die "tag w formacie vX.Y.Z albo vX.Y.Z-rc1 ('$tag')"
-for c in git zip sha256sum; do command -v "$c" >/dev/null || die "brak $c"; done
+[[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || die "the tag must look like vX.Y.Z or vX.Y.Z-rc1 ('$tag')"
+for c in git zip sha256sum; do command -v "$c" >/dev/null || die "$c not found"; done
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
-git -C "$root" rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null || die "brak tagu $tag"
+git -C "$root" rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null || die "tag $tag not found"
 
 mkdir -p "$2"
 out=$(cd "$2" && pwd)
@@ -38,4 +38,4 @@ rm -f "$out/wmanager-$tag.zip"
 (cd "$work" && find wmanager -print | LC_ALL=C sort | TZ=UTC zip -qX -@ "$out/wmanager-$tag.zip")
 cp "$work/wmanager/install.ps1" "$out/install.ps1"
 (cd "$out" && sha256sum "wmanager-$tag.zip" install.ps1 > SHA256SUMS)
-echo "Gotowe: $out/wmanager-$tag.zip, install.ps1, SHA256SUMS"
+echo "Done: $out/wmanager-$tag.zip, install.ps1, SHA256SUMS"
