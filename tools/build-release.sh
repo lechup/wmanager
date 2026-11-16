@@ -30,8 +30,10 @@ git -C "$root" archive --format=tar --prefix=wmanager/ "$tag" | tar -x -C "$work
 rm -rf "$work/wmanager/tests" "$work/wmanager/.github"
 printf '%s\r\n' "$tag" > "$work/wmanager/VERSION"
 
-# The same tag gives the same ZIP: file times from the tagged commit, fixed order, no extra attributes
+# The same tag gives the same ZIP: file times from the tagged commit, permissions that don't depend on the
+# builder's umask (zip stores them), fixed order, no extra attributes
 stamp=$(git -C "$root" log -1 --format=%ct "$tag^{commit}")
+chmod -R u=rwX,go=rX "$work/wmanager"
 find "$work/wmanager" -exec touch -h -d "@$stamp" {} +
 rm -f "$out/wmanager-$tag.zip"
 # zip stores local time: TZ=UTC makes the ZIP the same on every machine
