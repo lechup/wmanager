@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     wmanager: installs the latest release from GitHub and runs provisioning. No USB drive needed.
 
@@ -11,10 +11,14 @@
 
         & ([scriptblock]::Create((irm https://github.com/lechup/wmanager/releases/latest/download/install.ps1))) -ComputerName OFFICE-03
 
-    Downloads the ZIP of the release, checks it against SHA256SUMS of the same release, unpacks it to a temporary
-    folder, asks where provision.config.psd1 is (a path or any https:// address; Enter = the example configuration)
-    and runs Provision.ps1 in Windows PowerShell 5.1, the way run.cmd does. The temporary folder (with the tokens of
-    the configuration) is removed at the end; provisioning keeps its own copy in C:\ProgramData\wmanager.
+    Downloads SHA256SUMS and the ZIP of the release (the download links, not the GitHub API, which allows only 60
+    requests an hour from one address), checks the ZIP, unpacks it to a temporary folder and runs lib\Install.ps1
+    from it in Windows PowerShell 5.1: that asks where provision.config.psd1 is and runs Provision.ps1. The temporary
+    folder (with the tokens of the configuration) is removed at the end.
+
+    This file stays plain ASCII without a BOM (tests/ci/Test-Syntax.ps1 checks it): "irm | iex" in Windows
+    PowerShell 5.1 reads a release asset (application/octet-stream) as ISO-8859-1, so a BOM or Polish letters would
+    break it. Its few messages are therefore without Polish letters; the rest is in lib\Install.ps1.
 
 .PARAMETER ComputerName
     Passed to Provision.ps1 (without it provisioning asks).
@@ -26,24 +30,29 @@
     A given release (e.g. v0.1.0) instead of the latest.
 .PARAMETER Repository
     owner/name of the GitHub repository.
+.PARAMETER ReleasesUrl
+    https:// address of the releases with GitHub's layout (latest/download/..., download/<tag>/...), for a mirror;
+    defaults to https://github.com/<Repository>/releases.
 #>
 param(
     [string]$ComputerName,
     [string]$Config,
     [string]$AuthHeader,
     [string]$Tag,
-    [string]$Repository = 'lechup/wmanager'
+    [string]$Repository = 'lechup/wmanager',
+    [string]$ReleasesUrl
 )
 
-# --- Steps (also used by the tests: they set $WmInstallNoRun and dot-source this file) ---------------------------
+# --- Steps (the tests set $WmInstallNoRun and dot-source this file) ------------------------------------------------
 
-# The ZIP and SHA256SUMS of a release (the object the GitHub API returns).
-function Get-WmReleaseAssets {
-    param([Parameter(Mandatory = $true)]$Release)
-    $zip = @($Release.assets | Where-Object { $_.name -like 'wmanager-*.zip' })
-    $sums = @($Release.assets | Where-Object { $_.name -eq 'SHA256SUMS' })
-    if ($zip.Count -ne 1 -or $sums.Count -ne 1) { throw "Wydanie $($Release.tag_name) nie ma pliku wmanager-*.zip i SHA256SUMS." }
-    return [pscustomobject]@{ Tag = [string]$Release.tag_name; Zip = $zip[0]; Sums = $sums[0] }
+# The name of the release ZIP in SHA256SUMS (wmanager-<tag>.zip).
+function Get-WmZipName {
+    param([Parameter(Mandatory = $true)][string]$SumsFile)
+    $names = @(Get-Content -LiteralPath $SumsFile | ForEach-Object {
+        if ($_ -match '^[0-9a-fA-F]{64} [ *](wmanager-[0-9A-Za-z.-]+\.zip)$') { $Matches[1] }
+    })
+    if ($names.Count -ne 1) { throw 'SHA256SUMS nie wskazuje jednego pliku wmanager-*.zip.' }
+    return $names[0]
 }
 
 # Throws unless the file's SHA-256 is the one SHA256SUMS lists for its name.
@@ -55,137 +64,74 @@ function Assert-WmSha256 {
     })
     if ($want.Count -ne 1) { throw "SHA256SUMS nie zawiera sumy pliku $name." }
     $have = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash
-    if ($have -ne $want[0]) { throw "Suma SHA-256 pliku $name się nie zgadza: pobrany plik jest uszkodzony albo podmieniony. Nic nie uruchomiłem." }
-}
-
-# Where the certificate of a configuration is: next to it, at the same address or in the same folder.
-function Get-WmSiblingLocation {
-    param([Parameter(Mandatory = $true)][string]$Location, [Parameter(Mandatory = $true)][string]$Name)
-    if ($Location -match '^https://') { return (New-Object Uri -ArgumentList ([Uri]$Location), $Name).AbsoluteUri }
-    # [IO.Path], not Split-Path/Join-Path: those look the drive up (a USB drive letter or a share may not be mapped)
-    return [IO.Path]::Combine([IO.Path]::GetDirectoryName($Location), $Name)
-}
-
-function Get-WmFile {
-    param([string]$Location, [string]$Destination, [string]$AuthHeader)
-    if ($Location -match '^https://') {
-        $headers = @{}
-        if ($AuthHeader) { $headers['Authorization'] = $AuthHeader }
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $Location -OutFile $Destination -Headers $headers -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
-    } else {
-        Copy-Item -LiteralPath $Location -Destination $Destination -Force -ErrorAction Stop
-    }
-}
-
-# Puts provision.config.psd1 (and, with a management source, its certificate) into the unpacked folder.
-function Copy-WmConfiguration {
-    param([Parameter(Mandatory = $true)][string]$Location, [string]$AuthHeader, [Parameter(Mandatory = $true)][string]$Folder)
-    if ($Location -match '^[A-Za-z][A-Za-z0-9+.-]*://' -and $Location -notmatch '^https://') { throw "Konfiguracja: tylko adres https:// ('$Location')." }
-    $file = Join-Path $Folder 'provision.config.psd1'
-    Get-WmFile -Location $Location -Destination $file -AuthHeader $AuthHeader
-    # -ErrorAction Stop: in a session with the default preference a broken file is only an error message
-    try { $cfg = Import-PowerShellDataFile -LiteralPath $file -ErrorAction Stop } catch { $cfg = $null; $why = $_.Exception.Message }
-    if (-not ($cfg -is [hashtable])) { throw "Pobrany plik nie jest poprawną konfiguracją wmanagera: $why" }
-    $m = $cfg['Management']
-    if ($m -is [hashtable] -and $m['Source']) {
-        $cert = if ($m['Certificate']) { [string]$m['Certificate'] } else { 'wmanager-signing.cer' }
-        $from = Get-WmSiblingLocation -Location $Location -Name $cert
-        try { Get-WmFile -Location $from -Destination (Join-Path $Folder $cert) -AuthHeader $AuthHeader }
-        catch { throw "Konfiguracja ma źródło grup, ale nie ma obok niej certyfikatu $cert ($from): $($_.Exception.Message)" }
-    }
-}
-
-# The second half: from the downloaded ZIP and SHA256SUMS to a finished provisioning run.
-function Install-WmFromZip {
-    param(
-        [Parameter(Mandatory = $true)][string]$Zip,
-        [Parameter(Mandatory = $true)][string]$Sums,
-        [Parameter(Mandatory = $true)][string]$Work,
-        [string]$ComputerName,
-        [string]$Config,
-        [string]$AuthHeader
-    )
-    Assert-WmSha256 -File $Zip -SumsFile $Sums
-    Write-Host '  Suma SHA-256 się zgadza.'
-    Expand-Archive -LiteralPath $Zip -DestinationPath $Work -Force
-    $folder = Join-Path $Work 'wmanager'
-    if (-not (Test-Path -LiteralPath (Join-Path $folder 'Provision.ps1'))) { throw 'W pliku ZIP nie ma wmanager\Provision.ps1.' }
-
-    if (-not $Config) {
-        Write-Host ''
-        Write-Host 'Plik konfiguracji (provision.config.psd1 z init.cmd): ścieżka, np. E:\provision.config.psd1 albo'
-        Write-Host '\\serwer\udział\wmanager\provision.config.psd1, albo adres https://. Enter = konfiguracja przykładowa'
-        Write-Host '(bez Loki, Healthchecks i grup).'
-        $Config = ([string](Read-Host 'Konfiguracja')).Trim()
-    }
-    if ($Config -and $Config -ne '-') {
-        if ($Config -match '^https://' -and -not $AuthHeader) {
-            $ss = Read-Host 'Nagłówek Authorization, np. token github_pat_... (Enter = bez)' -AsSecureString
-            $AuthHeader = ([Net.NetworkCredential]::new('', $ss).Password).Trim()
-        }
-        Copy-WmConfiguration -Location $Config -AuthHeader $AuthHeader -Folder $folder
-        Write-Host '  Konfiguracja pobrana.'
-    } else {
-        Write-Host '  Bez pliku konfiguracji: provisioning użyje przykładowej.'
-    }
-
-    # Like run.cmd: Windows PowerShell 5.1 in this console. Start-Process, not &: the child must keep the console
-    # (provisioning asks questions), and nothing of its output may end up in this function's result.
-    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path $folder 'Provision.ps1')
-    if ($ComputerName) { $arguments += ' -ComputerName "{0}"' -f ($ComputerName -replace '"', '') }
-    $p = Start-Process -FilePath $ps -ArgumentList $arguments -NoNewWindow -Wait -PassThru
-    return $p.ExitCode
+    if ($have -ne $want[0]) { throw "Suma SHA-256 pliku $name sie nie zgadza: plik jest uszkodzony albo niepelny. Nic nie uruchomilem." }
 }
 
 function Install-Wmanager {
-    param([string]$ComputerName, [string]$Config, [string]$AuthHeader, [string]$Tag, [string]$Repository)
+    param([string]$ComputerName, [string]$Config, [string]$AuthHeader, [string]$Tag, [string]$Repository, [string]$ReleasesUrl)
     $ErrorActionPreference = 'Stop'   # only in this function (and what it calls), not in the user's session
-    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Write-Host 'wmanager instaluje się tylko w Windows.' -ForegroundColor Red; return }
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Write-Host 'wmanager instaluje sie tylko w Windows.' -ForegroundColor Red; return }
     $principal = New-Object Security.Principal.WindowsPrincipal -ArgumentList ([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Host 'Uruchom PowerShell jako administrator (prawy przycisk: "Uruchom jako administrator") i wklej polecenie jeszcze raz.' -ForegroundColor Red
+        Write-Host 'Uruchom PowerShell jako administrator (prawy przycisk: Uruchom jako administrator) i wklej polecenie jeszcze raz.' -ForegroundColor Red
         return
     }
     if ($PSVersionTable.PSVersion.Major -lt 6) {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     }
-
-    $which = if ($Tag) { "tags/$Tag" } else { 'latest' }
-    try {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/releases/$which" -UseBasicParsing `
-            -Headers @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'wmanager-install' } -TimeoutSec 30
-    } catch {
-        $status = 0
-        try { $status = [int]$_.Exception.Response.StatusCode } catch { }
-        if ($status -eq 404) { throw "Nie ma wydania $(if ($Tag) { $Tag } else { '(najnowszego)' }) w github.com/$Repository." }
-        throw "Nie udało się sprawdzić wydań na GitHubie: $($_.Exception.Message)"
-    }
-    $assets = Get-WmReleaseAssets -Release $release
-    Write-Host "wmanager $($assets.Tag): pobieram z github.com/$Repository..."
+    $ProgressPreference = 'SilentlyContinue'   # the progress bar slows downloads down a lot in 5.1
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ('wmanager-install-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
-        $zip = Join-Path $work $assets.Zip.name
+        # SHA256SUMS of the latest (or the given) release names its ZIP; the ZIP comes from that same release,
+        # so a release published in between doesn't mix two versions
+        if (-not $ReleasesUrl) { $ReleasesUrl = "https://github.com/$Repository/releases" }
+        if ($ReleasesUrl -notmatch '^https://') { throw 'ReleasesUrl: tylko adres https://.' }
+        $ReleasesUrl = $ReleasesUrl.TrimEnd('/')
+        $base = if ($Tag) { "$ReleasesUrl/download/$Tag" } else { "$ReleasesUrl/latest/download" }
         $sums = Join-Path $work 'SHA256SUMS'
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $assets.Zip.browser_download_url -OutFile $zip -UseBasicParsing -TimeoutSec 300
-        Invoke-WebRequest -Uri $assets.Sums.browser_download_url -OutFile $sums -UseBasicParsing -TimeoutSec 60
-        $code = Install-WmFromZip -Zip $zip -Sums $sums -Work $work -ComputerName $ComputerName -Config $Config -AuthHeader $AuthHeader
+        try { Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing -TimeoutSec 60 }
+        catch { throw "Nie ma wydania $(if ($Tag) { $Tag } else { '(najnowszego)' }) w $ReleasesUrl albo brak polaczenia: $($_.Exception.Message)" }
+        $zipName = Get-WmZipName -SumsFile $sums
+        $release = $zipName -replace '^wmanager-(.+)\.zip$', '$1'
+        Write-Host "wmanager $release`: pobieram z $ReleasesUrl..."
+        $zip = Join-Path $work $zipName
+        Invoke-WebRequest -Uri "$ReleasesUrl/download/$release/$zipName" -OutFile $zip -UseBasicParsing -TimeoutSec 300
+        Assert-WmSha256 -File $zip -SumsFile $sums
+        Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
+        $folder = Join-Path $work 'wmanager'
+        $next = Join-Path $folder 'lib\Install.ps1'
+        if (-not (Test-Path -LiteralPath $next)) { throw 'W pliku ZIP nie ma wmanager\lib\Install.ps1.' }
+
+        # The rest runs as a file in Windows PowerShell 5.1, in this console (it asks questions). The header goes
+        # through the environment, not the command line; WaitForExit, not -Wait, which also waits for every
+        # program provisioning started (an updater left running would hold the installer up)
+        if ($AuthHeader) { $env:WM_INSTALL_AUTH = $AuthHeader }
+        $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Folder "{1}"' -f $next, $folder
+        if ($ComputerName) { $arguments += ' -ComputerName "{0}"' -f ($ComputerName -replace '"', '') }
+        if ($Config) { $arguments += ' -Config "{0}"' -f ($Config -replace '"', '') }
+        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $p = Start-Process -FilePath $ps -ArgumentList $arguments -NoNewWindow -PassThru
+        $null = $p.Handle   # keeps the exit code readable after the process ends (Windows PowerShell 5.1)
+        $p.WaitForExit()
         Write-Host ''
-        Write-Host "Provisioning zakończony (kod $code)."
+        if ($p.ExitCode -eq 0) {
+            Write-Host 'Gotowe. Uruchom ponownie komputer, zeby wszystkie zmiany zadzialaly.' -ForegroundColor Green
+        } else {
+            Write-Host "Provisioning zakonczyl sie bledem (kod $($p.ExitCode)). Log: C:\ProgramData\wmanager\logs" -ForegroundColor Red
+        }
     } finally {
+        Remove-Item Env:\WM_INSTALL_AUTH -ErrorAction SilentlyContinue
         # The unpacked configuration holds the tokens; provisioning keeps its own copy
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-# Not "exit" anywhere: with "irm | iex" it would close the administrator's PowerShell window
+# Never "exit": with "irm | iex" it would close the administrator's PowerShell window
 if (-not $WmInstallNoRun) {
     try {
-        Install-Wmanager -ComputerName $ComputerName -Config $Config -AuthHeader $AuthHeader -Tag $Tag -Repository $Repository
+        Install-Wmanager -ComputerName $ComputerName -Config $Config -AuthHeader $AuthHeader -Tag $Tag -Repository $Repository -ReleasesUrl $ReleasesUrl
     } catch {
         Write-Host "Instalacja przerwana: $($_.Exception.Message)" -ForegroundColor Red
     }

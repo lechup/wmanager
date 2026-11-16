@@ -43,9 +43,10 @@ it). Then, on the computer, in PowerShell started as administrator:
 irm https://github.com/lechup/wmanager/releases/latest/download/install.ps1 | iex
 ```
 
-It downloads the latest release, checks it against the release's SHA-256 sums, asks where the configuration is (a path
-or an https:// address, with an optional `Authorization` header; Enter = the example configuration) and runs
-provisioning the way `run.cmd` does. With parameters:
+It downloads the latest release, checks the ZIP against the release's SHA-256 sums (a complete, intact download),
+asks where the configuration is (a path, also one pasted in quotes, or an https:// address with an optional
+`Authorization` header; Enter = the example configuration) and runs provisioning the way `run.cmd` does, in Windows
+PowerShell 5.1. It uses the download links, not the GitHub API (60 requests an hour per address). With parameters:
 
 ```powershell
 & ([scriptblock]::Create((irm https://github.com/lechup/wmanager/releases/latest/download/install.ps1))) -ComputerName OFFICE-03 -Config \\server\share\wmanager\provision.config.psd1
@@ -441,7 +442,8 @@ git tag v0.2.0 && git push origin v0.2.0
 
 The `release` workflow checks that the tag is on `main`, builds the files with `tools/build-release.sh` and publishes
 them as a GitHub release: `wmanager-v0.2.0.zip` (the repository without `tests/` and `.github/`, plus a `VERSION`
-file), `install.ps1` and `SHA256SUMS`. A tag with a suffix, e.g. `v0.2.0-rc1`, becomes a pre-release, which
+file), `install.ps1` and `SHA256SUMS`. The sums prove a download is complete and intact, not who built it: whoever can
+publish releases in the repository decides what computers install, so guard that access (and the main branch). A tag with a suffix, e.g. `v0.2.0-rc1`, becomes a pre-release, which
 "latest" skips; install it with `-Tag v0.2.0-rc1`. `tools/build-release.sh v0.2.0 dist` builds the same files
 locally, to look at them first.
 

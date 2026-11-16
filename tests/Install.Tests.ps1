@@ -1,5 +1,5 @@
-﻿# Tests for the installer from the internet (install.ps1): the steps that don't need GitHub or provisioning.
-# To run (Pester 5):
+﻿# Tests for the installer from the internet: install.ps1 (download and check) and lib\Install.ps1 (configuration),
+# the steps that need neither GitHub nor provisioning. To run (Pester 5):
 #   Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser
 #   Invoke-Pester .\tests
 
@@ -7,22 +7,24 @@ BeforeAll {
     $root = Split-Path $PSScriptRoot -Parent
     $WmInstallNoRun = $true   # load the functions without installing anything
     . (Join-Path $root 'install.ps1')
+    . (Join-Path $root 'lib\Common.ps1')
+    . (Join-Path $root 'lib\Install.ps1')   # without -Folder it only defines its functions
 }
 
-Describe 'Get-WmReleaseAssets' {
-    It 'picks the ZIP and SHA256SUMS of a release' {
-        $release = [pscustomobject]@{ tag_name = 'v0.1.0'; assets = @(
-            [pscustomobject]@{ name = 'install.ps1'; browser_download_url = 'https://x/install.ps1' }
-            [pscustomobject]@{ name = 'wmanager-v0.1.0.zip'; browser_download_url = 'https://x/wmanager-v0.1.0.zip' }
-            [pscustomobject]@{ name = 'SHA256SUMS'; browser_download_url = 'https://x/SHA256SUMS' }) }
-        $a = Get-WmReleaseAssets -Release $release
-        $a.Tag | Should -Be 'v0.1.0'
-        $a.Zip.browser_download_url | Should -Be 'https://x/wmanager-v0.1.0.zip'
-        $a.Sums.name | Should -Be 'SHA256SUMS'
+Describe 'install.ps1' {
+    It 'is plain ASCII without a BOM, so "irm | iex" works in Windows PowerShell 5.1' {
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $root 'install.ps1'))
+        @($bytes | Where-Object { $_ -ge 0x80 }).Count | Should -Be 0
     }
+}
 
-    It 'refuses a release without them' {
-        { Get-WmReleaseAssets -Release ([pscustomobject]@{ tag_name = 'v9'; assets = @() }) } | Should -Throw '*v9*'
+Describe 'Get-WmZipName' {
+    It 'finds the release ZIP in SHA256SUMS' {
+        $sums = Join-Path $TestDrive 'SHA256SUMS'
+        Set-Content -LiteralPath $sums -Value ('a' * 64 + '  wmanager-v0.1.0.zip'), ('b' * 64 + '  install.ps1')
+        Get-WmZipName -SumsFile $sums | Should -Be 'wmanager-v0.1.0.zip'
+        Set-Content -LiteralPath $sums -Value ('b' * 64 + '  install.ps1')
+        { Get-WmZipName -SumsFile $sums } | Should -Throw '*wmanager-*.zip*'
     }
 }
 
@@ -49,10 +51,20 @@ Describe 'Assert-WmSha256' {
     }
 }
 
+Describe 'ConvertFrom-WmPastedPath' {
+    It 'drops the quotes of a path copied from Explorer' {
+        ConvertFrom-WmPastedPath ' "E:\wm\provision.config.psd1" ' | Should -Be 'E:\wm\provision.config.psd1'
+        ConvertFrom-WmPastedPath "'\\server\share\p.psd1'" | Should -Be '\\server\share\p.psd1'
+        ConvertFrom-WmPastedPath '' | Should -Be ''
+    }
+}
+
 Describe 'Get-WmSiblingLocation' {
-    It 'finds the certificate next to the configuration' {
+    It 'finds the certificate next to the configuration, keeping a token in the query' {
         Get-WmSiblingLocation -Location 'https://raw.githubusercontent.com/o/r/main/cfg/provision.config.psd1' -Name 'wmanager-signing.cer' |
             Should -Be 'https://raw.githubusercontent.com/o/r/main/cfg/wmanager-signing.cer'
+        Get-WmSiblingLocation -Location 'https://files.example/cfg/provision.config.psd1?token=abc' -Name 'org.cer' |
+            Should -Be 'https://files.example/cfg/org.cer?token=abc'
         # a drive letter that isn't there and a share: only the text of the path matters
         Get-WmSiblingLocation -Location 'Q:\cfg\provision.config.psd1' -Name 'org.cer' | Should -Be 'Q:\cfg\org.cer'
         Get-WmSiblingLocation -Location '\\server\share\wm\provision.config.psd1' -Name 'org.cer' | Should -Be '\\server\share\wm\org.cer'
@@ -64,25 +76,33 @@ Describe 'Copy-WmConfiguration' {
         $script:src = Join-Path $TestDrive ('src' + [guid]::NewGuid().ToString('N'))
         $script:dst = Join-Path $TestDrive ('dst' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $script:src, $script:dst | Out-Null
+        $script:cfg = Join-Path $script:src 'provision.config.psd1'
     }
 
     It 'copies the configuration and, with a management source, its certificate' {
-        Set-Content -LiteralPath (Join-Path $script:src 'provision.config.psd1') -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'abcdefgh'; Certificate = 'org.cer' } }"
+        Set-Content -LiteralPath $script:cfg -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'abcdefgh'; Certificate = 'org.cer' } }"
         Set-Content -LiteralPath (Join-Path $script:src 'org.cer') -Value 'cert'
-        Copy-WmConfiguration -Location (Join-Path $script:src 'provision.config.psd1') -Folder $script:dst
+        Copy-WmConfiguration -Location $script:cfg -Folder $script:dst
         Test-Path -LiteralPath (Join-Path $script:dst 'provision.config.psd1') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $script:dst 'org.cer') | Should -BeTrue
     }
 
     It 'needs no certificate without a management source' {
-        Set-Content -LiteralPath (Join-Path $script:src 'provision.config.psd1') -Value "@{ UpdateTime = '12:00' }"
-        Copy-WmConfiguration -Location (Join-Path $script:src 'provision.config.psd1') -Folder $script:dst
+        Set-Content -LiteralPath $script:cfg -Value "@{ UpdateTime = '12:00' }"
+        Copy-WmConfiguration -Location $script:cfg -Folder $script:dst
         @(Get-ChildItem -LiteralPath $script:dst).Count | Should -Be 1
     }
 
+    It 'refuses what provisioning would refuse: a certificate path, a bad source identifier' {
+        Set-Content -LiteralPath $script:cfg -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'abcdefgh'; Certificate = '..\x.cer' } }"
+        { Copy-WmConfiguration -Location $script:cfg -Folder $script:dst } | Should -Throw '*Certificate*'
+        Set-Content -LiteralPath $script:cfg -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'zle id' } }"
+        { Copy-WmConfiguration -Location $script:cfg -Folder $script:dst } | Should -Throw '*SourceId*'
+    }
+
     It 'stops on a missing certificate, a file that is not a configuration and a plain http address' {
-        Set-Content -LiteralPath (Join-Path $script:src 'provision.config.psd1') -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'abcdefgh' } }"
-        { Copy-WmConfiguration -Location (Join-Path $script:src 'provision.config.psd1') -Folder $script:dst } | Should -Throw '*wmanager-signing.cer*'
+        Set-Content -LiteralPath $script:cfg -Value "@{ Management = @{ Source = 'C:\wm-source'; SourceId = 'abcdefgh' } }"
+        { Copy-WmConfiguration -Location $script:cfg -Folder $script:dst } | Should -Throw '*wmanager-signing.cer*'
         Set-Content -LiteralPath (Join-Path $script:src 'bad.psd1') -Value 'to nie jest konfiguracja ('
         { Copy-WmConfiguration -Location (Join-Path $script:src 'bad.psd1') -Folder $script:dst } | Should -Throw '*poprawną konfiguracją*'
         { Copy-WmConfiguration -Location 'http://example/provision.config.psd1' -Folder $script:dst } | Should -Throw '*https*'
