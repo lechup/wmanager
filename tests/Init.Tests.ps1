@@ -132,6 +132,7 @@ Describe 'Answer checks' {
         Get-WmUpdateDaysLabel @(Get-WmUpdateDaysChoice 'c') | Should -Be 'c'
         Get-WmUpdateDaysLabel @('Monday') | Should -Be 'p'
         Get-WmUpdateDaysLabel @('Monday', 'Friday') | Should -Be ''
+        Get-WmUpdateDaysLabel @() | Should -Be ''
     }
 
     It 'checks the ping key, the source identifier and the source' {
