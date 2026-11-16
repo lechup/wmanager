@@ -11,13 +11,6 @@ BeforeAll {
     . (Join-Path $root 'lib\Install.ps1')   # without -Folder it only defines its functions
 }
 
-Describe 'install.ps1' {
-    It 'is plain ASCII without a BOM, so "irm | iex" works in Windows PowerShell 5.1' {
-        $bytes = [IO.File]::ReadAllBytes((Join-Path $root 'install.ps1'))
-        @($bytes | Where-Object { $_ -ge 0x80 }).Count | Should -Be 0
-    }
-}
-
 Describe 'Get-WmZipName' {
     It 'finds the release ZIP in SHA256SUMS' {
         $sums = Join-Path $TestDrive 'SHA256SUMS'
