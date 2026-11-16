@@ -317,18 +317,9 @@ function Get-WmManagedFile {
         [Parameter(Mandatory = $true)][string]$RelPath,
         [Parameter(Mandatory = $true)][string]$Destination
     )
-    $ProgressPreference = 'SilentlyContinue'   # the progress bar slows Invoke-WebRequest down a lot in 5.1
-    $dir = Split-Path $Destination -Parent
-    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
     $src = [string]$Settings.Source
-    if ($src -match '^https://') {
-        $headers = @{}
-        if ($Settings.AuthHeader) { $headers['Authorization'] = [string]$Settings.AuthHeader }
-        Invoke-WebRequest -Uri ($src.TrimEnd('/') + '/' + $RelPath) -OutFile $Destination -Headers $headers `
-            -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
-    } else {
-        Copy-Item -LiteralPath (Join-Path $src ($RelPath -replace '/', '\')) -Destination $Destination -Force -ErrorAction Stop
-    }
+    $location = if ($src -match '^https://') { $src.TrimEnd('/') + '/' + $RelPath } else { Join-Path $src ($RelPath -replace '/', '\') }
+    Get-WmRemoteFile -Location $location -Destination $Destination -AuthHeader ([string]$Settings.AuthHeader)
 }
 
 # The manifest of the copy in state\managed, if it is still valid for the configured certificate and source.

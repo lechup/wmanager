@@ -4,3 +4,5 @@ provision.config.psd1
 provision.config.psd1.bak-*
 /wmanager-signing.cer
 provision.config.psd1.new
+# Local release builds (tools/build-release.sh <tag> dist)
+/dist/

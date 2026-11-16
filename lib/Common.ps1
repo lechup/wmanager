@@ -35,6 +35,27 @@ $script:WmVersion = & {
     if (Test-Path -LiteralPath $file) { ([IO.File]::ReadAllText($file)).Trim() } else { '' }
 }
 
+# Fetches a file: an https:// address (with an optional Authorization header) or a path. Used for the management
+# source and by the installer from the internet (lib\Install.ps1); the wizard has its own copy, since it also runs
+# outside Windows without this file.
+function Get-WmRemoteFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Location,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string]$AuthHeader
+    )
+    $ProgressPreference = 'SilentlyContinue'   # the progress bar slows Invoke-WebRequest down a lot in 5.1
+    $dir = Split-Path $Destination -Parent
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
+    if ($Location -match '^https://') {
+        $headers = @{}
+        if ($AuthHeader) { $headers['Authorization'] = $AuthHeader }
+        Invoke-WebRequest -Uri $Location -OutFile $Destination -Headers $headers -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
+    } else {
+        Copy-Item -LiteralPath $Location -Destination $Destination -Force -ErrorAction Stop
+    }
+}
+
 # 'wmanager v1.2.0' for the first line of a log, or just 'wmanager' without a VERSION file
 function Get-WmName {
     if ($script:WmVersion) { return "wmanager $script:WmVersion" }

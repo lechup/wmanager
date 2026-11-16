@@ -104,13 +104,14 @@ function Install-Wmanager {
         $next = Join-Path $folder 'lib\Install.ps1'
         if (-not (Test-Path -LiteralPath $next)) { throw 'W pliku ZIP nie ma wmanager\lib\Install.ps1.' }
 
-        # The rest runs as a file in Windows PowerShell 5.1, in this console (it asks questions). The header goes
-        # through the environment, not the command line; WaitForExit, not -Wait, which also waits for every
-        # program provisioning started (an updater left running would hold the installer up)
+        # The rest runs as a file in Windows PowerShell 5.1, in this console (it asks questions). The header and
+        # the configuration's address (which may hold a token) go through the environment, not the command line
+        # that the process list shows; lib\Install.ps1 removes them at once. WaitForExit, not -Wait, which also
+        # waits for every program provisioning started (an updater left running would hold the installer up)
         if ($AuthHeader) { $env:WM_INSTALL_AUTH = $AuthHeader }
+        if ($Config) { $env:WM_INSTALL_CONFIG = $Config }
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Folder "{1}"' -f $next, $folder
         if ($ComputerName) { $arguments += ' -ComputerName "{0}"' -f ($ComputerName -replace '"', '') }
-        if ($Config) { $arguments += ' -Config "{0}"' -f ($Config -replace '"', '') }
         $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $p = Start-Process -FilePath $ps -ArgumentList $arguments -NoNewWindow -PassThru
         $null = $p.Handle   # keeps the exit code readable after the process ends (Windows PowerShell 5.1)
@@ -118,18 +119,22 @@ function Install-Wmanager {
         Write-Host ''
         if ($p.ExitCode -eq 0) {
             Write-Host 'Gotowe. Uruchom ponownie komputer, zeby wszystkie zmiany zadzialaly.' -ForegroundColor Green
+        } elseif ($p.ExitCode -eq 5) {
+            # lib\Install.ps1 stopped before provisioning and said why
+            Write-Host 'Instalacja przerwana przed provisioningiem; nic nie zostalo zmienione.' -ForegroundColor Red
         } else {
-            Write-Host "Provisioning zakonczyl sie bledem (kod $($p.ExitCode)). Log: C:\ProgramData\wmanager\logs" -ForegroundColor Red
+            Write-Host "Provisioning zakonczyl sie bledem (kod $($p.ExitCode)); szczegoly powyzej i w C:\ProgramData\wmanager\logs, jesli log powstal." -ForegroundColor Red
         }
     } finally {
-        Remove-Item Env:\WM_INSTALL_AUTH -ErrorAction SilentlyContinue
+        Remove-Item Env:\WM_INSTALL_AUTH, Env:\WM_INSTALL_CONFIG -ErrorAction SilentlyContinue
         # The unpacked configuration holds the tokens; provisioning keeps its own copy
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-# Never "exit": with "irm | iex" it would close the administrator's PowerShell window
-if (-not $WmInstallNoRun) {
+# Never "exit": with "irm | iex" it would close the administrator's PowerShell window. Get-Variable: the
+# variable is only set by the tests, and a profile with Set-StrictMode would refuse an undefined one
+if (-not (Get-Variable -Name WmInstallNoRun -ValueOnly -ErrorAction SilentlyContinue)) {
     try {
         Install-Wmanager -ComputerName $ComputerName -Config $Config -AuthHeader $AuthHeader -Tag $Tag -Repository $Repository -ReleasesUrl $ReleasesUrl
     } catch {
