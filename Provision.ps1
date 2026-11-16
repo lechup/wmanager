@@ -94,9 +94,13 @@ function Install-WmFiles {
     $src = (Resolve-Path -LiteralPath $here).Path.TrimEnd('\')
     $dst = (Resolve-Path -LiteralPath $script:WmRoot).Path.TrimEnd('\')
     if ($src -ne $dst) {
-        foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Invoke-Jobs.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt')) {
+        foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Invoke-Jobs.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt', 'VERSION')) {
             $p = Join-Path $src $f
             if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force -ErrorAction Stop }
+        }
+        # A copy without VERSION (a git checkout) must not leave an older release's version in the logs
+        if (-not (Test-Path -LiteralPath (Join-Path $src 'VERSION'))) {
+            Remove-Item -LiteralPath (Join-Path $dst 'VERSION') -Force -ErrorAction SilentlyContinue
         }
         Copy-Item -Path (Join-Path $src 'lib\*.ps1') -Destination (Join-Path $dst 'lib') -Force -ErrorAction Stop
         Get-ChildItem -LiteralPath $dst -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
@@ -173,7 +177,7 @@ try {
     exit 4
 }
 Initialize-WmLog 'provision'
-Write-WmLog "wmanager provisioning: $($os.Caption) build $($os.BuildNumber), komputer $env:COMPUTERNAME"
+Write-WmLog "$(Get-WmName) provisioning: $($os.Caption) build $($os.BuildNumber), komputer $env:COMPUTERNAME"
 $failed = $false
 $hcStarted = $false
 

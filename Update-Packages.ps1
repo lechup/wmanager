@@ -47,7 +47,7 @@ if (-not $lock) {
 }
 
 Initialize-WmLog $job
-Write-WmLog "wmanager $job na $($script:WmHostName)"
+Write-WmLog "$(Get-WmName) $job na $($script:WmHostName)"
 
 # Without internet: change nothing, report nothing, try again at the next sign-in (wmanager-Retry)
 $unreachable = @(Get-WmUnreachableHosts -Config $config)
