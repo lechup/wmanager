@@ -38,4 +38,5 @@
     'provision.summary'                    = 'Concluído: {0} avisos, {1} erros. Registo: {2}'
     'provision.finished_with_errors'       = 'O aprovisionamento terminou com erros. Verifique o registo acima e execute o script novamente.'
     'provision.finished'                   = 'Aprovisionamento concluído. Reinicie o computador para que todas as alterações entrem em vigor.'
+    'provision.restore_point_creating'     = 'A criar um ponto de restauro do sistema (normalmente menos de um minuto, no máximo {0} min)...'
 }

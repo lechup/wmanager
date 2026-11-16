@@ -38,4 +38,5 @@
     'provision.summary'                    = 'Fertig: {0} Warnungen, {1} Fehler. Protokoll: {2}'
     'provision.finished_with_errors'       = 'Die Einrichtung wurde mit Fehlern abgeschlossen. Prüfen Sie das Protokoll oben und führen Sie das Skript erneut aus.'
     'provision.finished'                   = 'Die Einrichtung ist abgeschlossen. Starten Sie den Computer neu, damit alle Änderungen wirksam werden.'
+    'provision.restore_point_creating'     = 'Systemwiederherstellungspunkt wird erstellt (meist unter einer Minute, höchstens {0} Min.)...'
 }

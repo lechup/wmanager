@@ -794,3 +794,22 @@ function Send-WmHealthcheck {
         Write-WmSendNote -Key 'common.healthchecks_failed' -Arguments @($Signal, $_.Exception.Message)
     }
 }
+
+# Runs $ScriptBlock in a background job (its own process) and waits at most $TimeoutSeconds: a Windows component
+# that stops answering must not hold the console without a word (seen: the Volume Shadow Copy service behind
+# Checkpoint-Computer, for hours). On timeout the job is stopped and common.timed_out is thrown; an error of the
+# script block is thrown here; its output is returned.
+function Invoke-WmTimeLimited {
+    param([Parameter(Mandatory = $true)][scriptblock]$ScriptBlock, [object[]]$ArgumentList = @(),
+          [Parameter(Mandatory = $true)][int]$TimeoutSeconds)
+    $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
+    try {
+        if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
+            Stop-Job -Job $job
+            throw (New-WmError 'common.timed_out' @([math]::Ceiling($TimeoutSeconds / 60)))
+        }
+        return (Receive-Job -Job $job -ErrorAction Stop)
+    } finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+}

@@ -38,4 +38,5 @@
     'provision.summary'                    = 'Klaar: {0} waarschuwingen, {1} fouten. Logboek: {2}'
     'provision.finished_with_errors'       = 'Inrichting voltooid met fouten. Controleer het logboek hierboven en voer het script opnieuw uit.'
     'provision.finished'                   = 'Inrichting voltooid. Start de computer opnieuw op zodat alle wijzigingen van kracht worden.'
+    'provision.restore_point_creating'     = 'Systeemherstelpunt maken (meestal minder dan een minuut, hoogstens {0} min)...'
 }
