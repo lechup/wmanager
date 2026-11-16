@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Entrée accepte la valeur entre crochets. Les jetons et les clés ne s''affichent pas pendant la saisie.'
     'init.invalid_answer'           = 'Réponse non valide.'
     'init.no_answer'                = 'Aucune réponse ; l''assistant s''est arrêté.'
-    'init.answer_yes_no'            = 'Répondez o ou n.'
     'init.warning'                  = 'Attention : {0}'
 
     'init.file_exists'              = 'Ce fichier existe déjà. Modifier ses paramètres (n = partir du fichier d''exemple) ?'

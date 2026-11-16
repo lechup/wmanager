@@ -638,14 +638,12 @@ function Test-WmInteractive {
 }
 
 # Yes/no question at the console. Enter, or no console at all, gives the default (no, unless -DefaultYes).
-# $Question: the key of the question (and its -Arguments). Yes in the user's language or in English.
+# $Question: the key of the question (and its -Arguments). Read-WmYesNo (lib\Lang.ps1) asks again on an answer it
+# doesn't know, in the user's language or English.
 function Confirm-WmContinue {
     param([Parameter(Mandatory = $true)][string]$Question, [object[]]$Arguments = @(), [switch]$DefaultYes)
     if (-not (Test-WmInteractive)) { return [bool]$DefaultYes }
-    $hint = if ($DefaultYes) { Get-WmText 'common.hint_default_yes' } else { Get-WmText 'common.hint_default_no' }
-    $answer = ([string](Read-Host ('{0} {1}' -f (Get-WmText -Key $Question -Arguments $Arguments), $hint))).Trim()
-    if (-not $answer) { return [bool]$DefaultYes }
-    return ((ConvertFrom-WmYesNo $answer) -eq $true)
+    return Read-WmYesNo -Prompt (Get-WmText -Key $Question -Arguments $Arguments) -Default ([bool]$DefaultYes)
 }
 
 # ---------------------------------------------------------------------------

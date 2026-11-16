@@ -34,11 +34,12 @@ function Get-WmDaysMask {
     return $mask
 }
 
-# For the log: "every day" for all seven days (a text to translate), otherwise the list of the configured days
+# For the log, always a text to render: "every day" for all seven days, otherwise the configured days as they are
+# in the configuration (English day names)
 function Format-WmUpdateDays {
     param([string[]]$Days)
     if ((Get-WmDaysMask $Days) -eq 127) { return New-WmText 'task.every_day' }
-    return ($Days -join ', ')
+    return New-WmText 'task.days_list' @($Days -join ', ')
 }
 
 function Register-WmTasks {

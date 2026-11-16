@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Enter przyjmuje wartość w nawiasie. Tokeny i klucze nie są wyświetlane przy wpisywaniu.'
     'init.invalid_answer'           = 'Niepoprawna odpowiedź.'
     'init.no_answer'                = 'Brak odpowiedzi; kreator przerwany.'
-    'init.answer_yes_no'            = 'Odpowiedz t albo n.'
     'init.warning'                  = 'Uwaga: {0}'
 
     'init.file_exists'              = 'Ten plik już istnieje. Zmienić jego ustawienia (n = zacząć od pliku przykładowego)?'

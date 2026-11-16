@@ -6,4 +6,5 @@
     'task.schedule_changed' = 'Pianificazione dell''aggiornamento cambiata in: {0} alle {1}.'
     'task.notify_failed'    = 'Impossibile avviare la notifica: {0}'
     'task.every_day'        = 'ogni giorno'
+    'task.days_list'        = '{0}'
 }

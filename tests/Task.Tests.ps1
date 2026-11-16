@@ -37,7 +37,8 @@ Describe 'Format-WmUpdateDays' {
     }
 
     It 'lists the days otherwise' {
-        Format-WmUpdateDays @('Monday', 'Friday') | Should -Be 'Monday, Friday'
+        $text = Format-WmUpdateDays @('Monday', 'Friday')
+        Get-WmText -Key $text.Key -Arguments $text.Arguments | Should -Be 'Monday, Friday'
     }
 }
 

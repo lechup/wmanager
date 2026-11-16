@@ -40,4 +40,6 @@
     'common.loki_rejected'          = 'Loki a rejeté {0} (HTTP {1}), déplacé vers outbox\rejected : {2}'
     'common.loki_send_failed'       = 'Échec de l''envoi vers Loki ({0}), nouvelle tentative à la prochaine exécution : {1}'
     'common.healthchecks_failed'    = 'Échec du ping Healthchecks ({0}) : {1}'
+    'common.answer_yes_no'        = 'Répondez o ou n.'
+    'common.unknown_language'     = 'Langue inconnue ''{0}'' ; utilisation de {1}. Langues disponibles : {2}.'
 }

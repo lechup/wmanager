@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Enter neemt de waarde tussen haken over. Tokens en sleutels worden bij het typen niet weergegeven.'
     'init.invalid_answer'           = 'Ongeldig antwoord.'
     'init.no_answer'                = 'Geen antwoord; de wizard is gestopt.'
-    'init.answer_yes_no'            = 'Antwoord met j of n.'
     'init.warning'                  = 'Waarschuwing: {0}'
 
     'init.file_exists'              = 'Dit bestand bestaat al. De instellingen ervan wijzigen (n = beginnen met het voorbeeldbestand)?'

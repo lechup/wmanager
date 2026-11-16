@@ -6,4 +6,5 @@
     'task.schedule_changed' = 'Plán aktualizace změněn na: {0} {1}.'
     'task.notify_failed'    = 'Nepodařilo se spustit oznámení: {0}'
     'task.every_day'        = 'denně'
+    'task.days_list'        = '{0}'
 }

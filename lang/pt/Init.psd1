@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Enter aceita o valor entre parênteses retos. Os tokens e as chaves não são mostrados enquanto escreve.'
     'init.invalid_answer'           = 'Resposta inválida.'
     'init.no_answer'                = 'Sem resposta; o assistente parou.'
-    'init.answer_yes_no'            = 'Responda s ou n.'
     'init.warning'                  = 'Aviso: {0}'
 
     'init.file_exists'              = 'Este ficheiro já existe. Alterar as suas definições (n = começar a partir do ficheiro de exemplo)?'

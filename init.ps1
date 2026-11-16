@@ -41,7 +41,7 @@ trap {
     try { $reason = Get-WmErrorText $_ } catch { }
     if ($null -eq $reason -or $reason -is [string]) { break }
     Write-Host ''
-    Write-Host (Get-WmText -Key $reason.Key -Arguments $reason.Arguments) -ForegroundColor Red
+    Write-Host (Format-WmErrorText $_) -ForegroundColor Red
     exit 1
 }
 
@@ -81,10 +81,7 @@ function Read-Secret {
 # Yes or no in the user's language; y/yes and n/no always work.
 function Read-YesNo {
     param([string]$Prompt, [bool]$Default)
-    $hint = if ($Default) { Get-WmText 'common.hint_default_yes' } else { Get-WmText 'common.hint_default_no' }
-    $a = Read-Answer "$Prompt $hint" '' { (-not $args[0]) -or ($null -ne (ConvertFrom-WmYesNo $args[0])) } (Get-WmText 'init.answer_yes_no')
-    if (-not $a) { return $Default }
-    return ((ConvertFrom-WmYesNo $a) -eq $true)
+    return Read-WmYesNo -Prompt $Prompt -Default $Default   # the same question as provisioning's (lib\Lang.ps1)
 }
 
 function Write-Section { param([string]$Title) Write-Host ''; Write-Host "--- $Title ---" -ForegroundColor Cyan }
