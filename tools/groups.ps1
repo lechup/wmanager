@@ -108,11 +108,15 @@ function Get-SourceFiles {
     if ($FileList) {
         $listed = [IO.File]::ReadAllLines($FileList)
     } elseif (Get-Command git -CommandType Application -ErrorAction SilentlyContinue) {
+        # Windows PowerShell 5.1 turns what a program writes to stderr ("not a git repository") into an error,
+        # which 'Stop' would throw
+        $ErrorActionPreference = 'Continue'
         $inGit = (& git -C $Root rev-parse --is-inside-work-tree 2>$null) -eq 'true'
         if ($inGit) {
             $out = & git -C $Root ls-files -z --cached --others --exclude-standard -- . 2>$null
             $listed = @(([string]($out -join "`n")).Split([char]0) | Where-Object { $_ })
         }
+        $ErrorActionPreference = 'Stop'
     }
     if ($null -ne $listed) {
         foreach ($line in $listed) {
