@@ -88,6 +88,8 @@ function Install-Wmanager {
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ('wmanager-install-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $work -Force | Out-Null
+    # Before the try: the finally puts the user's own WMANAGER_LANG back even when a download fails first
+    $savedLang = $env:WMANAGER_LANG
     try {
         # SHA256SUMS of the latest (or the given) release names its ZIP; the ZIP comes from that same release,
         # so a release published in between doesn't mix two versions
@@ -114,7 +116,6 @@ function Install-Wmanager {
         # that the process list shows; lib\Install.ps1 removes them at once. WaitForExit, not -Wait, which also
         # waits for every program provisioning started (an updater left running would hold the installer up)
         if ($AuthHeader) { $env:WM_INSTALL_AUTH = $AuthHeader }
-        $savedLang = $env:WMANAGER_LANG
         if ($Lang) { $env:WMANAGER_LANG = $Lang }
         if ($Config) { $env:WM_INSTALL_CONFIG = $Config }
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Folder "{1}"' -f $next, $folder
