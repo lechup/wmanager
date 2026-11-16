@@ -5,8 +5,6 @@
 # Write-WmManagedNote and Write-WmManagedWarning, which the caller defines.
 # Tested in tests\Managed.Tests.ps1, tests\Requirements.Tests.ps1 and tests\Groups.Tests.ps1.
 
-$script:WmJobPeriods = @('hourly', 'daily', 'weekly')
-
 function Test-WmComputerName {
     param([string]$Name)
     # NetBIOS: 1-15 characters, letters/digits/hyphen, not all digits, no hyphen at the start or end
@@ -133,7 +131,7 @@ function Get-WmGroupJobs {
     param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
     $result = @()
     foreach ($g in $Groups) {
-        foreach ($every in $script:WmJobPeriods) {
+        foreach ($every in @('hourly', 'daily', 'weekly')) {
             foreach ($p in (Get-WmManagedScriptPaths -Files $Files -Folder "groups/$g/jobs/$every/")) {
                 $base = [IO.Path]::GetFileNameWithoutExtension($p.Substring($p.LastIndexOf('/') + 1))
                 $result += [pscustomobject]@{ Group = $g; Path = $p; Every = $every; Name = "$g/$base" }
@@ -141,6 +139,36 @@ function Get-WmGroupJobs {
         }
     }
     return ,$result
+}
+
+# Which list a path of the source is: '' for the common choco-reqs.txt, the group for groups/<group>/choco-reqs.txt,
+# $null for any other file
+function Get-WmListOwner {
+    param([string]$Path)
+    if ($Path -ieq 'choco-reqs.txt') { return '' }
+    if ($Path -match '^groups/([^/]+)/choco-reqs\.txt$') { return $Matches[1] }
+    return $null
+}
+
+# What a computer gets from a source: its groups, the common list and its groups' lists merged, and the scripts and
+# jobs of its groups. $Files: the paths of the source (the manifest's Files); $Lists: '' = the common list, otherwise
+# group -> its parsed list. A group without files is reported (Write-WmManagedWarning) and skipped.
+function Resolve-WmComputerContent {
+    param([Parameter(Mandatory = $true)][hashtable]$Map, [Parameter(Mandatory = $true)][hashtable]$Lists,
+          [Parameter(Mandatory = $true)][hashtable]$Files, [Parameter(Mandatory = $true)][string]$ComputerName)
+    $groups = Get-WmComputerGroups -Map $Map -ComputerName $ComputerName
+    $toMerge = @([pscustomobject]@{ Label = (New-WmText 'managed.common_list'); IsGroup = $false; Items = @($Lists['']) })
+    foreach ($g in $groups) {
+        $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+        if (-not $hasFiles) { Write-WmManagedWarning -Key 'managed.group_no_files' -Arguments @($g); continue }
+        if ($Lists.ContainsKey($g)) { $toMerge += [pscustomobject]@{ Label = $g; IsGroup = $true; Items = @($Lists[$g]) } }
+    }
+    return [pscustomobject]@{
+        Groups       = $groups
+        Requirements = (Merge-WmRequirements -Lists $toMerge)
+        Scripts      = (Get-WmGroupScripts -Files $Files -Groups $groups)
+        Jobs         = (Get-WmGroupJobs -Files $Files -Groups $groups)
+    }
 }
 
 function Split-WmArgumentString {
