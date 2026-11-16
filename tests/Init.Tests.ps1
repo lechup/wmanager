@@ -51,6 +51,60 @@ Describe 'Set-WmConfigText' {
     It 'refuses a setting that is not in the file' {
         { Set-WmConfigText $script:example 'NoSuchSetting' "'x'" } | Should -Throw '*NoSuchSetting*'
     }
+
+    It 'writes typographic quotes, which also end a PowerShell string, so the file stays valid' {
+        $value = "O" + [char]0x2019 + "Brien " + [char]0x2018 + "x" + [char]0x201B + "'"
+        (Import-TestConfig (Set-WmConfigText $script:example 'LokiToken' (ConvertTo-WmPsdString $value))).LokiToken | Should -Be $value
+    }
+}
+
+Describe 'Get-WmConfigTextProblems' {
+    It 'finds nothing in the example and names what an older or hand-edited file lacks' {
+        $names = @('UpdateTime', 'UpdateDays', 'Source', 'SourceId', 'Certificate')
+        @(Get-WmConfigTextProblems -Text $script:example -Names $names).Count | Should -Be 0
+        $old = "@{`n    UpdateTime = '12:00'`n    UpdateDays = @(`n        'Monday'`n    )`n}"
+        Get-WmConfigTextProblems -Text $old -Names $names | Should -Be @('UpdateDays', 'Source', 'SourceId', 'Certificate')
+    }
+}
+
+Describe 'Get-WmSigningCertificateProblem' {
+    BeforeAll {
+        # Certificates made here, public part only (as a .cer file has it)
+        function New-TestCertificate {
+            param([switch]$CodeSigning, [switch]$Authority, [switch]$KeepPrivateKey)
+            $req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest -ArgumentList 'CN=wmanager test',
+                ([System.Security.Cryptography.RSA]::Create(2048)), ([System.Security.Cryptography.HashAlgorithmName]::SHA256),
+                ([System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            $req.CertificateExtensions.Add((New-Object System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension -ArgumentList ([bool]$Authority), $false, 0, $true))
+            if ($CodeSigning) {
+                $oids = New-Object System.Security.Cryptography.OidCollection
+                [void]$oids.Add((New-Object System.Security.Cryptography.Oid -ArgumentList '1.3.6.1.5.5.7.3.3'))
+                $req.CertificateExtensions.Add((New-Object System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension -ArgumentList $oids, $false))
+            }
+            $cert = $req.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(30))
+            if ($KeepPrivateKey) { return $cert }
+            return New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList (, $cert.Export('Cert'))
+        }
+    }
+
+    It 'accepts a public code signing certificate' {
+        Get-WmSigningCertificateProblem (New-TestCertificate -CodeSigning) | Should -BeNullOrEmpty
+    }
+
+    It 'refuses a private key, an authority and a certificate without Code Signing' {
+        Get-WmSigningCertificateProblem (New-TestCertificate -CodeSigning -KeepPrivateKey) | Should -BeLike '*klucz prywatny*'
+        Get-WmSigningCertificateProblem (New-TestCertificate -CodeSigning -Authority) | Should -BeLike '*(CA)*'
+        Get-WmSigningCertificateProblem (New-TestCertificate) | Should -BeLike '*Code Signing*'
+    }
+
+    It 'reads a .cer file and gives nothing for a file that is not a certificate' {
+        $cer = Join-Path $TestDrive 'sign.cer'
+        [IO.File]::WriteAllBytes($cer, (New-TestCertificate -CodeSigning).RawData)
+        (Import-WmCertificateFile $cer).Subject | Should -Be 'CN=wmanager test'
+        $txt = Join-Path $TestDrive 'not.cer'
+        Set-Content -LiteralPath $txt -Value 'not a certificate'
+        Import-WmCertificateFile $txt | Should -BeNullOrEmpty
+    }
 }
 
 Describe 'Write-WmConfigFile' {
@@ -102,6 +156,13 @@ Describe 'Get-WmSourceManifest' {
         $file = Get-WmSourceManifest -Source $src
         try { (Import-PowerShellDataFile -LiteralPath $file).SourceId | Should -Be 'abcdefgh' }
         finally { Remove-Item -LiteralPath $file -Force }
+    }
+
+    It 'throws for a source without a manifest and leaves no temporary file' {
+        $pattern = 'wmanager-init-*.psd1'
+        $before = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Filter $pattern).Count
+        { Get-WmSourceManifest -Source (Join-Path $TestDrive 'none') } | Should -Throw
+        @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Filter $pattern).Count | Should -Be $before
     }
 }
 

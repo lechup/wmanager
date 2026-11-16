@@ -3,3 +3,4 @@ provision.config.psd1
 # Configuration wizard backups (they hold the tokens too) and the signing certificate of a management source
 provision.config.psd1.bak-*
 /wmanager-signing.cer
+provision.config.psd1.new

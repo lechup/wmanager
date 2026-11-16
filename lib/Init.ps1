@@ -13,15 +13,25 @@ $script:WmEveryDay = @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', '
 # --- Configuration text --------------------------------------------------------------------------------------
 # The configuration is changed as text, value by value, so its comments and layout stay as they are.
 
-# A PowerShell single-quoted string literal.
+# A PowerShell single-quoted string literal. PowerShell also ends such a string at the typographic quotes
+# U+2018, U+2019, U+201A and U+201B, so they are doubled like the apostrophe.
 function ConvertTo-WmPsdString {
     param([AllowEmptyString()][string]$Value)
-    return "'" + ($Value -replace "'", "''") + "'"
+    return "'" + ($Value -replace "(['\u2018\u2019\u201A\u201B])", '$1$1') + "'"
 }
 
 function ConvertTo-WmPsdArray {
     param([string[]]$Values)
     return '@(' + ((@($Values) | ForEach-Object { ConvertTo-WmPsdString $_ }) -join ', ') + ')'
+}
+
+# The settings (of the given ones) that Set-WmConfigText can't change in this text: missing, repeated, or with a
+# value it doesn't handle (e.g. an array over several lines).
+function Get-WmConfigTextProblems {
+    param([Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string[]]$Names)
+    foreach ($name in $Names) {
+        try { $null = Set-WmConfigText $Text $name "''" } catch { $name }
+    }
 }
 
 # Replaces the value of "Name = <value>" (a quoted string, $true/$false, a number or @(...) on one line).
@@ -143,19 +153,48 @@ function Test-WmHealthchecks {
     }
 }
 
-# Fetches manifest.psd1 of a management source to a temporary file. Returns the path; throws on failure.
+# Fetches manifest.psd1 of a management source to a temporary file. Returns the path; throws on failure
+# (and leaves no partial file behind).
 function Get-WmSourceManifest {
     param([Parameter(Mandatory = $true)][string]$Source, [string]$AuthHeader)
     $file = Join-Path ([IO.Path]::GetTempPath()) ('wmanager-init-' + [guid]::NewGuid().ToString('N') + '.psd1')
-    if ($Source -match '^https://') {
-        $headers = @{}
-        if ($AuthHeader) { $headers['Authorization'] = $AuthHeader }
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri ($Source.TrimEnd('/') + '/manifest.psd1') -OutFile $file -Headers $headers -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
-    } else {
-        Copy-Item -LiteralPath (Join-Path $Source 'manifest.psd1') -Destination $file -Force -ErrorAction Stop
+    try {
+        if ($Source -match '^https://') {
+            $headers = @{}
+            if ($AuthHeader) { $headers['Authorization'] = $AuthHeader }
+            $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest -Uri ($Source.TrimEnd('/') + '/manifest.psd1') -OutFile $file -Headers $headers -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+        } else {
+            Copy-Item -LiteralPath (Join-Path $Source 'manifest.psd1') -Destination $file -Force -ErrorAction Stop
+        }
+    } catch {
+        Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        throw
     }
     return $file
+}
+
+# A certificate file, or $null when the file isn't one.
+function Import-WmCertificateFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try { return New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $Path }
+    catch { return $null }
+}
+
+# What makes a certificate unfit for wmanager, or $null: the same checks provisioning makes
+# (Get-WmSigningCertificate in Managed.ps1), so a wrong file is caught before it reaches a USB drive.
+function Get-WmSigningCertificateProblem {
+    param([Parameter(Mandatory = $true)]$Certificate)
+    if ($Certificate.HasPrivateKey) { return 'plik zawiera klucz prywatny; obok konfiguracji trafia tylko publiczny .cer' }
+    foreach ($ext in $Certificate.Extensions) {
+        if ($ext -is [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] -and $ext.CertificateAuthority) {
+            return 'to certyfikat urzędu (CA); wmanager go nie przyjmie'
+        }
+    }
+    $usages = @($Certificate.Extensions | Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
+        ForEach-Object { $_.EnhancedKeyUsages } | ForEach-Object { $_.Value })
+    if ($usages -notcontains '1.3.6.1.5.5.7.3.3') { return 'to nie jest certyfikat do podpisywania kodu (brak Code Signing)' }
+    return $null
 }
 
 # Whether the manifest is signed with the given certificate: 'ok', 'skipped' (no Authenticode outside Windows)
