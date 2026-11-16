@@ -10,7 +10,7 @@
 # (.git, .gitattributes...); computers use a file only if it matches. In a git repository the list is what git
 # will push (tracked files and new files that aren't ignored), so it matches what the computers download.
 # On the first run it creates source-id.txt, the identifier of this source (Management.SourceId in the config).
-# Run it after every change, then commit and push. Requires osslsigncode (apt install osslsigncode), openssl
+# Run it after every change, then commit and push (or copy the folder to the server or share, manifest.psd1 last). Requires osslsigncode (apt install osslsigncode), openssl
 # and sha256sum.
 set -euo pipefail
 
@@ -145,4 +145,8 @@ $out"
 mv "$tmp/signed.psd1" manifest.psd1
 thumb=$(openssl x509 -in "$keydir/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
 echo "Signed manifest $serial (${#rels[@]} files), source $source_id, certificate $thumb."
-echo "Now commit and push the changes: git add -A && git commit -m '...' && git push"
+if (( in_git )); then
+    echo "Now commit and push the changes: git add -A && git commit -m '...' && git push"
+else
+    echo "Now copy the folder to the source (web server or share), manifest.psd1 last."
+fi

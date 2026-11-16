@@ -57,7 +57,7 @@
     'init.groups_off_enter'         = '(Enter = no groups)'
     'init.source'                   = 'Source: the https:// address of a folder or a full path {0}'
     'init.source_hint'              = 'Give an https:// address or the full path of a folder.'
-    'init.auth_header'              = 'Authorization header for a private repository, e.g. token github_pat_... (Enter = none)'
+    'init.auth_header'              = 'Authorization header, if the server requires a login, e.g. token github_pat_... or Bearer ... (Enter = none)'
     'init.auth_header_keep'         = 'Authorization header (Enter = no change, - = none)'
     'init.cert_file'                = 'Signing certificate file (wmanager-signing.cer from tools/new-signing-cert.sh)'
     'init.cert_file_hint'           = 'There is no such file.'

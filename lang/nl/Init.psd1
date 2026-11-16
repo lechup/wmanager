@@ -57,7 +57,7 @@
     'init.groups_off_enter'         = '(Enter = geen groepen)'
     'init.source'                   = 'Bron: het https://-adres van een map of een volledig pad {0}'
     'init.source_hint'              = 'Geef een https://-adres of het volledige pad van een map op.'
-    'init.auth_header'              = 'Authorization-header voor een privérepository, bijv. token github_pat_... (Enter = geen)'
+    'init.auth_header'              = 'Authorization-header, als de server aanmelding vereist, bijv. token github_pat_... of Bearer ... (Enter = geen)'
     'init.auth_header_keep'         = 'Authorization-header (Enter = geen wijziging, - = geen)'
     'init.cert_file'                = 'Bestand met het ondertekeningscertificaat (wmanager-signing.cer van tools/new-signing-cert.sh)'
     'init.cert_file_hint'           = 'Dit bestand bestaat niet.'

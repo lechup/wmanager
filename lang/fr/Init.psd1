@@ -57,7 +57,7 @@
     'init.groups_off_enter'         = '(Entrée = sans groupes)'
     'init.source'                   = 'Source : l''adresse https:// d''un dossier ou un chemin complet {0}'
     'init.source_hint'              = 'Indiquez une adresse https:// ou le chemin complet d''un dossier.'
-    'init.auth_header'              = 'En-tête Authorization pour un dépôt privé, p. ex. token github_pat_... (Entrée = aucun)'
+    'init.auth_header'              = 'En-tête Authorization, si le serveur exige une connexion, p. ex. token github_pat_... ou Bearer ... (Entrée = aucun)'
     'init.auth_header_keep'         = 'En-tête Authorization (Entrée = inchangé, - = aucun)'
     'init.cert_file'                = 'Fichier du certificat de signature (wmanager-signing.cer créé par tools/new-signing-cert.sh)'
     'init.cert_file_hint'           = 'Ce fichier n''existe pas.'
