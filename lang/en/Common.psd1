@@ -42,5 +42,5 @@
     'common.healthchecks_failed'    = 'Healthchecks ping ({0}) failed: {1}'
     'common.answer_yes_no'        = 'Answer y or n.'
     'common.unknown_language'     = 'Unknown language ''{0}''; using {1}. Available: {2}.'
-    'common.timed_out'            = 'no result after {0} min; stopped waiting'
+    'common.timed_out'            = 'no result after {0} s; stopped waiting'
 }

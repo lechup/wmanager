@@ -42,5 +42,5 @@
     'common.healthchecks_failed'    = 'Healthchecks-Ping ({0}) fehlgeschlagen: {1}'
     'common.answer_yes_no'        = 'Antworten Sie mit j oder n.'
     'common.unknown_language'     = 'Unbekannte Sprache ''{0}''; verwendet wird {1}. Verfügbar: {2}.'
-    'common.timed_out'            = 'kein Ergebnis nach {0} Min.; Warten abgebrochen'
+    'common.timed_out'            = 'kein Ergebnis nach {0} s; Warten abgebrochen'
 }

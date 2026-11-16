@@ -39,4 +39,5 @@
     'provision.finished_with_errors'       = 'Provizionarea s-a încheiat cu erori. Verificați jurnalul de mai sus și rulați din nou scriptul.'
     'provision.finished'                   = 'Provizionarea s-a încheiat. Reporniți computerul pentru ca toate modificările să intre în vigoare.'
     'provision.restore_point_creating'     = 'Se creează un punct de restaurare a sistemului (de obicei sub un minut, cel mult {0} min)...'
+    'provision.restore_point_timeout'      = 'Niciun punct de restaurare după {0} min: serviciul Volume Shadow Copy nu răspunde (de obicei ajută repornirea computerului). Windows îl poate crea totuși mai târziu; un punct ''wmanager: before provisioning'' creat după {1} nu arată starea dinainte de configurare.'
 }

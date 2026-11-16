@@ -39,4 +39,5 @@
     'provision.finished_with_errors'       = 'O aprovisionamento terminou com erros. Verifique o registo acima e execute o script novamente.'
     'provision.finished'                   = 'Aprovisionamento concluído. Reinicie o computador para que todas as alterações entrem em vigor.'
     'provision.restore_point_creating'     = 'A criar um ponto de restauro do sistema (normalmente menos de um minuto, no máximo {0} min)...'
+    'provision.restore_point_timeout'      = 'Nenhum ponto de restauro após {0} min: o serviço Cópia Sombra de Volumes não responde (reiniciar o computador costuma ajudar). O Windows ainda o pode criar mais tarde; um ponto ''wmanager: before provisioning'' criado depois das {1} não mostra o estado anterior à configuração.'
 }

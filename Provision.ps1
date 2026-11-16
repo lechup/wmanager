@@ -78,20 +78,32 @@ function Resolve-WmComputerName {
 
 # Returns $true when the restore point was created. It usually takes under a minute; after $TimeoutSeconds it
 # counts as failed (a stuck Volume Shadow Copy service kept a test machine waiting for hours), and the person at
-# the console decides as for any other failure.
+# the console decides as for any other failure. Windows can't be told to drop a request it is stuck on, so the
+# warning says from what time on a restore point with this name no longer shows the state before provisioning.
+# A warning of Checkpoint-Computer (e.g. "already created within the past 1440 minutes") means none was made.
 function New-WmRestorePoint {
-    param([int]$TimeoutSeconds = 600)
+    param([ValidateRange(1, 86400)][int]$TimeoutSeconds = 600)
     $sr = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
     $old = (Get-ItemProperty -LiteralPath $sr -Name 'SystemRestorePointCreationFrequency' -ErrorAction SilentlyContinue).SystemRestorePointCreationFrequency
     try {
         # Windows allows one restore point per 24 h; lift the limit for the duration of provisioning
         Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' 0 | Out-Null
         Write-WmLog -Key 'provision.restore_point_creating' -Arguments @([math]::Ceiling($TimeoutSeconds / 60)) -LocalOnly
-        $null = Invoke-WmTimeLimited -TimeoutSeconds $TimeoutSeconds -ArgumentList @("$env:SystemDrive\") -ScriptBlock {
-            param($drive)
-            Enable-ComputerRestore -Drive $drive -ErrorAction Stop
-            Checkpoint-Computer -Description 'wmanager: before provisioning' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+        $started = Get-Date
+        $warnings = @()
+        try {
+            # Enable-ComputerRestore too: it sets up the shadow copy storage, the same service
+            $null = Invoke-WmTimeLimited -TimeoutSeconds $TimeoutSeconds -ArgumentList @("$env:SystemDrive\") -WarningVariable warnings -WarningAction SilentlyContinue -ScriptBlock {
+                param($drive)
+                Enable-ComputerRestore -Drive $drive -ErrorAction Stop
+                Checkpoint-Computer -Description 'wmanager: before provisioning' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+            }
+        } catch {
+            if ((Get-WmErrorText $_).Key -ne 'common.timed_out') { throw }
+            Write-WmLog -Key 'provision.restore_point_timeout' -Arguments @([math]::Round($TimeoutSeconds / 60, 1), $started.ToString('HH:mm')) -Level warn
+            return $false
         }
+        if ($warnings.Count -gt 0) { throw ($warnings -join ' ') }
         Write-WmLog -Key 'provision.restore_point_created'
         return $true
     } catch {

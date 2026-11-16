@@ -39,4 +39,5 @@
     'provision.finished_with_errors'       = 'Zřizování skončilo s chybami. Zkontrolujte protokol výše a spusťte skript znovu.'
     'provision.finished'                   = 'Zřizování dokončeno. Restartujte počítač, aby se projevily všechny změny.'
     'provision.restore_point_creating'     = 'Vytváří se bod obnovení systému (obvykle do minuty, nejvýše {0} min)...'
+    'provision.restore_point_timeout'      = 'Žádný bod obnovení po {0} min: služba Stínová kopie svazku neodpovídá (obvykle pomůže restart počítače). Windows jej může vytvořit ještě později; bod ''wmanager: before provisioning'' vytvořený po {1} neukazuje stav před zřízením.'
 }

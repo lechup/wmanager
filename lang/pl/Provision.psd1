@@ -39,4 +39,5 @@
     'provision.finished_with_errors'       = 'Provisioning zakończony z błędami. Sprawdź log powyżej i uruchom skrypt ponownie.'
     'provision.finished'                   = 'Provisioning zakończony. Uruchom ponownie komputer, żeby wszystkie zmiany zadziałały.'
     'provision.restore_point_creating'     = 'Tworzę punkt przywracania systemu (zwykle poniżej minuty, najwyżej {0} min)...'
+    'provision.restore_point_timeout'      = 'Brak punktu przywracania po {0} min: usługa kopiowania woluminów w tle nie odpowiada (zwykle pomaga restart komputera). Windows może go jeszcze utworzyć później; punkt ''wmanager: before provisioning'' utworzony po {1} nie pokazuje stanu sprzed provisioningu.'
 }

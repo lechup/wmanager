@@ -39,4 +39,5 @@
     'provision.finished_with_errors'       = 'Provisioning finished with errors. Check the log above and run the script again.'
     'provision.finished'                   = 'Provisioning finished. Restart the computer so that all changes take effect.'
     'provision.restore_point_creating'     = 'Creating a system restore point (usually under a minute, at most {0} min)...'
+    'provision.restore_point_timeout'      = 'No restore point after {0} min: the Volume Shadow Copy service isn''t answering (restarting the computer usually helps). Windows may still create it later; a restore point ''wmanager: before provisioning'' made after {1} doesn''t show the state before provisioning.'
 }

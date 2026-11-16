@@ -39,4 +39,5 @@
     'provision.finished_with_errors'       = 'El aprovisionamiento terminó con errores. Revisa el registro de arriba y vuelve a ejecutar el script.'
     'provision.finished'                   = 'Aprovisionamiento terminado. Reinicia el equipo para que se apliquen todos los cambios.'
     'provision.restore_point_creating'     = 'Creando un punto de restauración del sistema (normalmente menos de un minuto, como máximo {0} min)...'
+    'provision.restore_point_timeout'      = 'Ningún punto de restauración tras {0} min: el servicio de instantáneas de volumen no responde (reiniciar el equipo suele ayudar). Windows aún puede crearlo más tarde; un punto ''wmanager: before provisioning'' creado después de las {1} no muestra el estado anterior al aprovisionamiento.'
 }
