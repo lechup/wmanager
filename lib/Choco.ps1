@@ -266,7 +266,8 @@ function Test-WmChocoSuccess {
         $script:WmChocoNeedsReboot = $true
         return $true
     }
-    Write-WmLog "$Name : $Action nie powiodło się (kod $Code), szczegóły w logu lokalnym." -Level error
+    # $Action is "instalacja", "instalacja wersji X" or "aktualizacja" (feminine)
+    Write-WmLog "$Name : $Action nie powiodła się (kod $Code), szczegóły w logu lokalnym." -Level error
     return $false
 }
 
