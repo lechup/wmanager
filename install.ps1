@@ -119,8 +119,8 @@ function Install-Wmanager {
         Write-Host ''
         if ($p.ExitCode -eq 0) {
             Write-Host 'Gotowe. Uruchom ponownie komputer, zeby wszystkie zmiany zadzialaly.' -ForegroundColor Green
-        } elseif ($p.ExitCode -eq 5) {
-            # lib\Install.ps1 stopped before provisioning and said why
+        } elseif ($p.ExitCode -eq 90) {
+            # lib\Install.ps1 stopped before provisioning and said why (provisioning itself exits with 0-4)
             Write-Host 'Instalacja przerwana przed provisioningiem; nic nie zostalo zmienione.' -ForegroundColor Red
         } else {
             Write-Host "Provisioning zakonczyl sie bledem (kod $($p.ExitCode)); szczegoly powyzej i w C:\ProgramData\wmanager\logs, jesli log powstal." -ForegroundColor Red

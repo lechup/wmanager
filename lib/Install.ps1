@@ -1,8 +1,8 @@
 ﻿# Install from the internet, second step (README, "Quick start"). install.ps1 runs it from the unpacked release in
 # Windows PowerShell 5.1, as administrator: it asks where provision.config.psd1 is (a path or an https:// address;
 # Enter = the example), puts it and the certificate of a management source into the release folder and runs
-# Provision.ps1 as its own process, the way run.cmd does; the exit code is provisioning's, or 5 when the
-# configuration step stopped the installation. install.ps1 passes the configuration's address and the
+# Provision.ps1 as its own process, the way run.cmd does; the exit code is provisioning's (0-4), or 90 when the
+# configuration step stopped the installation (far from provisioning's codes, so the two can't be mixed up). install.ps1 passes the configuration's address and the
 # Authorization header in WM_INSTALL_CONFIG and WM_INSTALL_AUTH. Without -Folder (the tests dot-source this file)
 # it only defines its functions.
 param(
@@ -86,7 +86,7 @@ for ($try = 1; ; $try++) {
         Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
         if (-not $asked -or $try -ge 3) {
             Write-Host 'Instalacja przerwana.' -ForegroundColor Red
-            exit 5
+            exit 90
         }
         $auth = ''   # a wrong header may be the reason: ask for it again with the next address
     }
