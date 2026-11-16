@@ -24,7 +24,7 @@
 # and membership in the kvm group (sudo usermod -aG kvm $USER).
 set -euo pipefail
 
-die() { echo "BŁĄD: $*" >&2; exit 1; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
 here=$(cd "$(dirname "$0")" && pwd)
 base=${WM_VM_DIR:-$HOME/vm/wmanager}
@@ -37,12 +37,12 @@ vm_conf() {
         # Microsoft's generic installation keys: they choose the edition and don't activate Windows
         pro)  key=VK7JG-NPHTM-C97JM-9MPGT-3V66T; computer=WM-TEST-PRO;  ssh_port=2222; vnc=1 ;;
         home) key=YTMG3-N6DKC-DKB77-7M9GH-8HVX7; computer=WM-TEST-HOME; ssh_port=2223; vnc=2 ;;
-        *) die "nieznana maszyna '$1' (pro albo home)" ;;
+        *) die "unknown machine '$1' (pro or home)" ;;
     esac
     dir=$base/$1
 }
 
-need() { for c in "$@"; do command -v "$c" >/dev/null || die "brak $c (sudo apt install -y qemu-system-x86 qemu-utils ovmf swtpm swtpm-tools xorriso)"; done; }
+need() { for c in "$@"; do command -v "$c" >/dev/null || die "$c not found (sudo apt install -y qemu-system-x86 qemu-utils ovmf swtpm swtpm-tools xorriso)"; done; }
 
 # /dev/kvm: the kvm group, or the ACL logind gives to the user at the screen (gone while the screen is locked).
 # A member of the kvm group who hasn't signed in again since joining gets the group through sg.
@@ -52,12 +52,12 @@ need_kvm() {
         export WM_VM_SG=1
         exec sg kvm -c "$(printf '%q ' "$self" "${args[@]}")"
     fi
-    die "brak dostępu do /dev/kvm: sudo usermod -aG kvm \$USER (potem ponowne zalogowanie albo uruchamianie przez sg kvm)"
+    die "no access to /dev/kvm: sudo usermod -aG kvm \$USER (then sign in again, or run through sg kvm)"
 }
 
 ovmf_file() {
     for f in "$@"; do [[ -f $f ]] && { echo "$f"; return; }; done
-    die "brak plików OVMF ($*); zainstaluj pakiet ovmf"
+    die "OVMF files not found ($*); install the ovmf package"
 }
 
 running() { [[ -f $dir/qemu.pid ]] && kill -0 "$(cat "$dir/qemu.pid")" 2>/dev/null; }
@@ -95,8 +95,8 @@ cmd_create() {
     need qemu-system-x86_64 qemu-img swtpm xorriso ssh-keygen python3 curl
     need_kvm   # before anything is created: it may run the script again through sg
     vm_conf "$name"
-    [[ -f $iso ]] || die "brak pliku ISO $iso"
-    [[ -e $dir/disk.qcow2 ]] && die "maszyna $name już istnieje ($dir); usuń ten folder, żeby zacząć od nowa"
+    [[ -f $iso ]] || die "ISO file $iso not found"
+    [[ -e $dir/disk.qcow2 ]] && die "machine $name already exists ($dir); delete that folder to start over"
     mkdir -p "$dir/tpm" "$dir/cd" "$base/ssh"
     chmod 700 "$base" "$base/ssh"
 
@@ -119,24 +119,24 @@ cmd_create() {
     if [[ -n $msi_url ]] && curl -fsSL -o "$dir/cd/${msi_url##*/}" "$msi_url"; then
         echo "OpenSSH: ${msi_url##*/}"
     else
-        echo "UWAGA: nie pobrałem OpenSSH MSI; Windows zainstaluje SSH z Windows Update" >&2
+        echo "WARNING: could not download the OpenSSH MSI; Windows will install SSH from Windows Update" >&2
     fi
     xorriso -as mkisofs -quiet -V UNATTEND -J -r -o "$dir/unattend.iso" "$dir/cd"
 
     qemu-img create -q -f qcow2 "$dir/disk.qcow2" 80G
     cp "$(ovmf_file /usr/share/OVMF/OVMF_VARS_4M.ms.fd /usr/share/OVMF/OVMF_VARS.ms.fd)" "$dir/OVMF_VARS.fd"
     realpath "$iso" > "$dir/install.iso"
-    echo "Maszyna $name: $dir. Instaluję Windows ($computer)..."
+    echo "Machine $name: $dir. Installing Windows ($computer)..."
     cmd_start "$name"
-    echo "Instalacja trwa (45-90 min). Postęp: tests/vm/vm.sh screenshot $name ekran.png; gotowe, gdy działa: tests/vm/vm.sh ssh $name hostname"
+    echo "Installing (45-90 min). Progress: tests/vm/vm.sh screenshot $name screen.png; done when this works: tests/vm/vm.sh ssh $name hostname"
 }
 
 cmd_start() {
     vm_conf "$1"
     need qemu-system-x86_64 swtpm
     need_kvm
-    [[ -f $dir/disk.qcow2 ]] || die "maszyna $1 nie istnieje (tests/vm/vm.sh create $1 <iso>)"
-    running && { echo "Maszyna $1 już działa."; return; }
+    [[ -f $dir/disk.qcow2 ]] || die "machine $1 does not exist (tests/vm/vm.sh create $1 <iso>)"
+    running && { echo "Machine $1 is already running."; return; }
     rm -f "$dir/swtpm.sock" "$dir/qmp.sock"
     swtpm socket --tpm2 --tpmstate dir="$dir/tpm" --ctrl type=unixio,path="$dir/swtpm.sock" \
         --daemon --pid file="$dir/swtpm.pid" --log file="$dir/swtpm.log"
@@ -169,7 +169,7 @@ cmd_start() {
     then
         # swtpm would keep the TPM state locked and the next start would fail on it
         stop_swtpm
-        die "qemu nie wystartował (komunikat powyżej)"
+        die "qemu did not start (message above)"
     fi
     for _ in $(seq 1 50); do [[ -S $dir/qmp.sock ]] && break; sleep 0.1; done
     if [[ -f $dir/install.iso ]]; then
@@ -178,7 +178,7 @@ cmd_start() {
         for _ in $(seq 1 40); do presses+=("$enter" sleep:0.5); done
         qmp "${presses[@]}" >/dev/null
     fi
-    echo "Maszyna $1 działa (SSH 127.0.0.1:$ssh_port, VNC 127.0.0.1:$((5900 + vnc)))."
+    echo "Machine $1 is running (SSH 127.0.0.1:$ssh_port, VNC 127.0.0.1:$((5900 + vnc)))."
 }
 
 cmd_stop() {
@@ -195,19 +195,19 @@ cmd_stop() {
         local waited=0
         while running && (( waited < 900 )); do
             sleep 5; waited=$((waited + 5))
-            if (( waited % 120 == 0 )); then echo "Windows wciąż się wyłącza ($((waited / 60)) min; pewnie instaluje aktualizacje)..."; fi
+            if (( waited % 120 == 0 )); then echo "Windows is still shutting down ($((waited / 60)) min; probably installing updates)..."; fi
         done
         if running; then
-            echo "Windows nie wyłączył się w 15 minut; zatrzymuję maszynę." >&2
+            echo "Windows did not shut down within 15 minutes; stopping the machine." >&2
             qmp '{"execute":"quit"}' >/dev/null 2>&1 || kill "$(cat "$dir/qemu.pid")" 2>/dev/null || true
             for _ in $(seq 1 20); do running || break; sleep 0.5; done
         fi
         # qemu still holding the disk: snapshot or revert now would damage it, so keep the pid file and stop here
-        running && die "qemu (pid $(cat "$dir/qemu.pid")) wciąż działa; zatrzymaj go ręcznie (kill -9)"
+        running && die "qemu (pid $(cat "$dir/qemu.pid")) is still running; stop it by hand (kill -9)"
     fi
     stop_swtpm
     rm -f "$dir/qemu.pid"
-    echo "Maszyna $1 zatrzymana."
+    echo "Machine $1 stopped."
 }
 
 stop_swtpm() {
@@ -218,9 +218,9 @@ stop_swtpm() {
 cmd_status() {
     for n in pro home; do
         vm_conf "$n"
-        if [[ ! -f $dir/disk.qcow2 ]]; then echo "$n: brak"
-        elif running; then echo "$n: działa (SSH $ssh_port)"
-        else echo "$n: zatrzymana"; fi
+        if [[ ! -f $dir/disk.qcow2 ]]; then echo "$n: not created"
+        elif running; then echo "$n: running (SSH $ssh_port)"
+        else echo "$n: stopped"; fi
     done
 }
 
@@ -242,7 +242,7 @@ cmd_copy() {
 cmd_deploy() {
     vm_conf "$1"
     local config=${2:-$repo/provision.config.example.psd1} stage f cer
-    [[ -f $config ]] || die "brak pliku konfiguracji $config"
+    [[ -f $config ]] || die "configuration file $config not found"
     stage=$(mktemp -d)
     trap "rm -rf $(printf '%q' "$stage")" EXIT   # also when ssh or scp fails: the copy holds the configuration
     mkdir "$stage/wmanager"
@@ -257,7 +257,7 @@ cmd_deploy() {
     ssh "${ssh_opts[@]}" -p "$ssh_port" tester@127.0.0.1 \
         'if (Test-Path C:\wmanager) { Remove-Item C:\wmanager -Recurse -Force }' </dev/null
     scp -q -r "${ssh_opts[@]}" -P "$ssh_port" "$stage/wmanager" "tester@127.0.0.1:C:/"
-    echo "Maszyna $1: wmanager w C:\wmanager (konfiguracja: $config)."
+    echo "Machine $1: wmanager in C:\wmanager (configuration: $config)."
 }
 
 # Runs a wmanager script from C:\wmanager as administrator over SSH (no console: default answers, as in a scheduled
@@ -265,7 +265,7 @@ cmd_deploy() {
 cmd_run() {
     vm_conf "$1"; shift
     local script=$1 a ps; shift
-    [[ $script =~ ^[A-Za-z0-9._-]+\.ps1$ ]] || die "skrypt: nazwa pliku .ps1 z C:\wmanager (np. Provision.ps1)"
+    [[ $script =~ ^[A-Za-z0-9._-]+\.ps1$ ]] || die "script: the name of a .ps1 file in C:\wmanager (e.g. Provision.ps1)"
     ps="powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\wmanager\\$script"
     for a in "$@"; do ps+=" '${a//\'/\'\'}'"; done
     ps+='; exit $LASTEXITCODE'
@@ -280,7 +280,7 @@ cmd_run() {
 
 cmd_screenshot() {
     vm_conf "$1"
-    running || die "maszyna $1 nie działa"
+    running || die "machine $1 is not running"
     local out
     out=$(realpath -m "$2")
     qmp "{\"execute\":\"screendump\",\"arguments\":{\"filename\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$out"),\"format\":\"png\"}}" >/dev/null
@@ -289,39 +289,39 @@ cmd_screenshot() {
 
 cmd_snapshot() {
     vm_conf "$1"
-    running && die "zatrzymaj maszynę przed zapisaniem stanu (tests/vm/vm.sh stop $1)"
-    [[ $2 =~ ^[A-Za-z0-9._-]+$ ]] || die "nazwa stanu: litery, cyfry, . - _"
+    running && die "stop the machine before saving a state (tests/vm/vm.sh stop $1)"
+    [[ $2 =~ ^[A-Za-z0-9._-]+$ ]] || die "state name: letters, digits, . - _"
     # qemu-img would add a second snapshot with the same name, and revert would pair the old disk with the new TPM
     if [[ -d $dir/snapshots/$2 ]] || qemu-img snapshot -l "$dir/disk.qcow2" | awk 'NR > 2 { print $2 }' | grep -qx -- "$2"; then
-        die "stan $2 już istnieje (usuń go: tests/vm/vm.sh forget $1 $2)"
+        die "state $2 already exists (delete it: tests/vm/vm.sh forget $1 $2)"
     fi
     qemu-img snapshot -c "$2" "$dir/disk.qcow2"
     mkdir -p "$dir/snapshots/$2"
     cp "$dir/OVMF_VARS.fd" "$dir/snapshots/$2/"
     tar -C "$dir" -cf "$dir/snapshots/$2/tpm.tar" tpm
-    echo "Zapisano stan $2 maszyny $1."
+    echo "Saved state $2 of machine $1."
 }
 
 cmd_revert() {
     vm_conf "$1"
-    running && die "zatrzymaj maszynę przed powrotem do stanu (tests/vm/vm.sh stop $1)"
-    [[ -d $dir/snapshots/$2 ]] || die "brak stanu $2 (tests/vm/vm.sh snapshots $1)"
+    running && die "stop the machine before going back to a state (tests/vm/vm.sh stop $1)"
+    [[ -d $dir/snapshots/$2 ]] || die "no state $2 (tests/vm/vm.sh snapshots $1)"
     qemu-img snapshot -a "$2" "$dir/disk.qcow2"
     cp "$dir/snapshots/$2/OVMF_VARS.fd" "$dir/"
     rm -rf "$dir/tpm"
     tar -C "$dir" -xf "$dir/snapshots/$2/tpm.tar"
-    echo "Maszyna $1 wróciła do stanu $2."
+    echo "Machine $1 is back at state $2."
 }
 
 cmd_forget() {
     vm_conf "$1"
-    running && die "zatrzymaj maszynę przed usunięciem stanu (tests/vm/vm.sh stop $1)"
-    [[ $2 =~ ^[A-Za-z0-9._-]+$ ]] || die "nazwa stanu: litery, cyfry, . - _"
+    running && die "stop the machine before deleting a state (tests/vm/vm.sh stop $1)"
+    [[ $2 =~ ^[A-Za-z0-9._-]+$ ]] || die "state name: letters, digits, . - _"
     while qemu-img snapshot -l "$dir/disk.qcow2" | awk 'NR > 2 { print $2 }' | grep -qx -- "$2"; do
         qemu-img snapshot -d "$2" "$dir/disk.qcow2"
     done
     rm -rf "${dir:?}/snapshots/$2"
-    echo "Usunięto stan $2 maszyny $1."
+    echo "Deleted state $2 of machine $1."
 }
 
 cmd_snapshots() {
@@ -333,25 +333,25 @@ cmd_snapshots() {
 cmd_installed() {
     vm_conf "$1"
     rm -f "$dir/install.iso"
-    echo "Maszyna $1: płyty instalacyjne odłączone (od następnego startu)."
+    echo "Machine $1: installation discs detached (from the next start)."
 }
 
 [[ $# -ge 1 ]] || { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 cmd=$1; shift
 case $cmd in
-    create)     [[ $# -eq 2 ]] || die "użycie: $0 create <pro|home> <iso>"; cmd_create "$@" ;;
-    start)      [[ $# -eq 1 ]] || die "użycie: $0 start <vm>"; cmd_start "$1" ;;
-    stop)       [[ $# -eq 1 ]] || die "użycie: $0 stop <vm>"; cmd_stop "$1" ;;
+    create)     [[ $# -eq 2 ]] || die "usage: $0 create <pro|home> <iso>"; cmd_create "$@" ;;
+    start)      [[ $# -eq 1 ]] || die "usage: $0 start <vm>"; cmd_start "$1" ;;
+    stop)       [[ $# -eq 1 ]] || die "usage: $0 stop <vm>"; cmd_stop "$1" ;;
     status)     cmd_status ;;
-    ssh)        [[ $# -ge 1 ]] || die "użycie: $0 ssh <vm> [polecenie]"; cmd_ssh "$@" ;;
-    copy)       [[ $# -eq 3 ]] || die "użycie: $0 copy <vm> <lokalnie> <ścieżka-w-windows>"; cmd_copy "$@" ;;
-    deploy)     [[ $# -ge 1 && $# -le 2 ]] || die "użycie: $0 deploy <vm> [provision.config.psd1]"; cmd_deploy "$@" ;;
-    run)        [[ $# -ge 2 ]] || die "użycie: $0 run <vm> <skrypt.ps1> [parametry]"; cmd_run "$@" ;;
-    screenshot) [[ $# -eq 2 ]] || die "użycie: $0 screenshot <vm> <plik.png>"; cmd_screenshot "$@" ;;
-    snapshot)   [[ $# -eq 2 ]] || die "użycie: $0 snapshot <vm> <nazwa>"; cmd_snapshot "$@" ;;
-    revert)     [[ $# -eq 2 ]] || die "użycie: $0 revert <vm> <nazwa>"; cmd_revert "$@" ;;
-    forget)     [[ $# -eq 2 ]] || die "użycie: $0 forget <vm> <nazwa>"; cmd_forget "$@" ;;
-    snapshots)  [[ $# -eq 1 ]] || die "użycie: $0 snapshots <vm>"; cmd_snapshots "$1" ;;
-    installed)  [[ $# -eq 1 ]] || die "użycie: $0 installed <vm>"; cmd_installed "$1" ;;
-    *) die "nieznane polecenie '$cmd'" ;;
+    ssh)        [[ $# -ge 1 ]] || die "usage: $0 ssh <vm> [command]"; cmd_ssh "$@" ;;
+    copy)       [[ $# -eq 3 ]] || die "usage: $0 copy <vm> <local-path> <win-path>"; cmd_copy "$@" ;;
+    deploy)     [[ $# -ge 1 && $# -le 2 ]] || die "usage: $0 deploy <vm> [provision.config.psd1]"; cmd_deploy "$@" ;;
+    run)        [[ $# -ge 2 ]] || die "usage: $0 run <vm> <script.ps1> [params]"; cmd_run "$@" ;;
+    screenshot) [[ $# -eq 2 ]] || die "usage: $0 screenshot <vm> <file.png>"; cmd_screenshot "$@" ;;
+    snapshot)   [[ $# -eq 2 ]] || die "usage: $0 snapshot <vm> <name>"; cmd_snapshot "$@" ;;
+    revert)     [[ $# -eq 2 ]] || die "usage: $0 revert <vm> <name>"; cmd_revert "$@" ;;
+    forget)     [[ $# -eq 2 ]] || die "usage: $0 forget <vm> <name>"; cmd_forget "$@" ;;
+    snapshots)  [[ $# -eq 1 ]] || die "usage: $0 snapshots <vm>"; cmd_snapshots "$1" ;;
+    installed)  [[ $# -eq 1 ]] || die "usage: $0 installed <vm>"; cmd_installed "$1" ;;
+    *) die "unknown command '$cmd'" ;;
 esac

@@ -19,7 +19,7 @@ try {
         # Windows Update may not be ready right after setup; try a few times
         for ($i = 1; $i -le 5; $i++) {
             try { Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null; break }
-            catch { Write-Output "Add-WindowsCapability, próba ${i}: $($_.Exception.Message)"; Start-Sleep -Seconds 60 }
+            catch { Write-Output "Add-WindowsCapability, attempt ${i}: $($_.Exception.Message)"; Start-Sleep -Seconds 60 }
         }
     }
 
@@ -49,12 +49,12 @@ try {
         $name = (Get-Content -LiteralPath $nameFile -TotalCount 1).Trim()
         if ($name -and $env:COMPUTERNAME -ne $name) {
             Rename-Computer -NewName $name -Force -WarningAction SilentlyContinue
-            Write-Output "Nazwa komputera: $env:COMPUTERNAME -> $name (po restarcie)"
+            Write-Output "Computer name: $env:COMPUTERNAME -> $name (after a restart)"
         }
     }
-    Write-Output 'SSH gotowe.'
+    Write-Output 'SSH ready.'
 } catch {
-    Write-Output "Błąd: $($_.Exception.Message)"
+    Write-Output "Error: $($_.Exception.Message)"
 } finally {
     Stop-Transcript | Out-Null
 }

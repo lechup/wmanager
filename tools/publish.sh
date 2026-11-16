@@ -14,33 +14,33 @@
 # and sha256sum.
 set -euo pipefail
 
-die() { echo "BŁĄD: $*" >&2; exit 1; }
-warn() { echo "UWAGA: $*" >&2; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+warn() { echo "WARNING: $*" >&2; }
 
-[[ $# -ge 1 ]] || die "użycie: $0 <folder-zarządzania> [folder-klucza]"
+[[ $# -ge 1 ]] || die "usage: $0 <management-folder> [key-folder]"
 dir=$1
 keydir=${2:-$HOME/.wmanager-signing}
-command -v osslsigncode >/dev/null || die "brak osslsigncode (sudo apt install osslsigncode)"
-[[ -d $dir ]] || die "brak folderu $dir"
-[[ -f $keydir/key.pem && -f $keydir/cert.pem ]] || die "brak key.pem i cert.pem w $keydir (utwórz je: tools/new-signing-cert.sh)"
+command -v osslsigncode >/dev/null || die "osslsigncode not found (sudo apt install osslsigncode)"
+[[ -d $dir ]] || die "folder $dir not found"
+[[ -f $keydir/key.pem && -f $keydir/cert.pem ]] || die "no key.pem and cert.pem in $keydir (create them with tools/new-signing-cert.sh)"
 keydir=$(cd "$keydir" && pwd)
 cd "$dir"
 
 openssl x509 -in "$keydir/cert.pem" -noout -checkend 0 >/dev/null ||
-    die "certyfikat podpisu wygasł; utwórz nowy (tools/new-signing-cert.sh w innym folderze) i wgraj go na komputery"
+    die "the signing certificate has expired; create a new one (tools/new-signing-cert.sh in another folder) and install it on the computers"
 openssl x509 -in "$keydir/cert.pem" -noout -checkend $((60 * 86400)) >/dev/null ||
-    warn "certyfikat podpisu wygasa w ciągu 60 dni; przygotuj nowy (tools/new-signing-cert.sh w innym folderze)"
+    warn "the signing certificate expires within 60 days; prepare a new one (tools/new-signing-cert.sh in another folder)"
 
 # --- Source identifier -------------------------------------------------------------------
 id_re='^[A-Za-z0-9._-]{8,64}$'
 if [[ ! -f source-id.txt ]]; then
-    [[ -f manifest.psd1 ]] && die "jest manifest.psd1, ale brak source-id.txt; przywróć ten plik (inaczej komputery odrzucą nowe wersje)"
+    [[ -f manifest.psd1 ]] && die "manifest.psd1 exists but source-id.txt is missing; restore that file (otherwise the computers reject new versions)"
     tr -d '\n' < /proc/sys/kernel/random/uuid > source-id.txt
-    echo "Nowe źródło zarządzania, identyfikator: $(cat source-id.txt)"
-    echo "Wpisz go do provision.config.psd1: Management.SourceId. Nie kopiuj source-id.txt do innych źródeł."
+    echo "New management source, identifier: $(cat source-id.txt)"
+    echo "Put it in provision.config.psd1: Management.SourceId. Don't copy source-id.txt to other sources."
 fi
 source_id=$(tr -d ' \r\n' < source-id.txt)
-[[ $source_id =~ $id_re ]] || die "source-id.txt: niepoprawny identyfikator '$source_id' (8-64 znaki: litery, cyfry, . - _)"
+[[ $source_id =~ $id_re ]] || die "source-id.txt: invalid identifier '$source_id' (8-64 characters: letters, digits, . - _)"
 
 # --- Files -----------------------------------------------------------------------
 in_git=0
@@ -57,33 +57,33 @@ else
     while IFS= read -r -d '' f; do rels+=("${f#./}"); done < <(
         find . ! -type d ! -path '*/.*' ! -path './manifest.psd1' -print0 | LC_ALL=C sort -z)
 fi
-[[ ${#rels[@]} -gt 0 ]] || die "folder $dir jest pusty"
+[[ ${#rels[@]} -gt 0 ]] || die "folder $dir is empty"
 
 # The same rules as Test-WmManagedPath on the computers
 name_re='^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
 device_re='^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)'
 for rel in "${rels[@]}"; do
-    [[ -L $rel ]] && die "$rel jest dowiązaniem symbolicznym; git wysłałby samą ścieżkę zamiast pliku"
-    [[ -f $rel ]] || die "$rel nie jest zwykłym plikiem"
-    [[ $rel =~ $name_re ]] || die "niedozwolona nazwa: $rel (tylko litery, cyfry, kropka, myślnik, podkreślenie)"
+    [[ -L $rel ]] && die "$rel is a symbolic link; git would push only the path, not the file"
+    [[ -f $rel ]] || die "$rel is not a regular file"
+    [[ $rel =~ $name_re ]] || die "name not allowed: $rel (only letters, digits, dot, hyphen, underscore)"
     IFS=/ read -ra segs <<< "$rel"
     for s in "${segs[@]}"; do
-        [[ $s == *. ]] && die "nazwa nie może kończyć się kropką: $rel"
-        [[ ${s,,} =~ $device_re ]] && die "zastrzeżona nazwa w Windows: $rel"
+        [[ $s == *. ]] && die "a name can't end with a dot: $rel"
+        [[ ${s,,} =~ $device_re ]] && die "name reserved in Windows: $rel"
     done
 done
 dups=$(printf '%s\n' "${rels[@]}" | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
-[[ -z $dups ]] || die "pliki różniące się tylko wielkością liter (Windows ich nie rozróżni): $dups"
+[[ -z $dups ]] || die "files that differ only in letter case (Windows can't tell them apart): $dups"
 
-[[ -f groups.psd1 ]] || warn "brak groups.psd1: wszystkie komputery dostaną tylko listę wspólną"
-[[ -f choco-reqs.txt ]] || warn "brak choco-reqs.txt: lista wspólna będzie pusta"
+[[ -f groups.psd1 ]] || warn "no groups.psd1: every computer gets only the common list"
+[[ -f choco-reqs.txt ]] || warn "no choco-reqs.txt: the common list will be empty"
 
 # Windows PowerShell 5.1 reads a file without a BOM as ANSI, which breaks Polish letters
 for rel in "${rels[@]}"; do
     case $rel in
         *.ps1|*.psd1|*.psm1)
             if LC_ALL=C grep -qP '[\x80-\xFF]' -- "$rel" && [[ $(head -c3 -- "$rel" | od -An -tx1 | tr -d ' \n') != efbbbf ]]; then
-                warn "$rel ma znaki spoza ASCII, a nie ma BOM; zapisz go jako UTF-8 z BOM"
+                warn "$rel has non-ASCII characters but no BOM; save it as UTF-8 with BOM"
             fi ;;
     esac
 done
@@ -92,10 +92,10 @@ done
 # Git LFS would put a pointer in the repository instead of the file.
 if (( in_git )); then
     bad=$(printf '%s\n' manifest.psd1 "${rels[@]}" | git check-attr --stdin text | grep -v ': text: unset$' || true)
-    [[ -z $bad ]] || die "git zmieniałby końce linii tych plików; dodaj do .gitattributes linię '* -text':
+    [[ -z $bad ]] || die "git would change the line endings of these files; add the line '* -text' to .gitattributes:
 $bad"
     lfs=$(printf '%s\n' "${rels[@]}" | git check-attr --stdin filter | grep -vE ': filter: (unspecified|unset)$' || true)
-    [[ -z $lfs ]] || die "te pliki przechodzą przez filtr gita (np. Git LFS), więc w repozytorium byłoby coś innego:
+    [[ -z $lfs ]] || die "these files go through a git filter (e.g. Git LFS), so the repository would hold something else:
 $lfs"
 fi
 
@@ -127,22 +127,22 @@ sign_args=(-certs "$keydir/cert.pem" -key "$keydir/key.pem" -h sha256 -n wmanage
 [[ -n ${WM_TSA:-} ]] && sign_args+=(-t "$WM_TSA")
 sign_args+=(-in "$tmp/manifest.psd1" -out "$tmp/signed.psd1")
 if grep -q 'ENCRYPTED' "$keydir/key.pem"; then
-    read -rsp "Hasło klucza podpisu: " pw
+    read -rsp "Signing key passphrase: " pw
     echo >&2
-    out=$(osslsigncode sign "${sign_args[@]}" -readpass <(printf '%s' "$pw") 2>&1) || die "podpisywanie nie powiodło się:
+    out=$(osslsigncode sign "${sign_args[@]}" -readpass <(printf '%s' "$pw") 2>&1) || die "signing failed:
 $out"
     unset pw
 else
-    out=$(osslsigncode sign "${sign_args[@]}" 2>&1) || die "podpisywanie nie powiodło się:
+    out=$(osslsigncode sign "${sign_args[@]}" 2>&1) || die "signing failed:
 $out"
 fi
 
 verify_args=(-CAfile "$keydir/cert.pem" -in "$tmp/signed.psd1")
 [[ -n ${WM_TSA:-} ]] && verify_args+=(-TSA-CAfile /etc/ssl/certs/ca-certificates.crt)
-out=$(osslsigncode verify "${verify_args[@]}" 2>&1) || die "podpis się nie weryfikuje:
+out=$(osslsigncode verify "${verify_args[@]}" 2>&1) || die "the signature does not verify:
 $out"
 
 mv "$tmp/signed.psd1" manifest.psd1
 thumb=$(openssl x509 -in "$keydir/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
-echo "Podpisano manifest $serial (plików: ${#rels[@]}), źródło $source_id, certyfikat $thumb."
-echo "Teraz zatwierdź i wypchnij zmiany: git add -A && git commit -m '...' && git push"
+echo "Signed manifest $serial (${#rels[@]} files), source $source_id, certificate $thumb."
+echo "Now commit and push the changes: git add -A && git commit -m '...' && git push"
