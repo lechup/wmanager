@@ -3,89 +3,10 @@
 $script:WmChocoExe = Join-Path $env:ProgramData 'chocolatey\bin\choco.exe'
 $script:WmReqsCache = Join-Path $script:WmStateDir 'choco-reqs.cache.txt'
 
-# ---------------------------------------------------------------------------
-# List parser (no system dependencies, tested in tests\Requirements.Tests.ps1)
-# ---------------------------------------------------------------------------
+# The list parser (ConvertFrom-WmRequirements) is in Groups.ps1: the group tool uses it on Linux too.
+. (Join-Path $PSScriptRoot 'Groups.ps1')
 
-function Split-WmArgumentString {
-    param([AllowEmptyString()][string]$Text)
-    $result = @()
-    if (-not $Text) { return ,$result }
-    foreach ($m in [regex]::Matches($Text, '"[^"]*"|''[^'']*''|\S+')) {
-        $v = $m.Value
-        if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) { $v = $v.Substring(1, $v.Length - 2) }
-        $result += $v
-    }
-    return ,$result
-}
 
-function ConvertFrom-WmRequirements {
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
-
-    $items = @()
-    $seen = @{}
-    $lineNo = 0
-    $Text = $Text.TrimStart([char]0xFEFF)   # BOM from a file downloaded over HTTP
-    foreach ($raw in ($Text -split "\r?\n")) {
-        $lineNo++
-        # comment: # at the start of a line or after whitespace
-        $line = ($raw -replace '(^|\s)#.*$', '').Trim()
-        if (-not $line) { continue }
-
-        $extra = ''
-        $pipe = $line.IndexOf('|')
-        if ($pipe -ge 0) {
-            $extra = $line.Substring($pipe + 1).Trim()
-            $line = $line.Substring(0, $pipe).Trim()
-        }
-
-        $tokens = @($line -split '\s+' | Where-Object { $_ })
-        if ($tokens.Count -eq 0) { throw (New-WmError 'choco.line_no_package' @($lineNo)) }
-
-        $spec = $tokens[0]
-        $name = $spec
-        $version = $null
-        $at = $spec.IndexOf('@')
-        if ($at -ge 0) {
-            $name = $spec.Substring(0, $at)
-            $version = $spec.Substring($at + 1)
-        }
-        if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw (New-WmError 'choco.line_bad_name' @($lineNo, $name)) }
-
-        $pinned = $false
-        if ($null -ne $version) {
-            if ($version -eq '' -or $version -ieq 'latest') {
-                $version = $null
-            } elseif ($version -match '^[0-9][0-9A-Za-z.+-]*$') {
-                $pinned = $true
-            } else {
-                throw (New-WmError 'choco.line_bad_version' @($lineNo, $version, $name))
-            }
-        }
-
-        $noUpdate = $false
-        foreach ($flag in ($tokens | Select-Object -Skip 1)) {
-            switch -Regex ($flag) {
-                '^!noupdate$' { $noUpdate = $true }
-                default { throw (New-WmError 'choco.line_unknown_option' @($lineNo, $flag)) }
-            }
-        }
-
-        $key = $name.ToLowerInvariant()
-        if ($seen.ContainsKey($key)) { throw (New-WmError 'choco.line_duplicate' @($lineNo, $name, $seen[$key])) }
-        $seen[$key] = $lineNo
-
-        $items += [pscustomobject]@{
-            Name      = $name
-            Version   = $version      # $null = latest
-            Pinned    = $pinned
-            NoUpdate  = $noUpdate
-            ExtraArgs = (Split-WmArgumentString $extra)
-            Line      = $lineNo
-        }
-    }
-    return ,$items
-}
 
 # ---------------------------------------------------------------------------
 # Fetching the list

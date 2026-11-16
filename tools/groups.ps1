@@ -1,0 +1,744 @@
+﻿# wmanager: manage a management source (computer groups) from the terminal. Shows what a computer gets, checks
+# the source the way the computers read it (lib/Groups.ps1, the same code), and edits groups.psd1, the package
+# lists and new scripts and jobs. Edits keep the rest of each file as it is: comments, order, BOM, line endings.
+# Sign and publish afterwards with tools/publish.sh (which runs "check" first).
+#
+#   pwsh tools/groups.ps1 <folder> show [<computer>]
+#   pwsh tools/groups.ps1 <folder> check
+#   pwsh tools/groups.ps1 <folder> add-computer <computer> <group>...
+#   pwsh tools/groups.ps1 <folder> remove-computer <computer> [<group>...]
+#   pwsh tools/groups.ps1 <folder> add-package <group|common> <line of choco-reqs.txt>
+#   pwsh tools/groups.ps1 <folder> remove-package <group|common> <package>
+#   pwsh tools/groups.ps1 <folder> new-script <group> <name>
+#   pwsh tools/groups.ps1 <folder> new-job <group> <hourly|daily|weekly> <name>
+#
+# PowerShell 7 (pwsh) on Linux or macOS, or Windows PowerShell 5.1. Messages are in English, like the other tools.
+# -FileList <file>: check only these paths (one per line, relative, '/'), as publish.sh passes what git will push.
+param(
+    [Parameter(Position = 0)][string]$Folder,
+    [Parameter(Position = 1)][string]$Command,
+    [Parameter(Position = 2, ValueFromRemainingArguments = $true)][string[]]$Rest = @(),
+    [string]$FileList
+)
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path $PSScriptRoot -Parent
+. (Join-Path (Join-Path $repo 'lib') 'Lang.ps1')
+. (Join-Path (Join-Path $repo 'lib') 'Groups.ps1')
+Initialize-WmLanguage -Lang 'en' -Root $repo
+
+$script:ProblemErrors = 0
+$script:ProblemWarnings = 0
+$script:MergeMessages = New-Object 'System.Collections.Generic.List[object]'
+
+# Merge-WmRequirements (lib/Groups.ps1) reports through these; on a computer they write to the log
+function Write-WmManagedNote {
+    param([Parameter(Mandatory = $true)][string]$Key, [object[]]$Arguments = @())
+    $text = Get-WmText -Key $Key -Arguments $Arguments -English
+    $script:MergeMessages.Add([pscustomobject]@{ Key = $Key; Warning = $false; Text = $text })
+}
+function Write-WmManagedWarning {
+    param([Parameter(Mandatory = $true)][string]$Key, [object[]]$Arguments = @())
+    $text = Get-WmText -Key $Key -Arguments $Arguments -English
+    $script:MergeMessages.Add([pscustomobject]@{ Key = $Key; Warning = $true; Text = $text })
+}
+
+function Write-Problem {
+    param([ValidateSet('error', 'warning')][string]$Kind, [string]$Text)
+    if ($Kind -eq 'error') { $script:ProblemErrors++; Write-Host "ERROR: $Text" -ForegroundColor Red }
+    else { $script:ProblemWarnings++; Write-Host "WARNING: $Text" -ForegroundColor Yellow }
+}
+
+function Show-Usage {
+    Write-Host @'
+usage: pwsh tools/groups.ps1 <folder> <command> ...
+  show [<computer>]                           what a computer gets (groups, packages, scripts, jobs); without one, an overview
+  check                                       check the source the way the computers read it (publish.sh runs it too)
+  add-computer <computer> <group>...          put a computer into groups (groups.psd1)
+  remove-computer <computer> [<group>...]     take it out of these groups, or out of groups.psd1 altogether
+  add-package <group|common> <line>           add a package line to a list, or replace the line of the same package
+  remove-package <group|common> <package>     remove a package from a list (computers don't uninstall it)
+  new-script <group> <name>                   new script groups/<group>/scripts/<NN>-<name>.ps1 from a template
+  new-job <group> <hourly|daily|weekly> <name>  new job groups/<group>/jobs/<when>/<name>.ps1 from a template
+Quote a package line with ' ' in bash ('7zip@24.8.0 !noupdate', 'vlc | --params "/X"').
+'@
+}
+
+# ---------------------------------------------------------------------------
+# Files
+# ---------------------------------------------------------------------------
+
+function Get-FullPath {
+    param([string]$Root, [string]$Rel)
+    return [IO.Path]::Combine($Root, $Rel.Replace('/', [IO.Path]::DirectorySeparatorChar))
+}
+
+# Text, BOM and line ending of a file; a missing file is empty, without a BOM, CRLF (like the examples)
+function Read-TextFile {
+    param([string]$Path)
+    if (-not [IO.File]::Exists($Path)) { return [pscustomobject]@{ Text = ''; Bom = $false; NewLine = "`r`n"; Exists = $false } }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $bom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+    $start = 0
+    if ($bom) { $start = 3 }
+    $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes, $start, $bytes.Length - $start)
+    $nl = "`r`n"
+    if ($text.IndexOf([char]10) -ge 0 -and $text.IndexOf("`r`n", [StringComparison]::Ordinal) -lt 0) { $nl = "`n" }
+    return [pscustomobject]@{ Text = $text; Bom = $bom; NewLine = $nl; Exists = $true }
+}
+
+function Write-TextFile {
+    param([string]$Path, [string]$Text, [bool]$Bom)
+    $dir = [IO.Path]::GetDirectoryName($Path)
+    if (-not [IO.Directory]::Exists($dir)) { [void][IO.Directory]::CreateDirectory($dir) }
+    [IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($Bom)))
+}
+
+# The files of the source: relative path ('/') -> full path, without hidden ones (.git...) and manifest.psd1,
+# as publish.sh lists them outside git. With -FileList, exactly the listed paths.
+function Get-SourceFiles {
+    param([string]$Root)
+    $files = @{}   # case-insensitive, like the manifest on a computer
+    if ($FileList) {
+        foreach ($line in [IO.File]::ReadAllLines($FileList)) {
+            $rel = $line.Trim()
+            if ($rel -and $rel -ine 'manifest.psd1') { $files[$rel] = Get-FullPath $Root $rel }
+        }
+        return $files
+    }
+    $todo = New-Object 'System.Collections.Generic.Stack[string]'
+    $todo.Push('')
+    while ($todo.Count -gt 0) {
+        $rel = $todo.Pop()
+        $dir = $Root
+        if ($rel) { $dir = Get-FullPath $Root $rel.TrimEnd('/') }
+        foreach ($d in [IO.Directory]::GetDirectories($dir)) {
+            $name = [IO.Path]::GetFileName($d)
+            if (-not $name.StartsWith('.')) { $todo.Push($rel + $name + '/') }
+        }
+        foreach ($f in [IO.Directory]::GetFiles($dir)) {
+            $name = [IO.Path]::GetFileName($f)
+            if ($name.StartsWith('.') -or ($rel + $name) -ieq 'manifest.psd1') { continue }
+            $files[$rel + $name] = $f
+        }
+    }
+    return $files
+}
+
+# ---------------------------------------------------------------------------
+# groups.psd1 and the package lists, read as a computer reads them
+# ---------------------------------------------------------------------------
+
+# The hashtable of groups.psd1 as a syntax tree, so edits can change one entry and leave the rest of the text alone
+function Get-MapAst {
+    param([string]$Text)
+    $tokens = $null
+    $errs = $null
+    $sb = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$errs)
+    if (@($errs).Count -gt 0) { throw "groups.psd1, line $($errs[0].Extent.StartLineNumber): $($errs[0].Message)" }
+    $ht = $null
+    if ($sb.EndBlock -and -not $sb.ParamBlock -and -not $sb.BeginBlock -and -not $sb.ProcessBlock) {
+        $st = @($sb.EndBlock.Statements)
+        if ($st.Count -eq 1 -and $st[0] -is [System.Management.Automation.Language.PipelineAst]) {
+            $el = @($st[0].PipelineElements)
+            if ($el.Count -eq 1 -and $el[0] -is [System.Management.Automation.Language.CommandExpressionAst] -and
+                $el[0].Expression -is [System.Management.Automation.Language.HashtableAst]) { $ht = $el[0].Expression }
+        }
+    }
+    if (-not $ht) { throw "groups.psd1 must hold one hashtable: @{ Default = @(...); Computers = @{ ... } }" }
+    return $ht
+}
+
+# The data of groups.psd1 (constants only, like Import-PowerShellDataFile), checked like on a computer
+function ConvertTo-GroupMap {
+    param([string]$Text)
+    $ast = Get-MapAst $Text
+    try { $map = $ast.SafeGetValue() }
+    catch { throw "groups.psd1 may hold only constant data (strings, @(...), @{...}): $($_.Exception.Message)" }
+    Assert-WmGroupMap $map
+    return $map
+}
+
+function Read-GroupMap {
+    param([hashtable]$Files)
+    if (-not $Files.ContainsKey('groups.psd1')) { return @{} }
+    return ConvertTo-GroupMap (Read-TextFile $Files['groups.psd1']).Text
+}
+
+# '' = the common list, otherwise the group. Every entry remembers its list (Source) for "show".
+function Read-PackageLists {
+    param([hashtable]$Files)
+    $lists = @{}
+    foreach ($path in @($Files.Keys)) {
+        if ($path -ieq 'choco-reqs.txt') { $group = '' }
+        elseif ($path -match '^groups/([^/]+)/choco-reqs\.txt$') { $group = $Matches[1] }
+        else { continue }
+        try { $items = ConvertFrom-WmRequirements -Text (Read-TextFile $Files[$path]).Text }
+        catch { throw "${path}: $(Format-WmErrorText $_ -English)" }
+        $label = 'common'
+        if ($group) { $label = $group }
+        foreach ($i in @($items)) { $i | Add-Member -NotePropertyName Source -NotePropertyValue $label -Force }
+        $lists[$group] = $items
+    }
+    return $lists
+}
+
+function Get-FolderGroups {
+    param([hashtable]$Files)
+    $names = @{}
+    foreach ($p in $Files.Keys) { if ($p -match '^groups/([^/]+)/') { $names[$Matches[1]] = $Matches[1] } }
+    return @($names.Values | Sort-Object)
+}
+
+# What one computer gets, as lib/Managed.ps1 resolves it: groups, merged packages, scripts and jobs
+function Get-ComputerView {
+    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer)
+    $script:MergeMessages.Clear()
+    $groups = Get-WmComputerGroups -Map $Map -ComputerName $Computer   # plain assignment, see below
+    # Not $lists: PowerShell names ignore case, so it would be the $Lists parameter
+    $toMerge = @([pscustomobject]@{ Label = (New-WmText 'managed.common_list'); IsGroup = $false; Items = @($Lists['']) })
+    foreach ($g in $groups) {
+        $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+        if (-not $hasFiles) { Write-WmManagedWarning -Key 'managed.group_no_files' -Arguments @($g); continue }
+        if ($Lists.ContainsKey($g)) { $toMerge += [pscustomobject]@{ Label = $g; IsGroup = $true; Items = @($Lists[$g]) } }
+    }
+    # Plain assignments: these functions return their array as one object (,$result)
+    $packages = Merge-WmRequirements -Lists $toMerge
+    $scripts = Get-WmGroupScripts -Files $Files -Groups $groups
+    $jobs = Get-WmGroupJobs -Files $Files -Groups $groups
+    $inMap = $false
+    if ($Map.Computers -is [hashtable]) { foreach ($k in $Map.Computers.Keys) { if ([string]$k -ieq $Computer) { $inMap = $true } } }
+    return [pscustomobject]@{
+        Computer = $Computer
+        InMap    = $inMap
+        Groups   = $groups
+        Packages = @($packages | Where-Object { $null -ne $_ })
+        Scripts  = @($scripts)
+        Jobs     = @($jobs)
+        Messages = $script:MergeMessages.ToArray()   # not @(...): PowerShell 7 fails on @() of a List[object]
+    }
+}
+
+function Format-Package {
+    param($Item)
+    $s = $Item.Name
+    if ($Item.Version) { $s += '@' + $Item.Version }
+    if ($Item.NoUpdate) { $s += ' !noupdate' }
+    if (@($Item.ExtraArgs).Count -gt 0) { $s += ' | ' + (@($Item.ExtraArgs) -join ' ') }
+    return $s
+}
+
+# ---------------------------------------------------------------------------
+# show
+# ---------------------------------------------------------------------------
+
+function Show-Computer {
+    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer)
+    $v = Get-ComputerView -Files $Files -Map $Map -Lists $Lists -Computer $Computer
+    $groups = '(none)'
+    if ($v.Groups.Count -gt 0) { $groups = $v.Groups -join ', ' }
+    if ($v.InMap) { Write-Host "$($Computer.ToUpperInvariant()): groups $groups" }
+    else { Write-Host "$($Computer.ToUpperInvariant()) is not in groups.psd1, so only the default groups: $groups" }
+    Write-Host ''
+    Write-Host "Packages ($($v.Packages.Count)):"
+    $width = 0
+    foreach ($p in $v.Packages) { $width = [Math]::Max($width, (Format-Package $p).Length) }
+    foreach ($p in $v.Packages) { Write-Host ('  {0}   from {1}' -f (Format-Package $p).PadRight($width), $p.Source) }
+    Write-Host ''
+    Write-Host 'Scripts, in this order (each once, and again when its file changes):'
+    if ($v.Scripts.Count -eq 0) { Write-Host '  (none)' }
+    foreach ($s in $v.Scripts) { Write-Host "  $($s.Path)" }
+    Write-Host ''
+    Write-Host 'Jobs:'
+    if ($v.Jobs.Count -eq 0) { Write-Host '  (none)' }
+    foreach ($j in $v.Jobs) { Write-Host ('  {0,-7} {1}   ({2})' -f $j.Every, $j.Name, $j.Path) }
+    $notes = @($v.Messages | Where-Object { -not $_.Warning })
+    if ($notes.Count -gt 0) {
+        Write-Host ''
+        foreach ($n in $notes) { Write-Host "Note: $($n.Text)" }
+    }
+    foreach ($w in @($v.Messages | Where-Object { $_.Warning })) { Write-Problem warning $w.Text }
+}
+
+function Show-Overview {
+    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists)
+    $default = @($Map.Default | Where-Object { $_ })
+    $defaultText = '(none)'
+    if ($default.Count -gt 0) { $defaultText = $default -join ', ' }
+    Write-Host "Default groups (every computer): $defaultText"
+    $computers = @()
+    if ($Map.Computers -is [hashtable]) { $computers = @($Map.Computers.Keys | ForEach-Object { [string]$_ } | Sort-Object) }
+    Write-Host "Computers in groups.psd1: $($computers.Count)"
+    foreach ($c in $computers) { Write-Host ('  {0,-15}  {1}' -f $c, (@($Map.Computers[$c]) -join ', ')) }
+    $common = @($Lists[''] | Where-Object { $null -ne $_ })
+    Write-Host "Common list: $($common.Count) packages"
+    Write-Host ''
+    $names = @{}
+    foreach ($g in $default) { $names[[string]$g] = [string]$g }
+    foreach ($c in $computers) { foreach ($g in @($Map.Computers[$c])) { if ($g) { $names[[string]$g] = [string]$g } } }
+    foreach ($g in (Get-FolderGroups $Files)) { if (-not $names.ContainsKey($g)) { $names[$g] = $g } }
+    Write-Host 'Groups:'
+    if ($names.Count -eq 0) { Write-Host '  (none)' }
+    foreach ($g in @($names.Values | Sort-Object)) {
+        $members = 'every computer'
+        if (-not ($default | Where-Object { $_ -ieq $g })) {
+            $in = @($computers | Where-Object { @($Map.Computers[$_]) | Where-Object { $_ -ieq $g } })
+            $members = "$($in.Count) computers"
+            if ($in.Count -eq 1) { $members = '1 computer' }
+        }
+        $pk = 0
+        if ($Lists.ContainsKey($g)) { $pk = @($Lists[$g] | Where-Object { $null -ne $_ }).Count }
+        $scripts = Get-WmGroupScripts -Files $Files -Groups @($g)
+        $jobs = Get-WmGroupJobs -Files $Files -Groups @($g)
+        $sc = @($scripts).Count
+        $jb = @($jobs).Count
+        $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+        $extra = ''
+        if (-not $hasFiles) { $extra = '   (no folder groups/' + $g + '/)' }
+        Write-Host ('  {0,-15}  {1,-15}  packages: {2}  scripts: {3}  jobs: {4}{5}' -f $g, $members, $pk, $sc, $jb, $extra)
+    }
+}
+
+# ---------------------------------------------------------------------------
+# check
+# ---------------------------------------------------------------------------
+
+function Test-HasBom {
+    param([byte[]]$Bytes)
+    return ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF)
+}
+
+function Invoke-Check {
+    param([hashtable]$Files)
+    foreach ($p in @($Files.Keys | Sort-Object)) {
+        if (-not (Test-WmManagedPath $p)) { Write-Problem error "name not allowed: $p (letters, digits, '.', '-', '_'; no Windows device names)" }
+    }
+
+    $map = $null
+    if (-not $Files.ContainsKey('groups.psd1')) {
+        Write-Problem warning 'no groups.psd1: every computer gets only the common list'
+        $map = @{}
+    } else {
+        try { $map = Read-GroupMap $Files } catch { Write-Problem error (Format-WmErrorText $_ -English) }
+    }
+    if (-not $Files.ContainsKey('choco-reqs.txt')) { Write-Problem warning 'no choco-reqs.txt: the common list is empty' }
+
+    $lists = @{}
+    $listsOk = $true
+    foreach ($path in @($Files.Keys | Sort-Object)) {
+        if ($path -ine 'choco-reqs.txt' -and $path -notmatch '^groups/[^/]+/choco-reqs\.txt$') { continue }
+        try { $null = Read-PackageLists @{ $path = $Files[$path] } }
+        catch { Write-Problem error (Format-WmErrorText $_ -English); $listsOk = $false }
+    }
+    if ($listsOk) { $lists = Read-PackageLists $Files }
+
+    foreach ($p in @($Files.Keys | Sort-Object)) {
+        if ($p -notmatch '\.(ps1|psd1|psm1)$') { continue }
+        $bytes = [IO.File]::ReadAllBytes($Files[$p])
+        $bom = Test-HasBom $bytes
+        if (-not $bom -and @($bytes | Where-Object { $_ -ge 0x80 } | Select-Object -First 1).Count -gt 0) {
+            Write-Problem warning "$p has non-ASCII characters but no BOM; save it as UTF-8 with BOM (Windows PowerShell 5.1 reads it as ANSI)"
+        }
+        if ($p -match '^groups/[^/]+/(scripts|jobs)/.*\.ps1$') {
+            $start = 0
+            if ($bom) { $start = 3 }
+            $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes, $start, $bytes.Length - $start)
+            $tokens = $null
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errs)
+            foreach ($e in @($errs)) { Write-Problem error "$p, line $($e.Extent.StartLineNumber): $($e.Message)" }
+        }
+        if ($p -match '^groups/[^/]+/scripts/.+/.+\.ps1$') {
+            Write-Problem warning "$p is not run: scripts go directly in groups/<group>/scripts/"
+        }
+        if ($p -match '^groups/[^/]+/jobs/.*\.ps1$' -and $p -notmatch '^groups/[^/]+/jobs/(hourly|daily|weekly)/[^/]+$') {
+            Write-Problem warning "$p is not run: jobs go directly in jobs/hourly, jobs/daily or jobs/weekly"
+        }
+    }
+
+    if ($null -ne $map) {
+        $computers = @()
+        if ($map.Computers -is [hashtable]) { $computers = @($map.Computers.Keys | ForEach-Object { [string]$_ } | Sort-Object) }
+        foreach ($c in $computers) {
+            if (-not (Test-WmComputerName $c)) {
+                Write-Problem warning "groups.psd1: '$c' is not a valid Windows computer name (1-15 letters, digits, hyphens), so no computer matches it"
+            }
+        }
+        $referenced = @{}
+        foreach ($g in @($map.Default)) { if ($g) { $referenced[[string]$g] = $true } }
+        foreach ($c in $computers) { foreach ($g in @($map.Computers[$c])) { if ($g) { $referenced[[string]$g] = $true } } }
+        $folders = Get-FolderGroups $Files
+        foreach ($g in @($referenced.Keys | Sort-Object)) {
+            if (-not ($folders | Where-Object { $_ -ieq $g })) {
+                Write-Problem warning "group $g (groups.psd1) has no folder groups/$g/: its computers get nothing from it"
+            }
+        }
+        foreach ($g in $folders) {
+            if (-not $referenced.ContainsKey($g)) { Write-Problem warning "groups/$g/ is not used: no computer is in group $g" }
+        }
+        if ($listsOk) {
+            # Package conflicts as each computer would report them; '*' stands for the computers not in the map
+            $seen = @{}
+            foreach ($c in (@($computers) + '*')) {
+                $v = Get-ComputerView -Files $Files -Map $map -Lists $lists -Computer $c
+                foreach ($m in @($v.Messages | Where-Object { $_.Key -eq 'managed.package_conflict' })) {
+                    if (-not $seen.ContainsKey($m.Text)) { $seen[$m.Text] = $true; Write-Problem warning "groups $($v.Groups -join ', '): $($m.Text)" }
+                }
+            }
+        }
+    }
+    Write-Host "Checked $($Files.Count) files: $script:ProblemErrors errors, $script:ProblemWarnings warnings."
+    return ($script:ProblemErrors -eq 0)
+}
+
+# ---------------------------------------------------------------------------
+# Edits of groups.psd1: one entry changes, the rest of the text stays as it is
+# ---------------------------------------------------------------------------
+
+function Get-KeyName {
+    param($KeyAst)
+    if ($KeyAst -is [System.Management.Automation.Language.StringConstantExpressionAst]) { return $KeyAst.Value }
+    return $KeyAst.Extent.Text
+}
+
+function Format-Quoted {
+    param([string]$Text)
+    return "'" + $Text.Replace("'", "''") + "'"
+}
+
+function Format-GroupList {
+    param([string[]]$Groups)
+    return '@(' + ((@($Groups) | ForEach-Object { Format-Quoted $_ }) -join ', ') + ')'
+}
+
+function Get-LineStart {
+    param([string]$Text, [int]$Offset)
+    if ($Offset -le 0) { return 0 }
+    return $Text.LastIndexOf([char]10, $Offset - 1) + 1
+}
+
+# Just after the line end (its newline included), or the end of the text
+function Get-LineEnd {
+    param([string]$Text, [int]$Offset)
+    $i = $Text.IndexOf([char]10, $Offset)
+    if ($i -lt 0) { return $Text.Length }
+    return $i + 1
+}
+
+function Get-Indent {
+    param([string]$Text, [int]$Offset)
+    $start = Get-LineStart $Text $Offset
+    return [regex]::Match($Text.Substring($start), '^[ \t]*').Value
+}
+
+function Set-TextRange {
+    param([string]$Text, [int]$Start, [int]$End, [string]$New)
+    return $Text.Substring(0, $Start) + $New + $Text.Substring($End)
+}
+
+# Is only whitespace (and an optional ';' or comment) between $From and the end of its line?
+function Test-RestOfLineEmpty {
+    param([string]$Text, [int]$From)
+    $end = Get-LineEnd $Text $From
+    return ($Text.Substring($From, $end - $From) -match '^[ \t]*;?[ \t]*(#.*)?\r?\n?$')
+}
+
+# The text of groups.psd1 with the entry of $Computer set to $Groups (an empty list removes the entry)
+function Set-ComputerEntry {
+    param([string]$Text, [string]$NewLine, [string]$Computer, [string[]]$Groups)
+    $root = Get-MapAst $Text
+    $compPair = @($root.KeyValuePairs | Where-Object { (Get-KeyName $_.Item1) -ieq 'Computers' }) | Select-Object -First 1
+    $comp = $null
+    if ($compPair) { $comp = $compPair.Item2.Find({ param($a) $a -is [System.Management.Automation.Language.HashtableAst] }, $false) }
+    $entry = $null
+    if ($comp) { $entry = @($comp.KeyValuePairs | Where-Object { (Get-KeyName $_.Item1) -ieq $Computer }) | Select-Object -First 1 }
+    $manual = 'add it to groups.psd1 by hand'
+    $remove = @($Groups).Count -eq 0
+
+    if ($entry) {
+        if (-not $remove) {
+            return Set-TextRange $Text $entry.Item2.Extent.StartOffset $entry.Item2.Extent.EndOffset (Format-GroupList $Groups)
+        }
+        $s = $entry.Item1.Extent.StartOffset
+        $e = $entry.Item2.Extent.EndOffset
+        $ls = Get-LineStart $Text $s
+        if ($Text.Substring($ls, $s - $ls).Trim() -or -not (Test-RestOfLineEmpty $Text $e)) {
+            throw "the entry of $Computer shares its line with other text; remove it from groups.psd1 by hand"
+        }
+        return Set-TextRange $Text $ls (Get-LineEnd $Text $e) ''
+    }
+    if ($remove) { return $Text }
+
+    $key = Format-Quoted $Computer
+    $value = Format-GroupList $Groups
+    if ($comp -and @($comp.KeyValuePairs).Count -gt 0) {
+        # After the last entry, with its indent and its '=' column
+        $last = @($comp.KeyValuePairs)[-1]
+        if (-not (Test-RestOfLineEmpty $Text $last.Item2.Extent.EndOffset)) { throw "Computers is written on one line; $manual" }
+        $lineStart = Get-LineStart $Text $last.Item1.Extent.StartOffset
+        $lead = (Get-Indent $Text $lineStart) + $key
+        $eq = $Text.IndexOf([char]'=', $last.Item1.Extent.EndOffset) - $lineStart
+        $pad = ' '
+        if ($lead.Length -lt $eq) { $pad = ' ' * ($eq - $lead.Length) }
+        $at = Get-LineEnd $Text $last.Item2.Extent.EndOffset
+        $line = $lead + $pad + '= ' + $value + $NewLine
+        if ($at -eq $Text.Length -and -not $Text.EndsWith("`n")) { $line = $NewLine + $lead + $pad + '= ' + $value }
+        return Set-TextRange $Text $at $at $line
+    }
+    if ($comp) {
+        # No entries yet: @{} on one line, or a block with comments only
+        $outer = Get-Indent $Text $compPair.Item1.Extent.StartOffset
+        $close = $comp.Extent.EndOffset - 1
+        $inner = $Text.Substring($comp.Extent.StartOffset, $comp.Extent.EndOffset - $comp.Extent.StartOffset)
+        if ($inner.IndexOf([char]10) -lt 0) {
+            $block = '@{' + $NewLine + $outer + '    ' + $key + ' = ' + $value + $NewLine + $outer + '}'
+            return Set-TextRange $Text $comp.Extent.StartOffset $comp.Extent.EndOffset $block
+        }
+        $closeLine = Get-LineStart $Text $close
+        if ($Text.Substring($closeLine, $close - $closeLine).Trim()) { throw "unusual layout of Computers; $manual" }
+        $line = (Get-Indent $Text $close) + '    ' + $key + ' = ' + $value + $NewLine
+        return Set-TextRange $Text $closeLine $closeLine $line
+    }
+    # No Computers yet: before the closing brace of the file's hashtable
+    $close = $root.Extent.EndOffset - 1
+    $closeLine = Get-LineStart $Text $close
+    if ($Text.Substring($closeLine, $close - $closeLine).Trim()) { throw "unusual layout of groups.psd1; $manual" }
+    $indent = '    '
+    if (@($root.KeyValuePairs).Count -gt 0) { $indent = Get-Indent $Text @($root.KeyValuePairs)[0].Item1.Extent.StartOffset }
+    $block = $NewLine + $indent + 'Computers = @{' + $NewLine + $indent + '    ' + $key + ' = ' + $value + $NewLine + $indent + '}' + $NewLine
+    return Set-TextRange $Text $closeLine $closeLine $block
+}
+
+function Get-OwnGroups {
+    param([hashtable]$Map, [string]$Computer)
+    if ($Map.Computers -is [hashtable]) {
+        foreach ($k in $Map.Computers.Keys) { if ([string]$k -ieq $Computer) { return @($Map.Computers[$k] | Where-Object { $_ } | ForEach-Object { [string]$_ }) } }
+    }
+    return @()
+}
+
+function Update-Computer {
+    param([string]$Root, [string]$Computer, [string[]]$Add = @(), [string[]]$Drop = @(), [switch]$RemoveAll)
+    if (-not (Test-WmComputerName $Computer)) { throw "'$Computer' is not a valid Windows computer name (1-15 letters, digits, hyphens)" }
+    foreach ($g in @($Add) + @($Drop)) { if (-not (Test-WmGroupName $g)) { throw "invalid group name '$g' (letters, digits, '.', '-', '_')" } }
+    $path = Get-FullPath $Root 'groups.psd1'
+    $file = Read-TextFile $path
+    if (-not $file.Exists) {
+        $file = [pscustomobject]@{ Text = "# Which groups each computer belongs to (see README: Computer groups).`r`n@{`r`n    Default = @()`r`n}`r`n"; Bom = $true; NewLine = "`r`n"; Exists = $false }
+    }
+    $map = ConvertTo-GroupMap $file.Text
+    $own = @(Get-OwnGroups $map $Computer)
+    $want = New-Object 'System.Collections.Generic.List[string]'
+    if (-not $RemoveAll) {
+        foreach ($g in $own) { if (-not ($Drop | Where-Object { $_ -ieq $g })) { $want.Add($g) } }
+        foreach ($g in $Add) { if (-not ($want | Where-Object { $_ -ieq $g })) { $want.Add($g) } }
+    }
+    $name = $Computer.ToUpperInvariant()
+    if ($map.Computers -is [hashtable]) { foreach ($k in $map.Computers.Keys) { if ([string]$k -ieq $Computer) { $name = [string]$k } } }
+    $isIn = @($own).Count -gt 0 -or ($map.Computers -is [hashtable] -and @($map.Computers.Keys | Where-Object { [string]$_ -ieq $Computer }).Count -gt 0)
+    if (((@($own) -join '|') -ieq ($want.ToArray() -join '|')) -and ($want.Count -gt 0 -or -not $isIn)) {
+        Write-Host "No change: $name is in groups $(if ($own.Count) { $own -join ', ' } else { '(none of its own)' })."
+        return
+    }
+    $text = Set-ComputerEntry -Text $file.Text -NewLine $file.NewLine -Computer $name -Groups $want.ToArray()
+    # Read back what was written: the map must parse and give exactly the intended groups
+    $check = ConvertTo-GroupMap $text
+    if (((Get-OwnGroups $check $Computer) -join '|') -ine ($want.ToArray() -join '|')) { throw 'groups.psd1 would not come out as intended; nothing was changed' }
+    Write-TextFile $path $text $file.Bom
+    if ($want.Count -eq 0) { Write-Host "$name removed from groups.psd1: it gets only the default groups." }
+    else { Write-Host "$name is in groups: $($want -join ', ') (groups.psd1)." }
+    $missing = @($want | Where-Object { -not [IO.Directory]::Exists((Get-FullPath $Root "groups/$_")) })
+    foreach ($g in $missing) { Write-Problem warning "group $g has no folder groups/$g/ yet: add packages, scripts or jobs to it" }
+}
+
+# ---------------------------------------------------------------------------
+# Edits of the package lists
+# ---------------------------------------------------------------------------
+
+function Get-ListPath {
+    param([string]$Target)
+    if ($Target -ieq 'common') { return 'choco-reqs.txt' }
+    if (-not (Test-WmGroupName $Target)) { throw "invalid group name '$Target' (letters, digits, '.', '-', '_'), or 'common' for the common list" }
+    return "groups/$Target/choco-reqs.txt"
+}
+
+# The line index of package $Name in $Lines, or -1
+function Find-PackageLine {
+    param([string[]]$Lines, [string]$Name)
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        try { $items = @(ConvertFrom-WmRequirements -Text $Lines[$i]) } catch { continue }
+        if ($items.Count -eq 1 -and $items[0].Name -ieq $Name) { return $i }
+    }
+    return -1
+}
+
+function Update-PackageList {
+    param([string]$Root, [string]$Target, [string]$Line, [string]$Remove)
+    $rel = Get-ListPath $Target
+    $path = Get-FullPath $Root $rel
+    $file = Read-TextFile $path
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    if ($file.Text) { $lines.AddRange([string[]]($file.Text -split '\r?\n')) }
+    $endsWithNewLine = $file.Text.EndsWith("`n")
+    if ($endsWithNewLine) { $lines.RemoveAt($lines.Count - 1) }
+
+    if ($Remove) {
+        $i = Find-PackageLine $lines.ToArray() $Remove
+        if ($i -lt 0) { throw "$Remove is not on $rel" }
+        $old = $lines[$i]
+        $lines.RemoveAt($i)
+        $message = "Removed from ${rel}: $($old.Trim()) (computers that have it keep it: packages are never uninstalled)."
+    } else {
+        $items = @()
+        try { $items = @(ConvertFrom-WmRequirements -Text $Line) } catch { throw "invalid package line '$Line': $(Format-WmErrorText $_ -English)" }
+        if ($items.Count -ne 1) { throw "give one package line, e.g. '7zip@24.8.0 !noupdate'" }
+        $i = Find-PackageLine $lines.ToArray() $items[0].Name
+        if ($i -ge 0) {
+            $old = $lines[$i]
+            $comment = [regex]::Match($old, '(?:^|\s)(#.*)$').Groups[1].Value
+            $new = $Line.Trim()
+            if ($comment) { $new += '   ' + $comment }
+            if ($old -ceq $new) { Write-Host "No change: $rel already has $($Line.Trim())."; return }
+            $lines[$i] = $new
+            $message = "Changed in ${rel}: $($old.Trim()) -> $new"
+        } else {
+            $lines.Add($Line.Trim())
+            $message = "Added to ${rel}: $($Line.Trim())"
+        }
+    }
+    $text = ($lines.ToArray() -join $file.NewLine)
+    if ($lines.Count -gt 0) { $text += $file.NewLine }
+    # The whole list must still parse (e.g. no package twice), as the computers require
+    try { $null = ConvertFrom-WmRequirements -Text $text } catch { throw "${rel} would be invalid: $(Format-WmErrorText $_ -English); nothing was changed" }
+    Write-TextFile $path $text $file.Bom
+    Write-Host $message
+}
+
+# ---------------------------------------------------------------------------
+# New scripts and jobs from templates (UTF-8 with BOM, CRLF, as Windows PowerShell 5.1 needs them)
+# ---------------------------------------------------------------------------
+
+$script:ScriptTemplate = @'
+# Script of group {{GROUP}}. wmanager runs it as SYSTEM in Windows PowerShell 5.1: once, and again whenever this
+# file changes. Exit code 0 = done, 3010 = done but the computer needs a restart (the user gets a notification),
+# anything else (or an exception) = failed; it runs again 20 hours later. Its output goes to the log and Loki.
+# Environment: WMANAGER_GROUP, WMANAGER_COMPUTER, WMANAGER_GROUP_DIR (this group's folder, for its files).
+# Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
+$ErrorActionPreference = 'Stop'
+
+# TODO: what {{NAME}} sets up. With 'Stop', check the exit codes of programs yourself, e.g.:
+# powercfg.exe /change standby-timeout-ac 0
+# if ($LASTEXITCODE -ne 0) { throw "powercfg returned exit code $LASTEXITCODE" }
+
+Write-Output "{{NAME}}: done ($env:WMANAGER_COMPUTER, group $env:WMANAGER_GROUP)."
+exit 0
+'@
+
+$script:JobTemplate = @'
+# Job of group {{GROUP}}, run as SYSTEM {{EVERY}} by the hourly wmanager-Jobs task (folder jobs/{{FOLDER}}).
+# Every line it prints goes to Loki unchanged, labelled task="{{GROUP}}/{{NAME}}". Print one JSON object per line,
+# then Grafana reads it with: {service_name="wmanager", task="{{GROUP}}/{{NAME}}"} | json
+# Exit code 0 = done; anything else is an error in the log. Time limit: JobTimeoutMinutes (10 by default).
+# Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
+$ErrorActionPreference = 'Stop'
+
+[pscustomobject]@{
+    kind     = '{{NAME}}'
+    computer = $env:WMANAGER_COMPUTER
+    # TODO: the values to report
+} | ConvertTo-Json -Compress
+exit 0
+'@
+
+function Test-FileName {
+    param([string]$Name)
+    return ($Name -match '^[A-Za-z0-9_-][A-Za-z0-9._-]*$' -and (Test-WmManagedPath $Name))
+}
+
+function New-GroupFile {
+    param([string]$Root, [string]$Group, [string]$Kind, [string]$Every, [string]$Name)
+    if (-not (Test-WmGroupName $Group)) { throw "invalid group name '$Group' (letters, digits, '.', '-', '_')" }
+    $base = $Name -replace '\.ps1$', ''
+    if (-not (Test-FileName $base)) { throw "invalid name '$Name' (letters, digits, '.', '-', '_')" }
+    if ($Kind -eq 'script') {
+        $dirRel = "groups/$Group/scripts"
+        if ($base -notmatch '^[0-9]+-') {
+            # Scripts run in name order: number them in tens after the last one
+            $last = 0
+            $dir = Get-FullPath $Root $dirRel
+            if ([IO.Directory]::Exists($dir)) {
+                foreach ($f in [IO.Directory]::GetFiles($dir, '*.ps1')) {
+                    if ([IO.Path]::GetFileName($f) -match '^([0-9]+)-') { $last = [Math]::Max($last, [int]$Matches[1]) }
+                }
+            }
+            $base = '{0:D2}-{1}' -f ([int]([Math]::Floor($last / 10) * 10 + 10)), $base
+        }
+        $text = $script:ScriptTemplate
+    } else {
+        if (@('hourly', 'daily', 'weekly') -notcontains $Every) { throw "a job runs hourly, daily or weekly, not '$Every'" }
+        $dirRel = "groups/$Group/jobs/$Every"
+        $text = $script:JobTemplate.Replace('{{EVERY}}', @{ hourly = 'every hour'; daily = 'once a day'; weekly = 'once a week' }[$Every]).Replace('{{FOLDER}}', $Every)
+    }
+    $rel = "$dirRel/$base.ps1"
+    $path = Get-FullPath $Root $rel
+    if ([IO.File]::Exists($path)) { throw "$rel already exists" }
+    $text = $text.Replace('{{GROUP}}', $Group).Replace('{{NAME}}', ($base -replace '^[0-9]+-', ''))
+    $text = ($text -split '\r?\n') -join "`r`n"
+    if (-not $text.EndsWith("`r`n")) { $text += "`r`n" }
+    Write-TextFile $path $text $true
+    Write-Host "Created $rel. Edit it, then: pwsh tools/groups.ps1 <folder> check, and tools/publish.sh."
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+if (-not $Folder -or -not $Command) { Show-Usage; exit 2 }
+if (-not [IO.Directory]::Exists($Folder)) { Write-Host "ERROR: folder $Folder not found" -ForegroundColor Red; exit 1 }
+$root = (Resolve-Path -LiteralPath $Folder).ProviderPath
+$args1 = @($Rest | Where-Object { $null -ne $_ })
+
+try {
+    switch ($Command) {
+        'show' {
+            $files = Get-SourceFiles $root
+            $map = Read-GroupMap $files
+            $lists = Read-PackageLists $files
+            if ($args1.Count -gt 0) { Show-Computer -Files $files -Map $map -Lists $lists -Computer $args1[0] }
+            else { Show-Overview -Files $files -Map $map -Lists $lists }
+        }
+        'check' {
+            if (-not (Invoke-Check (Get-SourceFiles $root))) { exit 1 }
+        }
+        'add-computer' {
+            if ($args1.Count -lt 2) { throw 'usage: add-computer <computer> <group>...' }
+            Update-Computer -Root $root -Computer $args1[0] -Add @($args1 | Select-Object -Skip 1)
+        }
+        'remove-computer' {
+            if ($args1.Count -lt 1) { throw 'usage: remove-computer <computer> [<group>...]' }
+            if ($args1.Count -eq 1) { Update-Computer -Root $root -Computer $args1[0] -RemoveAll }
+            else { Update-Computer -Root $root -Computer $args1[0] -Drop @($args1 | Select-Object -Skip 1) }
+        }
+        'add-package' {
+            if ($args1.Count -lt 2) { throw "usage: add-package <group|common> <line of choco-reqs.txt>" }
+            Update-PackageList -Root $root -Target $args1[0] -Line (@($args1 | Select-Object -Skip 1) -join ' ')
+        }
+        'remove-package' {
+            if ($args1.Count -ne 2) { throw 'usage: remove-package <group|common> <package>' }
+            Update-PackageList -Root $root -Target $args1[0] -Remove $args1[1]
+        }
+        'new-script' {
+            if ($args1.Count -ne 2) { throw 'usage: new-script <group> <name>' }
+            New-GroupFile -Root $root -Group $args1[0] -Kind 'script' -Name $args1[1]
+        }
+        'new-job' {
+            if ($args1.Count -ne 3) { throw 'usage: new-job <group> <hourly|daily|weekly> <name>' }
+            New-GroupFile -Root $root -Group $args1[0] -Kind 'job' -Every $args1[1] -Name $args1[2]
+        }
+        default { Show-Usage; exit 2 }
+    }
+} catch {
+    Write-Host "ERROR: $(Format-WmErrorText $_ -English)" -ForegroundColor Red
+    if ($env:WM_DEBUG) { Write-Host $_.ScriptStackTrace }
+    exit 1
+}
+exit 0
