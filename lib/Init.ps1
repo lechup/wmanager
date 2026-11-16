@@ -78,6 +78,7 @@ function Get-WmUpdateDaysChoice {
 function Get-WmUpdateDaysLabel {
     param([string[]]$Days)
     $d = @($Days)
+    if ($d.Count -eq 0) { return '' }   # Compare-Object refuses an empty list
     if (-not (Compare-Object $d $script:WmEveryDay)) { return 'c' }
     if (-not (Compare-Object $d $script:WmWorkDays)) { return 'r' }
     if ($d.Count -eq 1 -and $d[0] -eq 'Monday') { return 'p' }

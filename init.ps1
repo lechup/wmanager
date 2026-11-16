@@ -111,6 +111,7 @@ Write-Section 'Aktualizacja programów'
 $time = Read-Answer 'Godzina aktualizacji (HH:mm), najlepiej gdy komputery są zwykle włączone' (Get-Current 'UpdateTime' '12:00') `
     { Test-WmUpdateTime $args[0] } 'Podaj godzinę w formacie HH:mm, np. 12:00.'
 $currentDays = @(Get-Current 'UpdateDays' $script:WmEveryDay)
+if ($currentDays.Count -eq 0) { $currentDays = $script:WmEveryDay }   # @() schedules nothing; offer the default
 $label = Get-WmUpdateDaysLabel $currentDays
 $choicePrompt = 'Dni: c = codziennie, r = robocze (pn-pt), p = tylko poniedziałek'
 if (-not $label) { $choicePrompt += " (Enter = bez zmian: $($currentDays -join ', '))" }
