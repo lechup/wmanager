@@ -13,20 +13,20 @@ function Remove-WmAppxPackages {
         $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop)
     } catch {
         $provisioned = @()
-        Write-WmLog "Nie udało się odczytać aplikacji w obrazie systemu: $($_.Exception.Message)" -Level warn
+        Write-WmLog -Key 'debloat.image_read_failed' -Arguments @(Get-WmErrorText $_) -Level warn
     }
     foreach ($prov in $provisioned) {
         $name = $prov.DisplayName
         if (-not ($Patterns | Where-Object { $name -like $_ })) { continue }
         try {
             Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction Stop | Out-Null
-            Write-WmLog "Usunięto z obrazu systemu $name"
+            Write-WmLog -Key 'debloat.image_removed' -Arguments @($name)
         } catch {
             # Gone in the meantime (e.g. together with a package removed just before): done, not a failure
             if (-not (Test-WmProvisioned $prov.PackageName)) {
-                Write-WmLog "Usunięto z obrazu systemu $name (zniknął w trakcie)"
+                Write-WmLog -Key 'debloat.image_removed_gone' -Arguments @($name)
             } else {
-                Write-WmLog "Nie udało się usunąć z obrazu $($name): $($_.Exception.Message)" -Level warn
+                Write-WmLog -Key 'debloat.image_remove_failed' -Arguments @($name, (Get-WmErrorText $_)) -Level warn
             }
         }
     }
@@ -37,15 +37,15 @@ function Remove-WmAppxPackages {
         try {
             $installed = @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction Stop)
         } catch {
-            Write-WmLog "Nie udało się odczytać zainstalowanych aplikacji ($pattern): $($_.Exception.Message)" -Level warn
+            Write-WmLog -Key 'debloat.installed_read_failed' -Arguments @($pattern, (Get-WmErrorText $_)) -Level warn
             continue
         }
         foreach ($pkg in $installed) {
             try {
                 Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
-                Write-WmLog "Usunięto aplikację $($pkg.Name)"
+                Write-WmLog -Key 'debloat.app_removed' -Arguments @($pkg.Name)
             } catch {
-                Write-WmLog "Nie udało się usunąć $($pkg.Name): $($_.Exception.Message)" -Level warn
+                Write-WmLog -Key 'debloat.app_remove_failed' -Arguments @($pkg.Name, (Get-WmErrorText $_)) -Level warn
             }
         }
     }
@@ -75,7 +75,7 @@ function Disable-WmAppReinstall {
             if ($names.Count -eq 0 -and $subKeys -eq 0) { continue }   # nothing in it for Windows Update to run
             # The journal holds named values only: without a full record the key stays
             if ($subKeys -gt 0 -or $names -contains '') {
-                Write-WmLog "Pomijam $path : ma podklucze lub wartość domyślną, których przywracanie by nie odtworzyło" -Level warn
+                Write-WmLog -Key 'debloat.updater_skipped_subkeys' -Arguments @($path) -Level warn
                 continue
             }
             foreach ($name in $names) { Add-WmJournalEntry -Path $path -Name $name }
@@ -83,14 +83,14 @@ function Disable-WmAppReinstall {
                 # Deleting is not like overwriting a value: without the journal entries the key would be lost for good
                 $native = ConvertTo-WmRegNativePath $path
                 if (@($names | Where-Object { -not $script:WmJournalSeen.ContainsKey((Get-WmJournalId 'machine' '' '' $native $_)) }).Count -gt 0) {
-                    Write-WmLog "Pomijam $path : dziennik zmian nie zapisał jego wartości" -Level warn
+                    Write-WmLog -Key 'debloat.updater_skipped_journal' -Arguments @($path) -Level warn
                     continue
                 }
             }
             Remove-Item -LiteralPath $path -Force -ErrorAction Stop
-            Write-WmLog "Windows Update nie zainstaluje ponownie $app (usunięto $updater)"
+            Write-WmLog -Key 'debloat.updater_removed' -Arguments @($app, $updater)
         } catch {
-            Write-WmLog "Nie udało się usunąć $path : $($_.Exception.Message)" -Level warn
+            Write-WmLog -Key 'debloat.updater_remove_failed' -Arguments @($path, (Get-WmErrorText $_)) -Level warn
         }
     }
 }
@@ -128,9 +128,9 @@ function Remove-WmOneDrive {
     $redirected = @(Get-WmOneDriveRedirectedProfiles)
     $unchecked = @($script:WmHiveSkipped)   # a profile we could not check might be redirected too
     if ($redirected.Count -gt 0 -or $unchecked.Count -gt 0) {
-        foreach ($r in $redirected) { Write-WmLog "Folder przekierowany do OneDrive: $r" -Level warn }
-        foreach ($u in $unchecked) { Write-WmLog "Nie udało się sprawdzić folderów profilu: $u" -Level warn }
-        Write-WmLog 'Pomijam usuwanie OneDrive na tym komputerze, żeby nie odciąć plików użytkowników.' -Level warn
+        foreach ($r in $redirected) { Write-WmLog -Key 'debloat.onedrive_redirected' -Arguments @($r) -Level warn }
+        foreach ($u in $unchecked) { Write-WmLog -Key 'debloat.profile_unchecked' -Arguments @($u) -Level warn }
+        Write-WmLog -Key 'debloat.onedrive_skipped' -Level warn
         return
     }
 
@@ -141,9 +141,9 @@ function Remove-WmOneDrive {
         if (Test-Path -LiteralPath $setup) {
             try {
                 $p = Start-Process -FilePath $setup -ArgumentList '/uninstall' -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-                Write-WmLog "OneDriveSetup /uninstall ($setup) zakończony kodem $($p.ExitCode)"
+                Write-WmLog -Key 'debloat.onedrive_setup_exit' -Arguments @($setup, $p.ExitCode)
             } catch {
-                Write-WmLog "Nie udało się uruchomić $setup /uninstall: $($_.Exception.Message)" -Level warn
+                Write-WmLog -Key 'debloat.onedrive_setup_failed' -Arguments @($setup, (Get-WmErrorText $_)) -Level warn
             }
         }
     }
@@ -158,9 +158,9 @@ function Remove-WmOneDrive {
                 if ($argStr -notmatch '/silent') { $argStr = "$argStr /silent" }
                 try {
                     $p = Start-Process -FilePath $exe -ArgumentList $argStr.Trim() -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-                    Write-WmLog "Odinstalowanie $($u.DisplayName) zakończone kodem $($p.ExitCode)"
+                    Write-WmLog -Key 'debloat.uninstall_exit' -Arguments @($u.DisplayName, $p.ExitCode)
                 } catch {
-                    Write-WmLog "Nie udało się odinstalować $($u.DisplayName): $($_.Exception.Message)" -Level warn
+                    Write-WmLog -Key 'debloat.uninstall_failed' -Arguments @($u.DisplayName, (Get-WmErrorText $_)) -Level warn
                 }
             }
         }
@@ -180,7 +180,7 @@ function Remove-WmOneDrive {
                          'HKLM:\SOFTWARE\Classes\WOW6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}')) {
         if (Test-Path -LiteralPath $clsid) { Set-WmRegValue $clsid 'System.IsPinnedToNameSpaceTree' 0 | Out-Null }
     }
-    Write-WmLog 'OneDrive usunięty i zablokowany.'
+    Write-WmLog -Key 'debloat.onedrive_removed'
 }
 
 function Set-WmDebloatPolicies {
@@ -220,7 +220,7 @@ function Set-WmDebloatPolicies {
         # TaskbarDa (Widgets) is sometimes protected in newer builds; the AllowNewsAndInterests policy turns it off anyway
         Set-WmRegValue $adv 'TaskbarDa' 0 -OnError info | Out-Null
     }
-    Write-WmLog 'Zasady blokujące Teams, Copilot, Recall, Widgets, Cortana, Phone Link i Game Bar ustawione.'
+    Write-WmLog -Key 'debloat.policies_set'
 }
 
 function Set-WmEdgePolicies {
@@ -233,7 +233,7 @@ function Set-WmEdgePolicies {
     Set-WmRegValue $edge 'ShowRecommendationsEnabled' 0 | Out-Null
     Set-WmRegValue $edge 'PersonalizationReportingEnabled' 0 | Out-Null
     Set-WmRegValue $edge 'DefaultBrowserSettingEnabled' 0 | Out-Null   # don't ask to be the default
-    Write-WmLog 'Edge wyciszony zasadami.'
+    Write-WmLog -Key 'debloat.edge_quieted'
 }
 
 # Whether the scheduled update reruns debloat and privacy: RerunDebloat, or the older name RerunDebloatWeekly
@@ -246,7 +246,7 @@ function Test-WmRerunDebloat {
 function Invoke-WmDebloat {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     $d = Get-WmSetting $Config 'Debloat' @{}
-    Write-WmLog '--- Debloat ---'
+    Write-WmLog -Key 'debloat.section'
     if ($d.RemoveApps) {
         $patterns = Get-WmSetting $Config 'RemoveAppx' @()
         Disable-WmAppReinstall -Patterns $patterns   # first, so Windows Update can't put an app back in between

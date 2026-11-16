@@ -5,7 +5,7 @@
 # Uses the verified copy of the source and fetches a new version at most once every 20 hours (the scheduled
 # update fetches too). Output goes to the daily log logs\jobs-YYYY-MM-DD.log and to Loki.
 [CmdletBinding()]
-param()
+param([string]$Lang)
 
 $ErrorActionPreference = 'Continue'
 $here = $PSScriptRoot
@@ -13,12 +13,13 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Choco.ps1')
 . (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
+Initialize-WmLanguage -Lang $Lang
 
 $config = Import-WmConfig (Join-Path $here 'provision.config.psd1')
 try {
     if (-not (Get-WmManagementSettings $config)) { exit 0 }
 } catch {
-    Write-Host "Błąd w ustawieniach Management: $($_.Exception.Message)"
+    Write-Host (Get-WmText 'jobs.management_settings_error' @(Get-WmErrorText $_))
     exit 1
 }
 
@@ -31,16 +32,16 @@ $script:WmManagedQuiet = $true
 $failed = $false
 try {
     $content = Get-WmManagedContent -Config $config -CachedOnly:(-not (Test-WmManagedRefreshDue -Hours 20))
-    $null = Invoke-WmStep 'Skrypty grup' { Invoke-WmGroupScripts -Config $config -RetryFailedAfterHours 20 }
-    $null = Invoke-WmStep 'Joby grup' { Invoke-WmGroupJobs -Config $config -Content $content }
+    $null = Invoke-WmStep 'step.group_scripts' { Invoke-WmGroupScripts -Config $config -RetryFailedAfterHours 20 }
+    $null = Invoke-WmStep 'step.group_jobs' { Invoke-WmGroupJobs -Config $config -Content $content }
     if ($script:WmScriptsNeedReboot) {
         Set-WmRebootFlag
-        Write-WmLog 'Skrypt grupy wymaga restartu; użytkownik dostanie powiadomienie.'
+        Write-WmLog -Key 'jobs.reboot_needed'
         Start-WmNotifyTask
     }
 } catch {
     $failed = $true
-    Write-WmLog "Przebieg skryptów i jobów przerwany: $($_.Exception.Message)" -Level error
+    Write-WmLog -Key 'jobs.run_failed' -Arguments @(Get-WmErrorText $_) -Level error
 } finally {
     if ($script:WmErrors -gt 0) { $failed = $true }
     Send-WmLokiLog -Config $config

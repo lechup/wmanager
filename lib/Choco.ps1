@@ -40,7 +40,7 @@ function ConvertFrom-WmRequirements {
         }
 
         $tokens = @($line -split '\s+' | Where-Object { $_ })
-        if ($tokens.Count -eq 0) { throw "Linia ${lineNo}: brak nazwy paczki" }
+        if ($tokens.Count -eq 0) { throw (New-WmError 'choco.line_no_package' @($lineNo)) }
 
         $spec = $tokens[0]
         $name = $spec
@@ -50,7 +50,7 @@ function ConvertFrom-WmRequirements {
             $name = $spec.Substring(0, $at)
             $version = $spec.Substring($at + 1)
         }
-        if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw "Linia ${lineNo}: niepoprawna nazwa paczki '$name'" }
+        if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw (New-WmError 'choco.line_bad_name' @($lineNo, $name)) }
 
         $pinned = $false
         if ($null -ne $version) {
@@ -59,7 +59,7 @@ function ConvertFrom-WmRequirements {
             } elseif ($version -match '^[0-9][0-9A-Za-z.+-]*$') {
                 $pinned = $true
             } else {
-                throw "Linia ${lineNo}: niepoprawna wersja '$version' dla '$name'"
+                throw (New-WmError 'choco.line_bad_version' @($lineNo, $version, $name))
             }
         }
 
@@ -67,12 +67,12 @@ function ConvertFrom-WmRequirements {
         foreach ($flag in ($tokens | Select-Object -Skip 1)) {
             switch -Regex ($flag) {
                 '^!noupdate$' { $noUpdate = $true }
-                default { throw "Linia ${lineNo}: nieznana opcja '$flag' (dozwolone: !noupdate, a parametry choco po znaku |)" }
+                default { throw (New-WmError 'choco.line_unknown_option' @($lineNo, $flag)) }
             }
         }
 
         $key = $name.ToLowerInvariant()
-        if ($seen.ContainsKey($key)) { throw "Linia ${lineNo}: paczka '$name' występuje drugi raz (pierwszy raz w linii $($seen[$key]))" }
+        if ($seen.ContainsKey($key)) { throw (New-WmError 'choco.line_duplicate' @($lineNo, $name, $seen[$key])) }
         $seen[$key] = $lineNo
 
         $items += [pscustomobject]@{
@@ -104,24 +104,24 @@ function Get-WmRequirementsText {
             } else {
                 $path = $src
                 if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $BaseDir $path }
-                if (-not (Test-Path -LiteralPath $path)) { throw "brak pliku $path" }
+                if (-not (Test-Path -LiteralPath $path)) { throw (New-WmError 'choco.reqs_file_missing' @($path)) }
                 $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
             }
             $null = ConvertFrom-WmRequirements -Text $text   # validate before caching the copy
             New-Item -ItemType Directory -Force -Path $script:WmStateDir | Out-Null
             [IO.File]::WriteAllText($script:WmReqsCache, $text, (New-Object System.Text.UTF8Encoding($false)))
-            Write-WmLog "Lista paczek pobrana z: $src"
+            Write-WmLog -Key 'choco.reqs_loaded' -Arguments @($src)
             return $text
         } catch {
-            Write-WmLog "Źródło listy niedostępne lub błędne ($src): $($_.Exception.Message)" -Level warn
+            Write-WmLog -Key 'choco.reqs_source_failed' -Arguments @($src, (Get-WmErrorText $_)) -Level warn
         }
     }
 
     if (Test-Path -LiteralPath $script:WmReqsCache) {
-        Write-WmLog 'Używam ostatniej poprawnie pobranej kopii listy.' -Level warn
+        Write-WmLog -Key 'choco.reqs_using_cache' -Level warn
         return (Get-Content -LiteralPath $script:WmReqsCache -Raw -Encoding UTF8)
     }
-    throw 'Brak dostępnej listy paczek (żadne źródło nie odpowiada i nie ma kopii).'
+    throw (New-WmError 'choco.reqs_none')
 }
 
 # ---------------------------------------------------------------------------
@@ -170,30 +170,30 @@ function Get-WmChocoVersion {
 
 function Install-WmChocolatey {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
-    Write-WmLog '--- Chocolatey ---'
+    Write-WmLog -Key 'choco.section'
     if (Test-Path -LiteralPath $script:WmChocoExe) {
-        Write-WmLog 'Chocolatey już zainstalowany.'
+        Write-WmLog -Key 'choco.already_installed'
     } else {
         $url = Get-WmSetting $Config 'ChocolateyInstallUrl' 'https://community.chocolatey.org/install.ps1'
-        Write-WmLog "Instaluję Chocolatey z $url"
+        Write-WmLog -Key 'choco.installing' -Arguments @($url)
         $installer = Join-Path $env:TEMP 'wmanager-choco-install.ps1'
         Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
         $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer 2>&1
         foreach ($l in $out) { Write-WmLog "  $l" -LocalOnly }
         Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
-        if (-not (Test-Path -LiteralPath $script:WmChocoExe)) { throw 'Instalacja Chocolatey nie powiodła się.' }
-        Write-WmLog 'Chocolatey zainstalowany.'
+        if (-not (Test-Path -LiteralPath $script:WmChocoExe)) { throw (New-WmError 'choco.install_failed') }
+        Write-WmLog -Key 'choco.installed'
     }
     $env:Path = "$env:Path;$(Split-Path $script:WmChocoExe)"
 
     # In 1.x 'choco list' shows the remote feed instead of installed packages, so 2.x is required
     $ver = Get-WmChocoVersion
     if (-not $ver -or $ver.Major -lt 2) {
-        Write-WmLog "Chocolatey $ver jest za stary, aktualizuję do 2.x."
+        Write-WmLog -Key 'choco.too_old' -Arguments @($ver)
         Invoke-WmChoco @('upgrade', 'chocolatey', '-y', '--no-progress') | Out-Null
         $ver = Get-WmChocoVersion
-        if (-not $ver -or $ver.Major -lt 2) { throw "Wymagany Chocolatey 2.x, zainstalowany jest $ver." }
-        Write-WmLog "Chocolatey zaktualizowany do $ver."
+        if (-not $ver -or $ver.Major -lt 2) { throw (New-WmError 'choco.version_required' @($ver)) }
+        Write-WmLog -Key 'choco.upgraded' -Arguments @($ver)
     }
 
     Invoke-WmChoco @('feature', 'enable', '-n', 'allowGlobalConfirmation') | Out-Null
@@ -208,15 +208,15 @@ function Set-WmChocoSources {
         if (-not $s.Name) { continue }
         if ($s.Enabled -eq $false) {
             Invoke-WmChoco @('source', 'disable', '-n', $s.Name) | Out-Null
-            Write-WmLog "Źródło $($s.Name) wyłączone."
+            Write-WmLog -Key 'choco.source_disabled' -Arguments @($s.Name)
             continue
         }
         $a = @('source', 'add', '-n', $s.Name, '-s', $s.Url, '--priority', [string][int]$s.Priority)
         if ($s.User) { $a += @('-u', $s.User, '-p', $s.Password) }
         $code = Invoke-WmChoco $a
         Invoke-WmChoco @('source', 'enable', '-n', $s.Name) | Out-Null
-        if ($code -ne 0) { Write-WmLog "Nie udało się ustawić źródła $($s.Name) (kod $code)" -Level warn }
-        else { Write-WmLog "Źródło $($s.Name): $($s.Url) (priorytet $([int]$s.Priority))." }
+        if ($code -ne 0) { Write-WmLog -Key 'choco.source_failed' -Arguments @($s.Name, $code) -Level warn }
+        else { Write-WmLog -Key 'choco.source_set' -Arguments @($s.Name, $s.Url, [int]$s.Priority) }
     }
 }
 
@@ -259,15 +259,16 @@ function Test-WmPackageRunning {
 }
 
 function Test-WmChocoSuccess {
-    param([int]$Code, [string]$Name, [string]$Action)
+    param([int]$Code, [string]$Name, $Action)
     if ($Code -eq 0) { return $true }
     if ($Code -in @(1641, 3010)) {
-        Write-WmLog "$Name : $Action wymaga restartu."
+        Write-WmLog -Key 'choco.needs_restart' -Arguments @($Name, $Action)
         $script:WmChocoNeedsReboot = $true
         return $true
     }
-    # $Action is "instalacja", "instalacja wersji X" or "aktualizacja" (feminine)
-    Write-WmLog "$Name : $Action nie powiodła się (kod $Code), szczegóły w logu lokalnym." -Level error
+    # $Action: New-WmText of choco.action_install, choco.action_install_version or choco.action_upgrade, the
+    # subject of both sentences (in Polish all three are feminine, as the sentences expect)
+    Write-WmLog -Key 'choco.action_failed' -Arguments @($Name, $Action, $Code) -Level error
     return $false
 }
 
@@ -281,7 +282,7 @@ function Sync-WmPackages {
         [switch]$SkipRunning,
         [hashtable]$ProcessMap
     )
-    Write-WmLog "--- Paczki ($($Requirements.Count) na liście) ---"
+    Write-WmLog -Key 'choco.packages_section' -Arguments @($Requirements.Count)
     $script:WmChocoNeedsReboot = $false
     $deferred = @()
     $installed = Get-WmInstalledPackages
@@ -297,7 +298,7 @@ function Sync-WmPackages {
         if ($r.Pinned) {
             if ($current -ne $r.Version) {
                 if ($current -and $SkipRunning -and (Test-WmPackageRunning $r.Name $ProcessMap)) {
-                    Write-WmLog "$($r.Name): program działa, zmiana wersji odłożona." -Level warn
+                    Write-WmLog -Key 'choco.running_version_deferred' -Arguments @($r.Name) -Level warn
                     $deferred += $r.Name
                     continue
                 }
@@ -306,14 +307,14 @@ function Sync-WmPackages {
                     $pins.Remove($key)   # so the pin is added back below, even if it had the same version
                 }
                 $code = Invoke-WmChoco (@('upgrade', $r.Name, '--version', $r.Version, '--allow-downgrade', '-y', '--no-progress') + $extra)
-                if (Test-WmChocoSuccess $code $r.Name "instalacja wersji $($r.Version)") {
-                    Write-WmLog "$($r.Name): ustawiona wersja $($r.Version)."
+                if (Test-WmChocoSuccess $code $r.Name (New-WmText 'choco.action_install_version' @($r.Version))) {
+                    Write-WmLog -Key 'choco.version_set' -Arguments @($r.Name, $r.Version)
                 } else { continue }
             }
             if ($pins[$key] -ne $r.Version) {
                 if ($pins.ContainsKey($key)) { Invoke-WmChoco @('pin', 'remove', '-n', $r.Name) | Out-Null }
                 Invoke-WmChoco @('pin', 'add', '-n', $r.Name, '--version', $r.Version) | Out-Null
-                Write-WmLog "$($r.Name): przypięta wersja $($r.Version)."
+                Write-WmLog -Key 'choco.version_pinned' -Arguments @($r.Name, $r.Version)
             }
             continue
         }
@@ -321,25 +322,25 @@ function Sync-WmPackages {
         # Unpinned version: remove the pin if it is left over from an earlier list
         if ($pins.ContainsKey($key)) {
             Invoke-WmChoco @('pin', 'remove', '-n', $r.Name) | Out-Null
-            Write-WmLog "$($r.Name): zdjęto przypięcie wersji."
-            if ($Upgrade -and -not $r.NoUpdate) { $outdated[$key] = 'po zdjęciu przypięcia' }
+            Write-WmLog -Key 'choco.pin_removed' -Arguments @($r.Name)
+            if ($Upgrade -and -not $r.NoUpdate) { $outdated[$key] = '(unpinned)' }   # only the key is used below
         }
 
         if (-not $current) {
             $code = Invoke-WmChoco (@('install', $r.Name, '-y', '--no-progress') + $extra)
-            if (Test-WmChocoSuccess $code $r.Name 'instalacja') { Write-WmLog "$($r.Name): zainstalowano." }
+            if (Test-WmChocoSuccess $code $r.Name (New-WmText 'choco.action_install')) { Write-WmLog -Key 'choco.package_installed' -Arguments @($r.Name) }
             continue
         }
 
         if ($Upgrade -and -not $r.NoUpdate -and $outdated.ContainsKey($key)) {
             if ($SkipRunning -and (Test-WmPackageRunning $r.Name $ProcessMap)) {
-                Write-WmLog "$($r.Name): program działa, aktualizacja odłożona do następnego logowania." -Level warn
+                Write-WmLog -Key 'choco.running_upgrade_deferred' -Arguments @($r.Name) -Level warn
                 $deferred += $r.Name
                 continue
             }
             $code = Invoke-WmChoco (@('upgrade', $r.Name, '-y', '--no-progress') + $extra)
-            if (Test-WmChocoSuccess $code $r.Name 'aktualizacja') {
-                Write-WmLog "$($r.Name): zaktualizowano z $current."
+            if (Test-WmChocoSuccess $code $r.Name (New-WmText 'choco.action_upgrade')) {
+                Write-WmLog -Key 'choco.package_upgraded' -Arguments @($r.Name, $current)
             }
         }
     }
@@ -355,7 +356,7 @@ function Set-WmDefaultBrowser {
     $b = Get-WmSetting $Config 'DefaultBrowser' $null
     if (-not $b -or -not $b.ProgId) { return }
     if (-not (Test-Path -LiteralPath "Registry::HKEY_CLASSES_ROOT\$($b.ProgId)")) {
-        Write-WmLog "$($b.Name) nie jest zainstalowana ($($b.ProgId)), pomijam ustawienie domyślnej przeglądarki." -Level warn
+        Write-WmLog -Key 'choco.browser_missing' -Arguments @($b.Name, $b.ProgId) -Level warn
         return
     }
     $xmlPath = Join-Path $script:WmStateDir 'DefaultAssociations.xml'
@@ -366,8 +367,8 @@ function Set-WmDefaultBrowser {
     [IO.File]::WriteAllLines($xmlPath, $xml, (New-Object System.Text.UTF8Encoding($false)))
     $out = & dism.exe /Online /Import-DefaultAppAssociations:"$xmlPath" 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-WmLog "$($b.Name) ustawiona jako domyślna przeglądarka dla nowych kont."
+        Write-WmLog -Key 'choco.browser_set' -Arguments @($b.Name)
     } else {
-        Write-WmLog "DISM nie ustawił domyślnej przeglądarki (kod $LASTEXITCODE): $($out -join ' ')" -Level warn
+        Write-WmLog -Key 'choco.browser_dism_failed' -Arguments @($LASTEXITCODE, ($out -join ' ')) -Level warn
     }
 }

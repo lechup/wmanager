@@ -11,6 +11,8 @@ Provisioning for Windows 11 (Home and Pro) office computers:
 - sends logs to Grafana Cloud Loki and pings Healthchecks.io.
 
 The script is safe to run repeatedly: every run brings the computer to the state defined in the configuration.
+It speaks English, German, French, Spanish, Italian, Polish, Dutch, Portuguese, Romanian and Czech (see
+[Languages](#languages)).
 Microsoft Store, Edge, Defender and Windows Update stay.
 
 ## Quick start
@@ -70,6 +72,7 @@ changing anything.
 | `Restore-Backup.ps1` | Undoes the registry changes made by provisioning (see [Backup and restore](#backup-and-restore)) |
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
 | `choco-reqs.txt` | Package list (when there is no management source) |
+| `lang\<code>\*.psd1` | Messages in each language (see [Languages](#languages)) |
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks, the configuration wizard |
 | `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
@@ -234,7 +237,7 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
 - **For both:** the working folder is the system TEMP. Use `$PSScriptRoot` or `WMANAGER_GROUP_DIR` (the group's folder)
   for the group's files; other variables: `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, and `WMANAGER_JOB` for jobs. The group
   folders are replaced with every new version of the source, so don't run programs or services from them: copy what
-  has to stay (e.g. an agent) elsewhere first. Save files as UTF-8 with BOM (otherwise 5.1 garbles Polish letters).
+  has to stay (e.g. an agent) elsewhere first. Save files as UTF-8 with BOM (otherwise 5.1 garbles letters outside ASCII).
 
 ### How a computer checks the source
 
@@ -310,8 +313,8 @@ Notes:
   60 days ahead.
 - The `wmanager-Jobs` task is registered at provisioning when `Management.Source` is set; if you add a management
   source to an existing computer, run provisioning again.
-- Script and job output goes through the console code page (852 on Polish Windows): characters outside it come out
-  as `?`.
+- Script and job output goes through the console code page (e.g. 852 on Polish Windows): characters outside it come
+  out as `?`.
 
 ## Scheduled update
 
@@ -354,7 +357,8 @@ Manual run: `Start-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Upda
   the name is settled (e.g. a declined question) sends nothing; the console shows the result.
   The check is created on the first ping (`?create=1`); its name is the computer name (with an optional `HealthchecksSlugPrefix`).
 
-Log messages, console output and user notifications are in Polish.
+The log file and Loki are in English; the console and the user's notifications in the chosen language (see
+[Languages](#languages)).
 
 ### Grafana Cloud setup
 
@@ -369,6 +373,27 @@ Log messages, console output and user notifications are in Polish.
 3. After the first provisioning every computer has its own check. Keep its **Period at 1 day** (the update runs every
    day) and set **Grace to 3 days**, so a computer that is off over a weekend raises no alert; connect an e-mail
    notification. With a weekly `UpdateDays`, use a period of 7 days.
+
+## Languages
+
+The screen (console lines, questions, notifications) speaks one of: English (`en`, the default), German (`de`),
+French (`fr`), Spanish (`es`), Italian (`it`), Polish (`pl`), Dutch (`nl`), Portuguese (`pt`), Romanian (`ro`) and
+Czech (`cs`). The first of these that is set wins:
+
+1. `-Lang` of the script: `run.cmd -Lang de`, `init.cmd -Lang fr`, `pwsh ./init.ps1 -Lang it`, or `-Lang pl` for the
+   internet installer;
+2. the environment variable `WMANAGER_LANG`, set before the run (`set WMANAGER_LANG=de`, `$env:WMANAGER_LANG = 'de'`);
+3. the Windows display language: the system's for the scheduled tasks (they run as SYSTEM), the signed-in user's for
+   the restart notification;
+4. English.
+
+The log file and Loki are always in English, so every computer reads the same in Grafana and searches and alerts don't
+depend on the language. Yes/no questions take the answer in the chosen language and in English (`y`, `yes`).
+The internet installer's own few lines are English (`install.ps1` must stay plain ASCII).
+
+The messages are in `lang\<code>\<area>.psd1`; English is the source, and a message missing in another language falls
+back to English. `tests\Lang.Tests.ps1` checks that every language has every message with the same placeholders.
+To add a language: copy `lang\en` to `lang\<code>`, translate it and add the code to `$WmLanguages` in `lib\Lang.ps1`.
 
 ## Tests
 

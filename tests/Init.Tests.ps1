@@ -1,11 +1,14 @@
-﻿# Tests for the configuration wizard (lib\Init.ps1). They run in Windows PowerShell 5.1 and PowerShell 7.
+﻿# Tests for the configuration wizard (lib\Init.ps1). They run in Windows PowerShell 5.1 and PowerShell 7, with the
+# English messages, whatever the language of the computer.
 # To run (Pester 5):
 #   Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser
 #   Invoke-Pester .\tests
 
 BeforeAll {
     $root = Split-Path $PSScriptRoot -Parent
+    . (Join-Path (Join-Path $root 'lib') 'Lang.ps1')
     . (Join-Path (Join-Path $root 'lib') 'Init.ps1')
+    Initialize-WmLanguage -Lang 'en' -Root $root
     $script:example = [IO.File]::ReadAllText((Join-Path $root 'provision.config.example.psd1'))
 
     function Import-TestConfig {
@@ -92,7 +95,7 @@ Describe 'Get-WmSigningCertificateProblem' {
     }
 
     It 'refuses a private key, an authority and a certificate without Code Signing' {
-        Get-WmSigningCertificateProblem (New-TestCertificate -CodeSigning -KeepPrivateKey) | Should -BeLike '*klucz prywatny*'
+        Get-WmSigningCertificateProblem (New-TestCertificate -CodeSigning -KeepPrivateKey) | Should -BeLike '*private key*'
         Get-WmSigningCertificateProblem (New-TestCertificate -CodeSigning -Authority) | Should -BeLike '*(CA)*'
         Get-WmSigningCertificateProblem (New-TestCertificate) | Should -BeLike '*Code Signing*'
     }
@@ -125,14 +128,21 @@ Describe 'Answer checks' {
     }
 
     It 'turns the days choice into day names and back' {
+        @(Get-WmUpdateDaysChoice 'd').Count | Should -Be 7
+        @(Get-WmUpdateDaysChoice ' W ') | Should -Be @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday')
+        @(Get-WmUpdateDaysChoice 'm') | Should -Be @('Monday')
+        @(Get-WmUpdateDaysChoice 'x').Count | Should -Be 0
+        Get-WmUpdateDaysLabel @(Get-WmUpdateDaysChoice 'd') | Should -Be 'd'
+        Get-WmUpdateDaysLabel @(Get-WmUpdateDaysChoice 'w') | Should -Be 'w'
+        Get-WmUpdateDaysLabel @('Monday') | Should -Be 'm'
+        Get-WmUpdateDaysLabel @('Monday', 'Friday') | Should -Be ''
+        Get-WmUpdateDaysLabel @() | Should -Be ''
+    }
+
+    It 'still takes the earlier letters c, r and p' {
         @(Get-WmUpdateDaysChoice 'c').Count | Should -Be 7
         @(Get-WmUpdateDaysChoice ' R ') | Should -Be @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday')
         @(Get-WmUpdateDaysChoice 'p') | Should -Be @('Monday')
-        @(Get-WmUpdateDaysChoice 'x').Count | Should -Be 0
-        Get-WmUpdateDaysLabel @(Get-WmUpdateDaysChoice 'c') | Should -Be 'c'
-        Get-WmUpdateDaysLabel @('Monday') | Should -Be 'p'
-        Get-WmUpdateDaysLabel @('Monday', 'Friday') | Should -Be ''
-        Get-WmUpdateDaysLabel @() | Should -Be ''
     }
 
     It 'checks the ping key, the source identifier and the source' {
@@ -188,7 +198,7 @@ Describe 'Test-WmManifestSigner' -Tag 'Integration' -Skip:(-not $env:WM_CI_SOURC
         try {
             $file = Join-Path $TestDrive 'other.cer'
             [IO.File]::WriteAllBytes($file, $other.RawData)
-            Test-WmManifestSigner -ManifestPath (Join-Path $src 'v1\manifest.psd1') -CertificatePath $file | Should -BeLike '*inny certyfikat*'
+            Test-WmManifestSigner -ManifestPath (Join-Path $src 'v1\manifest.psd1') -CertificatePath $file | Should -BeLike '*another certificate*'
         } finally {
             Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($other.Thumbprint)" -Force
         }

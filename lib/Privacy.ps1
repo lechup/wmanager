@@ -8,7 +8,7 @@ function Get-WmEditionTelemetryLevel {
 }
 
 function Invoke-WmPrivacy {
-    Write-WmLog '--- Prywatność ---'
+    Write-WmLog -Key 'privacy.section'
 
     $level = Get-WmEditionTelemetryLevel
     $dc = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
@@ -18,7 +18,7 @@ function Invoke-WmPrivacy {
     Set-WmRegValue $dc 'AllowDeviceNameInTelemetry' 0 | Out-Null
     Set-WmRegValue $dc 'LimitDiagnosticLogCollection' 1 | Out-Null
     Set-WmRegValue $dc 'LimitDumpCollection' 1 | Out-Null
-    Write-WmLog "Telemetria ustawiona na poziom $level."
+    Write-WmLog -Key 'privacy.telemetry_level' -Arguments @($level)
 
     foreach ($svc in @('DiagTrack', 'dmwappushservice')) {
         $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
@@ -28,9 +28,9 @@ function Invoke-WmPrivacy {
                 Add-WmJournalEntry -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$svc" -Name 'Start'
                 if ($s.Status -ne 'Stopped') { Stop-Service -Name $svc -Force -ErrorAction Stop }
                 Set-Service -Name $svc -StartupType Disabled -ErrorAction Stop
-                Write-WmLog "Usługa $svc wyłączona."
+                Write-WmLog -Key 'privacy.service_disabled' -Arguments @($svc)
             } catch {
-                Write-WmLog "Nie udało się wyłączyć usługi $svc : $($_.Exception.Message)" -Level warn
+                Write-WmLog -Key 'privacy.service_failed' -Arguments @($svc, (Get-WmErrorText $_)) -Level warn
             }
         }
     }
@@ -95,5 +95,5 @@ function Invoke-WmPrivacy {
         Set-WmRegValue $ucc 'DisableWindowsSpotlightFeatures' 1 | Out-Null
         Set-WmRegValue $ucc 'DisableThirdPartySuggestions' 1 | Out-Null
     }
-    Write-WmLog 'Reklamy, sugestie, Bing i historia aktywności wyłączone.'
+    Write-WmLog -Key 'privacy.done'
 }

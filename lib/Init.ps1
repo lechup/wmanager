@@ -1,5 +1,6 @@
 ﻿# Configuration wizard (init.ps1): functions. Runs in Windows PowerShell 5.1 and in PowerShell 7 (Windows, Linux),
-# so it doesn't use the other lib\*.ps1 files (they assume Windows and C:\ProgramData).
+# so of the other lib\*.ps1 files it uses only Lang.ps1, which init.ps1 loads first (the rest assume Windows and
+# C:\ProgramData).
 
 $script:WmIsWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 if ($PSVersionTable.PSVersion.Major -lt 6) {
@@ -44,7 +45,7 @@ function Set-WmConfigText {
     )
     $pattern = '(?m)^(\s*' + [regex]::Escape($Name) + '\s*=\s*)(''(?:[^'']|'''')*''|\$true|\$false|-?\d+|@\([^)\r\n]*\))'
     $found = [regex]::Matches($Text, $pattern)
-    if ($found.Count -ne 1) { throw "W pliku konfiguracji nie ma jednego ustawienia $Name (jest: $($found.Count)); dopisz je ręcznie." }
+    if ($found.Count -ne 1) { throw (New-WmError 'init.setting_not_once' @($Name, $found.Count)) }
     $m = $found[0]
     return $Text.Substring(0, $m.Groups[2].Index) + $Literal + $Text.Substring($m.Groups[2].Index + $m.Groups[2].Length)
 }
@@ -65,13 +66,14 @@ function Test-WmUpdateTime {
         [datetime]::TryParseExact($Value, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture, 'None', [ref]$t)
 }
 
-# c = every day, r = working days, p = Monday; nothing for anything else. Wrap the result in @().
+# d = every day (daily), w = working days, m = Monday, the same in every language; the earlier Polish letters
+# c, r, p still work. Nothing for anything else. Wrap the result in @().
 function Get-WmUpdateDaysChoice {
     param([string]$Choice)
     switch -Regex ($Choice.Trim().ToLowerInvariant()) {
-        '^(c|codziennie)$'   { return $script:WmEveryDay }
-        '^(r|robocze)$'      { return $script:WmWorkDays }
-        '^(p|poniedzia.ek)$' { return 'Monday' }
+        '^(d|daily|c|codziennie)$'      { return $script:WmEveryDay }
+        '^(w|workdays|r|robocze)$'      { return $script:WmWorkDays }
+        '^(m|monday|p|poniedzia.ek)$'   { return 'Monday' }
     }
 }
 
@@ -79,9 +81,9 @@ function Get-WmUpdateDaysLabel {
     param([string[]]$Days)
     $d = @($Days)
     if ($d.Count -eq 0) { return '' }   # Compare-Object refuses an empty list
-    if (-not (Compare-Object $d $script:WmEveryDay)) { return 'c' }
-    if (-not (Compare-Object $d $script:WmWorkDays)) { return 'r' }
-    if ($d.Count -eq 1 -and $d[0] -eq 'Monday') { return 'p' }
+    if (-not (Compare-Object $d $script:WmEveryDay)) { return 'd' }
+    if (-not (Compare-Object $d $script:WmWorkDays)) { return 'w' }
+    if ($d.Count -eq 1 -and $d[0] -eq 'Monday') { return 'm' }
     return ''
 }
 
@@ -111,16 +113,18 @@ function Get-WmHttpStatus {
     try { return [int]$ErrorRecord.Exception.Response.StatusCode } catch { return 0 }
 }
 
-# The JSON Loki gets from the test: one line, labels like wmanager's own (job "init").
+# The JSON Loki gets from the test: one line, labels like wmanager's own (job "init"). English, like every line
+# wmanager sends to Loki.
 function Get-WmLokiTestBody {
     param([Parameter(Mandatory = $true)][string]$HostName, [Parameter(Mandatory = $true)][DateTimeOffset]$Time)
     $ns = [string]($Time.ToUnixTimeMilliseconds() * 1000000)
     $stream = [ordered]@{ service_name = 'wmanager'; host = $HostName.ToLowerInvariant(); job = 'init'; level = 'info' }
-    $body = @{ streams = @(@{ stream = $stream; values = @(, @($ns, 'wmanager init: test połączenia')) }) }
+    $body = @{ streams = @(@{ stream = $stream; values = @(, @($ns, 'wmanager init: connection test')) }) }
     return ConvertTo-Json -InputObject $body -Depth 6 -Compress
 }
 
-# Sends the test line. Returns $null when Loki took it, otherwise a description of the problem.
+# Sends the test line. Returns $null when Loki took it, otherwise a description of the problem (in the user's
+# language).
 function Test-WmLoki {
     param([string]$Url, [string]$User, [string]$Token)
     if ($Url -notmatch '/loki/api/v1/push$') { $Url = $Url.TrimEnd('/') + '/loki/api/v1/push' }
@@ -132,11 +136,11 @@ function Test-WmLoki {
         return $null
     } catch {
         switch (Get-WmHttpStatus $_) {
-            401 { return 'Loki odrzuca dane logowania (401): sprawdź użytkownika i token.' }
-            403 { return 'Token nie ma uprawnień do zapisu (403): potrzebny zakres logs:write.' }
-            404 { return 'Pod tym adresem nie ma Loki (404): sprawdź adres.' }
+            401 { return (Get-WmText 'init.loki_401') }
+            403 { return (Get-WmText 'init.loki_403') }
+            404 { return (Get-WmText 'init.loki_404') }
         }
-        return "Nie udało się połączyć z Loki: $($_.Exception.Message)"
+        return (Get-WmText 'init.loki_failed' @(Get-WmErrorText $_))
     }
 }
 
@@ -149,8 +153,8 @@ function Test-WmHealthchecks {
         Invoke-RestMethod -Uri $url -Method Post -Body 'wmanager init: test' -TimeoutSec 15 -UseBasicParsing | Out-Null
         return $null
     } catch {
-        if ((Get-WmHttpStatus $_) -eq 404) { return 'Healthchecks nie zna tego klucza (404): sprawdź Ping key projektu.' }
-        return "Nie udało się połączyć z Healthchecks: $($_.Exception.Message)"
+        if ((Get-WmHttpStatus $_) -eq 404) { return (Get-WmText 'init.healthchecks_404') }
+        return (Get-WmText 'init.healthchecks_failed' @(Get-WmErrorText $_))
     }
 }
 
@@ -186,15 +190,15 @@ function Import-WmCertificateFile {
 # (Get-WmSigningCertificate in Managed.ps1), so a wrong file is caught before it reaches a USB drive.
 function Get-WmSigningCertificateProblem {
     param([Parameter(Mandatory = $true)]$Certificate)
-    if ($Certificate.HasPrivateKey) { return 'plik zawiera klucz prywatny; obok konfiguracji trafia tylko publiczny .cer' }
+    if ($Certificate.HasPrivateKey) { return (Get-WmText 'init.cert_private_key') }
     foreach ($ext in $Certificate.Extensions) {
         if ($ext -is [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] -and $ext.CertificateAuthority) {
-            return 'to certyfikat urzędu (CA); wmanager go nie przyjmie'
+            return (Get-WmText 'init.cert_authority')
         }
     }
     $usages = @($Certificate.Extensions | Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
         ForEach-Object { $_.EnhancedKeyUsages } | ForEach-Object { $_.Value })
-    if ($usages -notcontains '1.3.6.1.5.5.7.3.3') { return 'to nie jest certyfikat do podpisywania kodu (brak Code Signing)' }
+    if ($usages -notcontains '1.3.6.1.5.5.7.3.3') { return (Get-WmText 'init.cert_not_code_signing') }
     return $null
 }
 
@@ -206,10 +210,10 @@ function Test-WmManifestSigner {
     if (-not $script:WmIsWindows -or -not (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue)) { return 'skipped' }
     $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $CertificatePath
     $sig = Get-AuthenticodeSignature -FilePath $ManifestPath
-    if (-not $sig.SignerCertificate) { return "manifest nie jest podpisany ($($sig.Status))" }
+    if (-not $sig.SignerCertificate) { return (Get-WmText 'init.manifest_unsigned' @([string]$sig.Status)) }
     if ($sig.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
-        return "manifest podpisał inny certyfikat ($($sig.SignerCertificate.Thumbprint), oczekiwany $($cert.Thumbprint))"
+        return (Get-WmText 'init.manifest_other_signer' @($sig.SignerCertificate.Thumbprint, $cert.Thumbprint))
     }
-    if ([string]$sig.Status -notin @('Valid', 'UnknownError')) { return "podpis jest nieważny ($($sig.Status)): plik zmieniono po podpisaniu" }
+    if ([string]$sig.Status -notin @('Valid', 'UnknownError')) { return (Get-WmText 'init.signature_invalid' @([string]$sig.Status)) }
     return 'ok'
 }

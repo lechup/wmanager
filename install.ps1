@@ -17,8 +17,9 @@
     folder (with the tokens of the configuration) is removed at the end.
 
     This file stays plain ASCII without a BOM (tests/ci/Test-Syntax.ps1 checks it): "irm | iex" in Windows
-    PowerShell 5.1 reads a release asset (application/octet-stream) as ISO-8859-1, so a BOM or Polish letters would
-    break it. Its few messages are therefore without Polish letters; the rest is in lib\Install.ps1.
+    PowerShell 5.1 reads a release asset (application/octet-stream) as ISO-8859-1, so a BOM or any letter outside
+    ASCII would break it. It can't load the message catalogs either, so its few messages are English; the questions
+    are asked by lib\Install.ps1, in the user's language.
 
 .PARAMETER ComputerName
     Passed to Provision.ps1 (without it provisioning asks).
@@ -30,6 +31,9 @@
     A given release (e.g. v0.1.0) instead of the latest.
 .PARAMETER Repository
     owner/name of the GitHub repository.
+.PARAMETER Lang
+    Language of the questions and of provisioning (en, de, fr, es, it, pl, nl, pt, ro, cs), passed on in WMANAGER_LANG.
+    This installer's own few messages are English.
 .PARAMETER ReleasesUrl
     https:// address of the releases with GitHub's layout (latest/download/..., download/<tag>/...), for a mirror;
     defaults to https://github.com/<Repository>/releases.
@@ -40,7 +44,8 @@ param(
     [string]$AuthHeader,
     [string]$Tag,
     [string]$Repository = 'lechup/wmanager',
-    [string]$ReleasesUrl
+    [string]$ReleasesUrl,
+    [string]$Lang
 )
 
 # --- Steps (the tests set $WmInstallNoRun and dot-source this file) ------------------------------------------------
@@ -51,7 +56,7 @@ function Get-WmZipName {
     $names = @(Get-Content -LiteralPath $SumsFile | ForEach-Object {
         if ($_ -match '^[0-9a-fA-F]{64} [ *](wmanager-[0-9A-Za-z.-]+\.zip)$') { $Matches[1] }
     })
-    if ($names.Count -ne 1) { throw 'SHA256SUMS nie wskazuje jednego pliku wmanager-*.zip.' }
+    if ($names.Count -ne 1) { throw 'SHA256SUMS does not name exactly one wmanager-*.zip file.' }
     return $names[0]
 }
 
@@ -62,18 +67,18 @@ function Assert-WmSha256 {
     $want = @(Get-Content -LiteralPath $SumsFile | ForEach-Object {
         if ($_ -match '^([0-9a-fA-F]{64}) [ *](.+)$' -and $Matches[2] -eq $name) { $Matches[1] }
     })
-    if ($want.Count -ne 1) { throw "SHA256SUMS nie zawiera sumy pliku $name." }
+    if ($want.Count -ne 1) { throw "SHA256SUMS has no checksum for $name." }
     $have = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash
-    if ($have -ne $want[0]) { throw "Suma SHA-256 pliku $name sie nie zgadza: plik jest uszkodzony albo niepelny. Nic nie uruchomilem." }
+    if ($have -ne $want[0]) { throw "The SHA-256 checksum of $name does not match: the file is damaged or incomplete. Nothing was run." }
 }
 
 function Install-Wmanager {
-    param([string]$ComputerName, [string]$Config, [string]$AuthHeader, [string]$Tag, [string]$Repository, [string]$ReleasesUrl)
+    param([string]$ComputerName, [string]$Config, [string]$AuthHeader, [string]$Tag, [string]$Repository, [string]$ReleasesUrl, [string]$Lang)
     $ErrorActionPreference = 'Stop'   # only in this function (and what it calls), not in the user's session
-    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Write-Host 'wmanager instaluje sie tylko w Windows.' -ForegroundColor Red; return }
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Write-Host 'wmanager installs only on Windows.' -ForegroundColor Red; return }
     $principal = New-Object Security.Principal.WindowsPrincipal -ArgumentList ([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Host 'Uruchom PowerShell jako administrator (prawy przycisk: Uruchom jako administrator) i wklej polecenie jeszcze raz.' -ForegroundColor Red
+        Write-Host 'Start PowerShell as administrator (right-click: Run as administrator) and paste the command again.' -ForegroundColor Red
         return
     }
     if ($PSVersionTable.PSVersion.Major -lt 6) {
@@ -87,28 +92,30 @@ function Install-Wmanager {
         # SHA256SUMS of the latest (or the given) release names its ZIP; the ZIP comes from that same release,
         # so a release published in between doesn't mix two versions
         if (-not $ReleasesUrl) { $ReleasesUrl = "https://github.com/$Repository/releases" }
-        if ($ReleasesUrl -notmatch '^https://') { throw 'ReleasesUrl: tylko adres https://.' }
+        if ($ReleasesUrl -notmatch '^https://') { throw 'ReleasesUrl: only an https:// address.' }
         $ReleasesUrl = $ReleasesUrl.TrimEnd('/')
         $base = if ($Tag) { "$ReleasesUrl/download/$Tag" } else { "$ReleasesUrl/latest/download" }
         $sums = Join-Path $work 'SHA256SUMS'
         try { Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing -TimeoutSec 60 }
-        catch { throw "Nie ma wydania $(if ($Tag) { $Tag } else { '(najnowszego)' }) w $ReleasesUrl albo brak polaczenia: $($_.Exception.Message)" }
+        catch { throw "No release $(if ($Tag) { $Tag } else { '(latest)' }) at $ReleasesUrl, or no connection: $($_.Exception.Message)" }
         $zipName = Get-WmZipName -SumsFile $sums
         $release = $zipName -replace '^wmanager-(.+)\.zip$', '$1'
-        Write-Host "wmanager $release`: pobieram z $ReleasesUrl..."
+        Write-Host "wmanager $release`: downloading from $ReleasesUrl..."
         $zip = Join-Path $work $zipName
         Invoke-WebRequest -Uri "$ReleasesUrl/download/$release/$zipName" -OutFile $zip -UseBasicParsing -TimeoutSec 300
         Assert-WmSha256 -File $zip -SumsFile $sums
         Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
         $folder = Join-Path $work 'wmanager'
         $next = Join-Path $folder 'lib\Install.ps1'
-        if (-not (Test-Path -LiteralPath $next)) { throw 'W pliku ZIP nie ma wmanager\lib\Install.ps1.' }
+        if (-not (Test-Path -LiteralPath $next)) { throw 'The ZIP file has no wmanager\lib\Install.ps1.' }
 
         # The rest runs as a file in Windows PowerShell 5.1, in this console (it asks questions). The header and
         # the configuration's address (which may hold a token) go through the environment, not the command line
         # that the process list shows; lib\Install.ps1 removes them at once. WaitForExit, not -Wait, which also
         # waits for every program provisioning started (an updater left running would hold the installer up)
         if ($AuthHeader) { $env:WM_INSTALL_AUTH = $AuthHeader }
+        $savedLang = $env:WMANAGER_LANG
+        if ($Lang) { $env:WMANAGER_LANG = $Lang }
         if ($Config) { $env:WM_INSTALL_CONFIG = $Config }
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Folder "{1}"' -f $next, $folder
         if ($ComputerName) { $arguments += ' -ComputerName "{0}"' -f ($ComputerName -replace '"', '') }
@@ -118,15 +125,16 @@ function Install-Wmanager {
         $p.WaitForExit()
         Write-Host ''
         if ($p.ExitCode -eq 0) {
-            Write-Host 'Gotowe. Uruchom ponownie komputer, zeby wszystkie zmiany zadzialaly.' -ForegroundColor Green
+            Write-Host 'Done. Restart the computer so that all the changes take effect.' -ForegroundColor Green
         } elseif ($p.ExitCode -eq 90) {
             # lib\Install.ps1 stopped before provisioning and said why (provisioning itself exits with 0-4)
-            Write-Host 'Instalacja przerwana przed provisioningiem; nic nie zostalo zmienione.' -ForegroundColor Red
+            Write-Host 'Installation stopped before provisioning; nothing was changed.' -ForegroundColor Red
         } else {
-            Write-Host "Provisioning zakonczyl sie bledem (kod $($p.ExitCode)); szczegoly powyzej i w C:\ProgramData\wmanager\logs, jesli log powstal." -ForegroundColor Red
+            Write-Host "Provisioning ended with an error (code $($p.ExitCode)); details above and in C:\ProgramData\wmanager\logs, if a log was written." -ForegroundColor Red
         }
     } finally {
         Remove-Item Env:\WM_INSTALL_AUTH, Env:\WM_INSTALL_CONFIG -ErrorAction SilentlyContinue
+        if ($Lang) { $env:WMANAGER_LANG = $savedLang }
         # The unpacked configuration holds the tokens; provisioning keeps its own copy
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -136,8 +144,8 @@ function Install-Wmanager {
 # variable is only set by the tests, and a profile with Set-StrictMode would refuse an undefined one
 if (-not (Get-Variable -Name WmInstallNoRun -ValueOnly -ErrorAction SilentlyContinue)) {
     try {
-        Install-Wmanager -ComputerName $ComputerName -Config $Config -AuthHeader $AuthHeader -Tag $Tag -Repository $Repository -ReleasesUrl $ReleasesUrl
+        Install-Wmanager -ComputerName $ComputerName -Config $Config -AuthHeader $AuthHeader -Tag $Tag -Repository $Repository -ReleasesUrl $ReleasesUrl -Lang $Lang
     } catch {
-        Write-Host "Instalacja przerwana: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Installation stopped: $($_.Exception.Message)" -ForegroundColor Red
     }
 }

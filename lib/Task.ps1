@@ -34,16 +34,16 @@ function Get-WmDaysMask {
     return $mask
 }
 
-# For the log: 'codziennie' for all seven days, otherwise the list
+# For the log: "every day" for all seven days (a text to translate), otherwise the list of the configured days
 function Format-WmUpdateDays {
     param([string[]]$Days)
-    if ((Get-WmDaysMask $Days) -eq 127) { return 'codziennie' }
+    if ((Get-WmDaysMask $Days) -eq 127) { return New-WmText 'task.every_day' }
     return ($Days -join ', ')
 }
 
 function Register-WmTasks {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
-    Write-WmLog '--- Harmonogram zadań ---'
+    Write-WmLog -Key 'task.section'
     $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $update = Join-Path $script:WmRoot 'Update-Packages.ps1'
     $notify = Join-Path $script:WmRoot 'Notify-User.ps1'
@@ -88,11 +88,11 @@ function Register-WmTasks {
             -Settings $s4 -Principal $system -Description 'wmanager: group scripts and jobs from the management source (hourly)' -Force -ErrorAction Stop | Out-Null
     } elseif (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Confirm:$false -ErrorAction Stop
-        Write-WmLog 'Brak źródła zarządzania: zadanie jobów usunięte.'
+        Write-WmLog -Key 'task.jobs_removed'
     }
 
     $days = Format-WmUpdateDays (Get-WmUpdateDays $Config)
-    Write-WmLog "Zadania zarejestrowane; aktualizacja: $days o $(Get-WmSetting $Config 'UpdateTime' '12:00')."
+    Write-WmLog -Key 'task.registered' -Arguments @($days, (Get-WmSetting $Config 'UpdateTime' '12:00'))
 }
 
 # Called from the task: updates the schedule if it changed in the configuration.
@@ -109,7 +109,7 @@ function Update-WmTaskSchedule {
     $haveMask = [int]$have.DaysOfWeek
     if ($wantTime -ne $haveTime -or $wantMask -ne $haveMask) {
         Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -Trigger $want -ErrorAction Stop | Out-Null
-        Write-WmLog "Zmieniono termin aktualizacji na: $(Format-WmUpdateDays (Get-WmUpdateDays $Config)) $wantTime."
+        Write-WmLog -Key 'task.schedule_changed' -Arguments @((Format-WmUpdateDays (Get-WmUpdateDays $Config)), $wantTime)
     }
 }
 
@@ -117,6 +117,6 @@ function Start-WmNotifyTask {
     try {
         Start-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskNotify -ErrorAction Stop
     } catch {
-        Write-WmLog "Nie udało się uruchomić powiadomienia: $($_.Exception.Message)" -Level warn
+        Write-WmLog -Key 'task.notify_failed' -Arguments @(Get-WmErrorText $_) -Level warn
     }
 }

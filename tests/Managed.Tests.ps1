@@ -7,6 +7,7 @@ BeforeAll {
     . (Join-Path $root 'lib\Common.ps1')
     . (Join-Path $root 'lib\Choco.ps1')
     . (Join-Path $root 'lib\Managed.ps1')
+    Initialize-WmLanguage -Lang 'en'
     $hashA = 'A' * 64
     $sid = 'test-source-0001'
 }
@@ -33,7 +34,8 @@ Describe 'ConvertFrom-WmManifestData' {
     }
 
     It 'rejects a manifest of another source or without one' {
-        { ConvertFrom-WmManifestData @{ SourceId = 'other-source-01'; Serial = 1; Files = @{} } -SourceId $sid } | Should -Throw
+        { ConvertFrom-WmManifestData @{ SourceId = 'other-source-01'; Serial = 1; Files = @{} } -SourceId $sid } |
+            Should -Throw "manifest belongs to another source (other-source-01), not to $sid from the configuration"
         { ConvertFrom-WmManifestData @{ Serial = 1; Files = @{} } } | Should -Throw
         { ConvertFrom-WmManifestData @{ SourceId = 'short'; Serial = 1; Files = @{} } } | Should -Throw
     }
@@ -61,7 +63,7 @@ Describe 'Assert-WmGroupMap' {
         { Assert-WmGroupMap @{ Computer = @{} } } | Should -Throw
         { Assert-WmGroupMap @{ Computers = @{ 'OFFICE-01' = @('../x') } } } | Should -Throw
         { Assert-WmGroupMap @{ Default = @('a b') } } | Should -Throw
-        { Assert-WmGroupMap @{ Computers = @('OFFICE-01') } } | Should -Throw
+        { Assert-WmGroupMap @{ Computers = @('OFFICE-01') } } | Should -Throw "groups.psd1: Computers must be a table @{ 'NAME' = @('group') }"
     }
 }
 
@@ -86,11 +88,13 @@ Describe 'Get-WmComputerGroups' {
 
 Describe 'Merge-WmRequirements' {
     BeforeAll {
-        Mock Write-WmLog { }
+        # the logged messages, in English
+        Mock Write-WmLog { [void]$script:log.Add($(if ($Key) { Get-WmText -Key $Key -Arguments $Arguments -English } else { $Message })) }
         $common = ConvertFrom-WmRequirements -Text "vlc`n7zip@24.8.0"
         $acc    = ConvertFrom-WmRequirements -Text "7zip`nadobereader !noupdate"
         $other  = ConvertFrom-WmRequirements -Text "adobereader"
     }
+    BeforeEach { $script:log = New-Object 'System.Collections.Generic.List[string]' }
 
     It 'lets a group entry replace the common one and adds new packages' {
         $r = Merge-WmRequirements -Lists @(
@@ -99,6 +103,7 @@ Describe 'Merge-WmRequirements' {
         $r.Count | Should -Be 3
         ($r | Where-Object Name -eq '7zip').Pinned | Should -BeFalse
         ($r | Where-Object Name -eq 'adobereader').NoUpdate | Should -BeTrue
+        $script:log | Should -Contain 'Package 7zip: the entry of group accounting replaces the entry of the common list.'
     }
 
     It 'warns when a later group differs from a group that repeated the common entry' {
@@ -110,6 +115,7 @@ Describe 'Merge-WmRequirements' {
             @{ Label = 'b'; IsGroup = $true; Items = $other })
         ($r | Where-Object Name -eq '7zip').Pinned | Should -BeTrue
         Should -Invoke Write-WmLog -ParameterFilter { $Level -eq 'warn' }
+        $script:log | Should -Contain "Package 7zip is described differently in 'a' and 'b'; using the entry from 'a'."
     }
 
     It 'keeps the first group when two groups disagree' {
@@ -119,6 +125,7 @@ Describe 'Merge-WmRequirements' {
             @{ Label = 'other'; IsGroup = $true; Items = $other })
         ($r | Where-Object Name -eq 'adobereader').NoUpdate | Should -BeTrue
         Should -Invoke Write-WmLog -ParameterFilter { $Level -eq 'warn' }
+        $script:log | Should -Contain "Package adobereader is described differently in 'accounting' and 'other'; using the entry from 'accounting'."
     }
 }
 

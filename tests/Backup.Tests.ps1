@@ -9,6 +9,7 @@ BeforeAll {
     $root = Split-Path $PSScriptRoot -Parent
     . (Join-Path $root 'lib\Common.ps1')
     . (Join-Path $root 'lib\Backup.ps1')
+    Initialize-WmLanguage -Lang 'en'
     $script:me = [Security.Principal.WindowsIdentity]::GetCurrent().User
 
     # A value the way the journal records it, read through the same code and through the same JSON line
@@ -46,7 +47,7 @@ Describe 'Restore-WmJournalEntry' {
         $script:key = "HKEY_USERS\$($script:me.Value)\Software\wmanager-tests\$([guid]::NewGuid().ToString('N'))"
         New-Item -Path "Registry::$script:key" -Force | Out-Null
         $script:warnings = [System.Collections.ArrayList]@()
-        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } }
+        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($(if ($Key) { Get-WmText -Key $Key -Arguments $Arguments -English } else { $Message })) } }
     }
     AfterEach {
         Set-TestKeyReadOnly -Path $script:key -ReadOnly $false
@@ -110,6 +111,7 @@ Describe 'Restore-WmJournalEntry' {
         Set-TestKeyReadOnly -Path $script:key -ReadOnly $true
         Restore-WmJournalEntry -Entry $entry | Should -BeFalse
         $script:warnings.Count | Should -Be 1
+        $script:warnings[0] | Should -BeLike "Could not restore $script:key\Locked : *"
     }
 }
 
@@ -121,7 +123,10 @@ Describe 'Set-WmRegValue' {
         $script:WmJournalOn = $false
         $script:warnings = [System.Collections.ArrayList]@()
         $script:infos = [System.Collections.ArrayList]@()
-        Mock Write-WmLog { if ($Level -eq 'warn') { [void]$script:warnings.Add($Message) } else { [void]$script:infos.Add($Message) } }
+        Mock Write-WmLog {
+            $text = if ($Key) { Get-WmText -Key $Key -Arguments $Arguments -English } else { $Message }
+            if ($Level -eq 'warn') { [void]$script:warnings.Add($text) } else { [void]$script:infos.Add($text) }
+        }
     }
     AfterEach {
         Set-TestKeyReadOnly -Path $script:key -ReadOnly $false

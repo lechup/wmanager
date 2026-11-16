@@ -1,6 +1,9 @@
 ﻿# Shared functions: paths, configuration, logs, registry, Loki, Healthchecks.
 # Compatible with Windows PowerShell 5.1.
 
+# Messages in the user's language: Get-WmText, New-WmError, Write-WmLog -Key (README, "Languages")
+. (Join-Path $PSScriptRoot 'Lang.ps1')
+
 $script:WmRoot       = Join-Path $env:ProgramData 'wmanager'
 $script:WmStateDir   = Join-Path $script:WmRoot 'state'
 $script:WmLogDir     = Join-Path $script:WmRoot 'logs'
@@ -69,7 +72,7 @@ function Get-WmName {
 function Import-WmConfig {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
-        throw "Brak pliku konfiguracji: $Path"
+        throw (New-WmError 'common.config_missing' @($Path))
     }
     return Import-PowerShellDataFile -LiteralPath $Path
 }
@@ -96,12 +99,12 @@ function Get-WmManagementSettings {
     if (-not ($m -is [hashtable]) -or -not $m.Source) { return $null }
     $src = [string]$m.Source
     if ($src -match '^[A-Za-z][A-Za-z0-9+.-]*://') {
-        if ($src -notmatch '^https://') { throw "Management.Source: dozwolony jest tylko adres https:// ('$src')" }
+        if ($src -notmatch '^https://') { throw (New-WmError 'common.mgmt_source_https' @($src)) }
     } elseif (-not [IO.Path]::IsPathRooted($src)) {
-        throw "Management.Source: folder trzeba podać pełną ścieżką ('$src')"
+        throw (New-WmError 'common.mgmt_source_full_path' @($src))
     }
     if ([string]$m.SourceId -notmatch '^[A-Za-z0-9._-]{8,64}$') {
-        throw 'Management.SourceId: brak albo niepoprawny identyfikator źródła (zapisuje go tools/publish.sh w source-id.txt)'
+        throw (New-WmError 'common.mgmt_source_id')
     }
     return $m
 }
@@ -113,7 +116,7 @@ function Get-WmCertificateFileName {
     if (-not $m) { return $null }
     $name = [string]$m.Certificate
     if (-not $name) { $name = 'wmanager-signing.cer' }
-    if ($name -ne (Split-Path $name -Leaf)) { throw "Management.Certificate: sama nazwa pliku obok pliku konfiguracji, bez ścieżki ('$name')" }
+    if ($name -ne (Split-Path $name -Leaf)) { throw (New-WmError 'common.mgmt_certificate_name' @($name)) }
     return $name
 }
 
@@ -130,9 +133,16 @@ function Initialize-WmLog {
     $script:WmLogFile = Join-Path $script:WmLogDir ("{0}-{1}.log" -f $Job, $stamp)
 }
 
+# A log entry: on the screen in the user's language, in the log file and Loki in English, so every computer reads
+# the same in Grafana. -Key/-Arguments: a message of the catalogs (lang\<code>\*.psd1); an argument may be a
+# New-WmText or the Get-WmErrorText of an error. -Message: text that is the same in every language (the output of a
+# program or a script, a path).
 function Write-WmLog {
+    [CmdletBinding(DefaultParameterSetName = 'Text')]
     param(
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Message,
+        [Parameter(Mandatory = $true, ParameterSetName = 'Text', Position = 0)][AllowEmptyString()][string]$Message,
+        [Parameter(Mandatory = $true, ParameterSetName = 'Key')][string]$Key,
+        [Parameter(ParameterSetName = 'Key')][object[]]$Arguments = @(),
         [ValidateSet('info', 'warn', 'error')][string]$Level = 'info',
         # Local file only (e.g. full choco output), not sent to Loki
         [switch]$LocalOnly,
@@ -141,20 +151,36 @@ function Write-WmLog {
         # To Loki without the time and level prefix (job output, e.g. JSON lines)
         [switch]$Raw
     )
+    if ($PSCmdlet.ParameterSetName -eq 'Key') {
+        $screen = Get-WmText -Key $Key -Arguments $Arguments
+        $text = Get-WmText -Key $Key -Arguments $Arguments -English
+    } else {
+        $screen = $Message
+        $text = $Message
+    }
     $ts = Get-Date
-    $line = '{0} [{1}] {2}' -f $ts.ToString('yyyy-MM-dd HH:mm:ss'), $Level.ToUpper(), $Message
+    $prefix = '{0} [{1}] ' -f $ts.ToString('yyyy-MM-dd HH:mm:ss'), $Level.ToUpper()
+    $line = $prefix + $text
     switch ($Level) {
-        'warn'  { $script:WmWarnings++; Write-Host $line -ForegroundColor Yellow }
-        'error' { $script:WmErrors++;   Write-Host $line -ForegroundColor Red }
-        default { if ($LocalOnly) { Write-Host $line -ForegroundColor DarkGray } else { Write-Host $line } }
+        'warn'  { $script:WmWarnings++; Write-Host ($prefix + $screen) -ForegroundColor Yellow }
+        'error' { $script:WmErrors++;   Write-Host ($prefix + $screen) -ForegroundColor Red }
+        default { if ($LocalOnly) { Write-Host ($prefix + $screen) -ForegroundColor DarkGray } else { Write-Host ($prefix + $screen) } }
     }
     if ($script:WmLogFile) {
         try { Add-Content -LiteralPath $script:WmLogFile -Value $line -Encoding UTF8 } catch { }
     }
     if (-not $LocalOnly) {
-        $lokiLine = if ($Raw) { $Message } else { $line }
+        $lokiLine = if ($Raw) { $text } else { $line }
         $script:WmLogBuffer.Add([pscustomobject]@{ Time = $ts; Level = $Level; Line = $lokiLine; Task = $Task })
     }
+}
+
+# A note about sending the log itself (Loki, Healthchecks): on the screen and in the log file, not in the batch
+# being sent.
+function Write-WmSendNote {
+    param([Parameter(Mandatory = $true)][string]$Key, [object[]]$Arguments = @())
+    Write-Host (Get-WmText -Key $Key -Arguments $Arguments) -ForegroundColor Yellow
+    if ($script:WmLogFile) { Add-Content -LiteralPath $script:WmLogFile -Value (Get-WmText -Key $Key -Arguments $Arguments -English) -Encoding UTF8 }
 }
 
 function Remove-WmOldLogs {
@@ -216,13 +242,14 @@ function Get-WmUnreachableHosts {
 
 # Runs one stage. An exception is logged as an error (so the run reports a failure),
 # but the stages after it still run. Returns $true when the stage finished without one.
+# $Name: the key of the step's name (step.* in lang\<code>\Common.psd1).
 function Invoke-WmStep {
     param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][scriptblock]$Action)
     try {
         $null = & $Action
         return $true
     } catch {
-        Write-WmLog "Etap '$Name' przerwany: $($_.Exception.Message)" -Level error
+        Write-WmLog -Key 'common.step_failed' -Arguments @((New-WmText $Name), (Get-WmErrorText $_)) -Level error
         return $false
     }
 }
@@ -271,7 +298,7 @@ function Open-WmRegKey {
     $base = switch ($hive) {
         'HKEY_LOCAL_MACHINE' { [Microsoft.Win32.Registry]::LocalMachine }
         'HKEY_USERS'         { [Microsoft.Win32.Registry]::Users }
-        default              { throw "Nieobsługiwana gałąź rejestru: $hive" }
+        default              { throw (New-WmError 'common.registry_hive_unsupported' @($hive)) }
     }
     if ($Create) { return $base.CreateSubKey($sub) }
     return $base.OpenSubKey($sub, [bool]$Writable)
@@ -378,7 +405,7 @@ function Add-WmJournalEntry {
         [IO.File]::AppendAllText($script:WmJournalFile, $line + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
         $script:WmJournalSeen[$id] = $true
     } catch {
-        Write-WmLog "Dziennik zmian: nie zapisano stanu $native\$Name (przywracanie go nie cofnie): $($_.Exception.Message)" -Level warn
+        Write-WmLog -Key 'common.journal_not_saved' -Arguments @("$native\$Name", (Get-WmErrorText $_)) -Level warn
     } finally {
         if ($k) { $k.Close() }
     }
@@ -408,7 +435,7 @@ function Set-WmRegValue {
         New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType $Type -Force -ErrorAction Stop | Out-Null
         return $true
     } catch {
-        Write-WmLog "Nie udało się ustawić $Path\$Name : $($_.Exception.Message)" -Level $OnError
+        Write-WmLog -Key 'common.registry_set_failed' -Arguments @("$Path\$Name", (Get-WmErrorText $_)) -Level $OnError
         return $false
     }
 }
@@ -452,7 +479,7 @@ function Invoke-WmForEachUserHive {
             $mount = 'WM_' + ($t.Name -replace '[^A-Za-z0-9]', '_')
             & reg.exe load "HKU\$mount" "$($t.Dat)" 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) {
-                Write-WmLog "Nie mogę wczytać rejestru profilu $($t.Name)" -Level warn
+                Write-WmLog -Key 'common.profile_hive_load_failed' -Arguments @($t.Name) -Level warn
                 if ($t.Sid) { $script:WmHiveSkipped += $t.Name }
                 continue
             }
@@ -463,7 +490,7 @@ function Invoke-WmForEachUserHive {
             & $Action $root $t.Name $t.Sid
         } catch {
             if ($t.Sid) { $script:WmHiveSkipped += $t.Name }
-            Write-WmLog "Błąd przy profilu $($t.Name): $($_.Exception.Message)" -Level warn
+            Write-WmLog -Key 'common.profile_error' -Arguments @($t.Name, (Get-WmErrorText $_)) -Level warn
         } finally {
             $script:WmHiveContext = $null
             if ($mount) {
@@ -478,7 +505,7 @@ function Invoke-WmForEachUserHive {
                     if (-not $unloaded) { Start-Sleep -Seconds 2 }
                 }
                 if (-not $unloaded) {
-                    Write-WmLog "Nie udało się odłączyć rejestru profilu $($t.Name) (HKU\$mount); pomoże restart komputera." -Level error
+                    Write-WmLog -Key 'common.profile_hive_unload_failed' -Arguments @($t.Name, $mount) -Level error
                 }
             }
         }
@@ -544,18 +571,18 @@ function Initialize-WmRoot {
     if (Test-Path -LiteralPath $script:WmRoot) {
         $item = Get-Item -LiteralPath $script:WmRoot -Force
         $reason = $null
-        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { $reason = 'jest dowiązaniem' }
-        elseif (-not $item.PSIsContainer) { $reason = 'nie jest folderem' }
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { $reason = New-WmText 'common.root_is_link' }
+        elseif (-not $item.PSIsContainer) { $reason = New-WmText 'common.root_not_folder' }
         else {
             $owner = (Get-Acl -LiteralPath $script:WmRoot).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-            if ($script:WmAdminSids -notcontains $owner) { $reason = "ma obcego właściciela ($owner)" }
+            if ($script:WmAdminSids -notcontains $owner) { $reason = New-WmText 'common.root_foreign_owner' @($owner) }
         }
         if ($reason) {
             $aside = '{0}.untrusted-{1}' -f $script:WmRoot, (Get-Date -Format 'yyyyMMddHHmmss')
-            Write-WmLog "$($script:WmRoot) $reason; przenoszę do $aside i tworzę od nowa." -Level warn
+            Write-WmLog -Key 'common.root_moved_aside' -Arguments @($script:WmRoot, $reason, $aside) -Level warn
             Move-Item -LiteralPath $script:WmRoot -Destination $aside -ErrorAction Stop
             if (Test-Path -LiteralPath (Join-Path $aside 'state\backup')) {
-                Write-WmLog "Kopie i dziennik zmian zostały w $aside\state\backup i nie będą używane; Restore-Backup.ps1 nie cofnie wcześniejszych przebiegów." -Level warn
+                Write-WmLog -Key 'common.root_moved_backups' -Arguments @($aside) -Level warn
             }
         }
     }
@@ -576,14 +603,14 @@ function Initialize-WmRoot {
 function Set-WmFolderAcl {
     param([Parameter(Mandatory = $true)][string]$Path, [string]$ConfigFile)
     & icacls.exe "$Path" /setowner '*S-1-5-32-544' /T /C /Q 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls /setowner zwrócił $LASTEXITCODE dla $Path" -Level warn }
+    if ($LASTEXITCODE -ne 0) { Write-WmLog -Key 'common.icacls_setowner_failed' -Arguments @($LASTEXITCODE, $Path) -Level warn }
     try {
         Set-WmExplicitAcl -Path $Path -ReadExecute @($script:WmUsersSid)
     } catch {
-        Write-WmLog "Nie udało się ustawić uprawnień $Path : $($_.Exception.Message)" -Level error
+        Write-WmLog -Key 'common.acl_failed' -Arguments @($Path, (Get-WmErrorText $_)) -Level error
     }
     & icacls.exe (Join-Path $Path '*') /reset /T /C /Q 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-WmLog "icacls /reset zwrócił $LASTEXITCODE dla $Path" -Level warn }
+    if ($LASTEXITCODE -ne 0) { Write-WmLog -Key 'common.icacls_reset_failed' -Arguments @($LASTEXITCODE, $Path) -Level warn }
     # Private: the config (tokens), the backups (other users' settings), the management copy (group scripts),
     # also an old copy left behind by a swap (managed.old-*)
     $oldCopies = @(Get-ChildItem -LiteralPath $script:WmStateDir -Directory -Filter 'managed.*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
@@ -592,9 +619,9 @@ function Set-WmFolderAcl {
         try {
             Set-WmExplicitAcl -Path $private
             $extra = @(Get-WmUnexpectedAclSids -Path $private)
-            if ($extra.Count -gt 0) { throw "dostęp mają też: $($extra -join ', ')" }
+            if ($extra.Count -gt 0) { throw (New-WmError 'common.acl_extra_access' @($extra -join ', ')) }
         } catch {
-            Write-WmLog "Nie udało się zabezpieczyć $private : $($_.Exception.Message)" -Level error
+            Write-WmLog -Key 'common.secure_failed' -Arguments @($private, (Get-WmErrorText $_)) -Level error
         }
     }
 }
@@ -611,13 +638,14 @@ function Test-WmInteractive {
 }
 
 # Yes/no question at the console. Enter, or no console at all, gives the default (no, unless -DefaultYes).
+# $Question: the key of the question (and its -Arguments). Yes in the user's language or in English.
 function Confirm-WmContinue {
-    param([Parameter(Mandatory = $true)][string]$Question, [switch]$DefaultYes)
+    param([Parameter(Mandatory = $true)][string]$Question, [object[]]$Arguments = @(), [switch]$DefaultYes)
     if (-not (Test-WmInteractive)) { return [bool]$DefaultYes }
-    $hint = if ($DefaultYes) { '[T/n]' } else { '[t/N]' }
-    $answer = (Read-Host "$Question $hint").Trim()
+    $hint = if ($DefaultYes) { Get-WmText 'common.hint_default_yes' } else { Get-WmText 'common.hint_default_no' }
+    $answer = ([string](Read-Host ('{0} {1}' -f (Get-WmText -Key $Question -Arguments $Arguments), $hint))).Trim()
     if (-not $answer) { return [bool]$DefaultYes }
-    return ($answer -match '^(t|tak|y|yes)$')
+    return ((ConvertFrom-WmYesNo $answer) -eq $true)
 }
 
 # ---------------------------------------------------------------------------
@@ -727,14 +755,10 @@ function Send-WmLokiLog {
                 $rejected = Join-Path $outbox 'rejected'
                 New-Item -ItemType Directory -Force -Path $rejected | Out-Null
                 Move-Item -LiteralPath $f.FullName -Destination $rejected -Force -ErrorAction SilentlyContinue
-                $msg = "Loki odrzucił $($f.Name) (HTTP $status), przeniesiono do outbox\rejected: $($err.Exception.Message)"
-                Write-Host $msg -ForegroundColor Yellow
-                if ($script:WmLogFile) { Add-Content -LiteralPath $script:WmLogFile -Value $msg -Encoding UTF8 }
+                Write-WmSendNote -Key 'common.loki_rejected' -Arguments @($f.Name, $status, $err.Exception.Message)
                 continue
             }
-            $msg = "Wysyłka do Loki nie powiodła się ($($f.Name)), spróbuję przy następnym przebiegu: $($err.Exception.Message)"
-            Write-Host $msg -ForegroundColor Yellow
-            if ($script:WmLogFile) { Add-Content -LiteralPath $script:WmLogFile -Value $msg -Encoding UTF8 }
+            Write-WmSendNote -Key 'common.loki_send_failed' -Arguments @($f.Name, $err.Exception.Message)
             break
         }
     }
@@ -769,8 +793,6 @@ function Send-WmHealthcheck {
         $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Body)
         Invoke-RestMethod -Uri $url -Method Post -Body $bytes -ContentType 'text/plain; charset=utf-8' -TimeoutSec 15 -UseBasicParsing | Out-Null
     } catch {
-        $msg = "Ping Healthchecks ($Signal) nie powiódł się: $($_.Exception.Message)"
-        Write-Host $msg -ForegroundColor Yellow
-        if ($script:WmLogFile) { Add-Content -LiteralPath $script:WmLogFile -Value $msg -Encoding UTF8 }
+        Write-WmSendNote -Key 'common.healthchecks_failed' -Arguments @($Signal, $_.Exception.Message)
     }
 }

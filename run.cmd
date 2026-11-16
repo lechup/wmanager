@@ -6,7 +6,7 @@ setlocal
 rem fltmc works only elevated; unlike 'net session' it does not depend on the Server service
 fltmc >nul 2>&1
 if %errorlevel% neq 0 (
-    echo Potrzebne uprawnienia administratora, pojawi sie okno UAC...
+    echo Administrator rights are needed, a UAC window will appear...
     if "%~1"=="" (
         powershell.exe -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
     ) else (
