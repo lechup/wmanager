@@ -42,5 +42,5 @@
     'common.healthchecks_failed'    = 'Ping di Healthchecks ({0}) non riuscito: {1}'
     'common.answer_yes_no'        = 'Rispondi s o n.'
     'common.unknown_language'     = 'Lingua sconosciuta ''{0}''; uso {1}. Disponibili: {2}.'
-    'common.timed_out'            = 'nessun risultato dopo {0} min; attesa interrotta'
+    'common.timed_out'            = 'nessun risultato dopo {0} s; attesa interrotta'
 }

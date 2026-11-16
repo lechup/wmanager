@@ -42,5 +42,5 @@
     'common.healthchecks_failed'    = 'Ping-ul Healthchecks ({0}) a eșuat: {1}'
     'common.answer_yes_no'        = 'Răspundeți cu d sau n.'
     'common.unknown_language'     = 'Limbă necunoscută ''{0}''; se folosește {1}. Disponibile: {2}.'
-    'common.timed_out'            = 'niciun rezultat după {0} min; așteptarea a fost oprită'
+    'common.timed_out'            = 'niciun rezultat după {0} s; așteptarea a fost oprită'
 }

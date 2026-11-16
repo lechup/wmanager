@@ -795,21 +795,54 @@ function Send-WmHealthcheck {
     }
 }
 
-# Runs $ScriptBlock in a background job (its own process) and waits at most $TimeoutSeconds: a Windows component
-# that stops answering must not hold the console without a word (seen: the Volume Shadow Copy service behind
-# Checkpoint-Computer, for hours). On timeout the job is stopped and common.timed_out is thrown; an error of the
-# script block is thrown here; its output is returned.
+# Runs $ScriptBlock in a new PowerShell process and waits at most $TimeoutSeconds: a Windows component that stops
+# answering must not hold the console without a word (seen: the Volume Shadow Copy service behind
+# Checkpoint-Computer, for hours). On timeout the process is killed (Stop-Job would ask the pipeline to stop and
+# wait for a blocked WMI call just as long) and common.timed_out is thrown. Only the text of the block and its
+# arguments go along (as CLIXML files in a temporary folder). Its error is thrown here, its warnings are written
+# as warnings (-WarningVariable catches them) and its output is returned.
 function Invoke-WmTimeLimited {
+    [CmdletBinding()]
     param([Parameter(Mandatory = $true)][scriptblock]$ScriptBlock, [object[]]$ArgumentList = @(),
-          [Parameter(Mandatory = $true)][int]$TimeoutSeconds)
-    $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
+          [Parameter(Mandatory = $true)][ValidateRange(1, 86400)][int]$TimeoutSeconds)
+    $dir = Join-Path ([IO.Path]::GetTempPath()) ('wmanager-run-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
     try {
-        if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
-            Stop-Job -Job $job
-            throw (New-WmError 'common.timed_out' @([math]::Ceiling($TimeoutSeconds / 60)))
+        $in = Join-Path $dir 'in.xml'
+        $out = Join-Path $dir 'out.xml'
+        $runner = Join-Path $dir 'run.ps1'
+        Export-Clixml -LiteralPath $in -InputObject @{ Script = $ScriptBlock.ToString(); Arguments = @($ArgumentList) }
+        Set-Content -LiteralPath $runner -Encoding ASCII -Value @'
+param($in, $out)
+$ErrorActionPreference = 'Stop'
+$job = Import-Clixml -LiteralPath $in
+$result = @{ Output = @(); Warnings = @(); Error = $null }
+try {
+    $arguments = @($job.Arguments)
+    $all = @(& ([scriptblock]::Create($job.Script)) @arguments 3>&1)
+    $result.Warnings = @($all | Where-Object { $_ -is [System.Management.Automation.WarningRecord] } | ForEach-Object { $_.Message })
+    $result.Output = @($all | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
+} catch {
+    $result.Error = $_.Exception.Message
+}
+Export-Clixml -LiteralPath $out -InputObject $result
+'@
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        $psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" "{1}" "{2}"' -f $runner, $in, $out
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $p.Kill(); $null = $p.WaitForExit(10000) } catch { }
+            throw (New-WmError 'common.timed_out' @($TimeoutSeconds))
         }
-        return (Receive-Job -Job $job -ErrorAction Stop)
+        if (-not (Test-Path -LiteralPath $out)) { throw "PowerShell ended with exit code $($p.ExitCode) and no result." }
+        $result = Import-Clixml -LiteralPath $out
+        foreach ($w in @($result.Warnings)) { if ($w) { Write-Warning $w } }
+        if ($result.Error) { throw $result.Error }
+        return $result.Output
     } finally {
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

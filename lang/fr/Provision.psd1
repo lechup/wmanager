@@ -39,4 +39,5 @@
     'provision.finished_with_errors'       = 'Provisionnement terminé avec des erreurs. Consultez le journal ci-dessus et relancez le script.'
     'provision.finished'                   = 'Provisionnement terminé. Redémarrez l''ordinateur pour que toutes les modifications prennent effet.'
     'provision.restore_point_creating'     = 'Création d''un point de restauration système (en général moins d''une minute, {0} min au plus)...'
+    'provision.restore_point_timeout'      = 'Aucun point de restauration après {0} min : le service de cliché instantané des volumes ne répond pas (redémarrer l''ordinateur aide en général). Windows peut encore le créer plus tard ; un point ''wmanager: before provisioning'' créé après {1} ne montre pas l''état d''avant le provisionnement.'
 }

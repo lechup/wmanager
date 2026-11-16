@@ -42,5 +42,5 @@
     'common.healthchecks_failed'    = 'Healthchecks-ping ({0}) is mislukt: {1}'
     'common.answer_yes_no'        = 'Antwoord met j of n.'
     'common.unknown_language'     = 'Onbekende taal ''{0}''; {1} wordt gebruikt. Beschikbaar: {2}.'
-    'common.timed_out'            = 'geen resultaat na {0} min; wachten gestopt'
+    'common.timed_out'            = 'geen resultaat na {0} s; wachten gestopt'
 }

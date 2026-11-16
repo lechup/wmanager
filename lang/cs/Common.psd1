@@ -42,5 +42,5 @@
     'common.healthchecks_failed'    = 'Ping Healthchecks ({0}) se nezdařil: {1}'
     'common.answer_yes_no'        = 'Odpovězte a nebo n.'
     'common.unknown_language'     = 'Neznámý jazyk ''{0}''; používá se {1}. K dispozici: {2}.'
-    'common.timed_out'            = 'žádný výsledek po {0} min; čekání ukončeno'
+    'common.timed_out'            = 'žádný výsledek po {0} s; čekání ukončeno'
 }

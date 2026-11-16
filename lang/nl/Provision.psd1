@@ -39,4 +39,5 @@
     'provision.finished_with_errors'       = 'Inrichting voltooid met fouten. Controleer het logboek hierboven en voer het script opnieuw uit.'
     'provision.finished'                   = 'Inrichting voltooid. Start de computer opnieuw op zodat alle wijzigingen van kracht worden.'
     'provision.restore_point_creating'     = 'Systeemherstelpunt maken (meestal minder dan een minuut, hoogstens {0} min)...'
+    'provision.restore_point_timeout'      = 'Geen herstelpunt na {0} min: de service Volume Schaduwkopie reageert niet (de computer opnieuw opstarten helpt meestal). Windows kan het later nog maken; een herstelpunt ''wmanager: before provisioning'' van na {1} toont niet de toestand van vóór de inrichting.'
 }
