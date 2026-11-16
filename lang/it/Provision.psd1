@@ -38,4 +38,5 @@
     'provision.summary'                    = 'Fatto: {0} avvisi, {1} errori. Log: {2}'
     'provision.finished_with_errors'       = 'Provisioning terminato con errori. Controlla il log qui sopra ed esegui di nuovo lo script.'
     'provision.finished'                   = 'Provisioning terminato. Riavvia il computer per rendere effettive tutte le modifiche.'
+    'provision.restore_point_creating'     = 'Creazione di un punto di ripristino del sistema (di solito meno di un minuto, al massimo {0} min)...'
 }

@@ -38,4 +38,5 @@
     'provision.summary'                    = 'Gata. Avertismente: {0}, erori: {1}. Jurnal: {2}'
     'provision.finished_with_errors'       = 'Provizionarea s-a încheiat cu erori. Verificați jurnalul de mai sus și rulați din nou scriptul.'
     'provision.finished'                   = 'Provizionarea s-a încheiat. Reporniți computerul pentru ca toate modificările să intre în vigoare.'
+    'provision.restore_point_creating'     = 'Se creează un punct de restaurare a sistemului (de obicei sub un minut, cel mult {0} min)...'
 }

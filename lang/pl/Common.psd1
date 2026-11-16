@@ -42,4 +42,5 @@
     'common.healthchecks_failed'    = 'Ping Healthchecks ({0}) nie powiódł się: {1}'
     'common.answer_yes_no'        = 'Odpowiedz t albo n.'
     'common.unknown_language'     = 'Nieznany język ''{0}''; używam {1}. Dostępne: {2}.'
+    'common.timed_out'            = 'brak wyniku po {0} min; przerwano oczekiwanie'
 }

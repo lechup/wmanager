@@ -76,15 +76,22 @@ function Resolve-WmComputerName {
     }
 }
 
-# Returns $true when the restore point was created.
+# Returns $true when the restore point was created. It usually takes under a minute; after $TimeoutSeconds it
+# counts as failed (a stuck Volume Shadow Copy service kept a test machine waiting for hours), and the person at
+# the console decides as for any other failure.
 function New-WmRestorePoint {
+    param([int]$TimeoutSeconds = 600)
     $sr = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
     $old = (Get-ItemProperty -LiteralPath $sr -Name 'SystemRestorePointCreationFrequency' -ErrorAction SilentlyContinue).SystemRestorePointCreationFrequency
     try {
-        Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
         # Windows allows one restore point per 24 h; lift the limit for the duration of provisioning
         Set-WmRegValue $sr 'SystemRestorePointCreationFrequency' 0 | Out-Null
-        Checkpoint-Computer -Description 'wmanager: before provisioning' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+        Write-WmLog -Key 'provision.restore_point_creating' -Arguments @([math]::Ceiling($TimeoutSeconds / 60)) -LocalOnly
+        $null = Invoke-WmTimeLimited -TimeoutSeconds $TimeoutSeconds -ArgumentList @("$env:SystemDrive\") -ScriptBlock {
+            param($drive)
+            Enable-ComputerRestore -Drive $drive -ErrorAction Stop
+            Checkpoint-Computer -Description 'wmanager: before provisioning' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+        }
         Write-WmLog -Key 'provision.restore_point_created'
         return $true
     } catch {

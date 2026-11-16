@@ -38,4 +38,5 @@
     'provision.summary'                    = 'Hotovo. Upozornění: {0}, chyby: {1}. Protokol: {2}'
     'provision.finished_with_errors'       = 'Zřizování skončilo s chybami. Zkontrolujte protokol výše a spusťte skript znovu.'
     'provision.finished'                   = 'Zřizování dokončeno. Restartujte počítač, aby se projevily všechny změny.'
+    'provision.restore_point_creating'     = 'Vytváří se bod obnovení systému (obvykle do minuty, nejvýše {0} min)...'
 }

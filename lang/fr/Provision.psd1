@@ -38,4 +38,5 @@
     'provision.summary'                    = 'Terminé : avertissements {0}, erreurs {1}. Journal : {2}'
     'provision.finished_with_errors'       = 'Provisionnement terminé avec des erreurs. Consultez le journal ci-dessus et relancez le script.'
     'provision.finished'                   = 'Provisionnement terminé. Redémarrez l''ordinateur pour que toutes les modifications prennent effet.'
+    'provision.restore_point_creating'     = 'Création d''un point de restauration système (en général moins d''une minute, {0} min au plus)...'
 }

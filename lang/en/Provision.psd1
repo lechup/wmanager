@@ -38,4 +38,5 @@
     'provision.summary'                    = 'Done: {0} warnings, {1} errors. Log: {2}'
     'provision.finished_with_errors'       = 'Provisioning finished with errors. Check the log above and run the script again.'
     'provision.finished'                   = 'Provisioning finished. Restart the computer so that all changes take effect.'
+    'provision.restore_point_creating'     = 'Creating a system restore point (usually under a minute, at most {0} min)...'
 }
