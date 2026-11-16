@@ -229,9 +229,8 @@ function Read-WmManagedSnapshot {
     }
     $lists = @{}   # '' = the common list, otherwise the group name
     foreach ($path in @($Manifest.Files.Keys)) {
-        if ($path -ieq 'choco-reqs.txt') { $group = '' }
-        elseif ($path -match '^groups/([^/]+)/choco-reqs\.txt$') { $group = $Matches[1] }
-        else { continue }
+        $group = Get-WmListOwner $path
+        if ($null -eq $group) { continue }
         $text = [IO.File]::ReadAllText((Join-Path $Dir ($path -replace '/', '\')), [Text.Encoding]::UTF8)
         # Plain assignment: ConvertFrom-WmRequirements returns the list as one object (,$items)
         try { $lists[$group] = ConvertFrom-WmRequirements -Text $text }
@@ -366,18 +365,14 @@ function Resolve-WmManagedContent {
     if ($groups.Count -gt 0) { Write-WmManagedNote -Key 'managed.computer_groups' -Arguments @($script:WmHostName, ($groups -join ', ')) }
     else { Write-WmManagedNote -Key 'managed.computer_no_groups' -Arguments @($script:WmHostName) }
 
-    $lists = @([pscustomobject]@{ Label = (New-WmText 'managed.common_list'); IsGroup = $false; Items = @($snap.Lists['']) })
-    foreach ($g in $groups) {
-        $hasFiles = @($manifest.Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
-        if (-not $hasFiles) { Write-WmManagedWarning -Key 'managed.group_no_files' -Arguments @($g); continue }
-        if ($snap.Lists.ContainsKey($g)) { $lists += [pscustomobject]@{ Label = $g; IsGroup = $true; Items = @($snap.Lists[$g]) } }
-    }
+    # The same resolution as tools/groups.ps1 show/check (lib\Groups.ps1)
+    $content = Resolve-WmComputerContent -Map $snap.Map -Lists $snap.Lists -Files $manifest.Files -ComputerName $script:WmHostName
     return [pscustomobject]@{
         Serial       = $manifest.Serial
-        Groups       = $groups
-        Requirements = (Merge-WmRequirements -Lists $lists)
-        Scripts      = (Get-WmGroupScripts -Files $manifest.Files -Groups $groups)
-        Jobs         = (Get-WmGroupJobs -Files $manifest.Files -Groups $groups)
+        Groups       = $content.Groups
+        Requirements = $content.Requirements
+        Scripts      = $content.Scripts
+        Jobs         = $content.Jobs
     }
 }
 

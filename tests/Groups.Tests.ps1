@@ -135,6 +135,34 @@ Describe 'check' {
         $r.Text | Should -Match '30-no-bom\.ps1 has non-ASCII characters but no BOM'
     }
 
+    It 'fails on syntax that Windows PowerShell 5.1 on the computers does not have' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/accounting/scripts/20-ps7.ps1') "`$x = `$env:X ?? 'default'`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'ERROR: groups/accounting/scripts/20-ps7\.ps1, line 1'
+    }
+
+    It 'warns when script numbers have different widths, and about a group named common' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/accounting/scripts/5-early.ps1') "exit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/common/choco-reqs.txt') "vlc`r`n"
+        $r = Invoke-Tool $src check
+        $r.Text | Should -Match 'groups/accounting/scripts: number the scripts with the same number of digits'
+        $r.Text | Should -Match "a group is named 'common'"
+        (Invoke-Tool $src add-package common 'vlc').Code | Should -Be 1
+    }
+
+    It 'in a git repository checks what git would push, not ignored files' -Skip:(-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        $src = New-Source
+        & git -C $src init -q 2>$null
+        Set-Text (Get-Path $src '.gitignore') "99-draft.ps1`n"
+        Set-Text (Get-Path $src 'groups/accounting/scripts/99-draft.ps1') "if (`$true) {`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Not -Match '99-draft'
+    }
+
     It 'checks only the listed files with -FileList' {
         $src = New-Source
         Set-Text (Get-Path $src 'groups/accounting/scripts/99-ignored.ps1') "if (`$true) {`r`n" -Bom
@@ -254,6 +282,20 @@ Describe 'new-script and new-job' {
         (Invoke-Tool $src new-script floor-1 05-first).Code | Should -Be 0
         Test-Path -LiteralPath (Get-Path $src 'groups/floor-1/scripts/05-first.ps1') | Should -BeTrue
         (Invoke-Tool $src new-script accounting 20-printers).Code | Should -Be 1
+    }
+
+    It 'stops numbering at 90 instead of sorting a 100- script first' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/accounting/scripts/90-last.ps1') "exit 0`r`n" -Bom
+        $r = Invoke-Tool $src new-script accounting more
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'give the number yourself'
+    }
+
+    It 'creates a job in the folder of its schedule, with the Loki label the computer gives it' {
+        $src = New-Source
+        (Invoke-Tool $src new-job all daily 10-inventory).Code | Should -Be 0
+        Read-Text (Get-Path $src 'groups/all/jobs/daily/10-inventory.ps1') | Should -Match ([regex]::Escape('task="all/10-inventory"'))
     }
 
     It 'creates a job in the folder of its schedule' {

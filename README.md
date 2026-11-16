@@ -330,9 +330,10 @@ template, as UTF-8 with BOM and CRLF, and scripts are numbered in tens after the
 `check` reports what the computers would reject: a `groups.psd1` or package list that doesn't parse, a script with a
 syntax error, a file name they don't accept. It also warns about what they would ignore or do differently than you
 might expect: a group without a folder, a folder no computer uses, scripts and jobs in the wrong folder, a script
-with non-ASCII characters and no BOM, a package two groups of one computer describe differently. Scripts are parsed
-by the PowerShell you run it with; PowerShell 7 accepts some syntax (e.g. `??`, `? :`) that 5.1 on the computers
-doesn't.
+with non-ASCII characters and no BOM, a package two groups of one computer describe differently, script numbers of
+different widths (`5-a.ps1` runs after `10-b.ps1`). Run in PowerShell 7, it also rejects the PowerShell 7 syntax that
+Windows PowerShell 5.1 on the computers doesn't have (`? :`, `??`, `??=`, `&&`, `||`, `?.`). In a Git repository it
+looks at the files git will push, as `publish.sh` does. `common` means the common list, so don't name a group that.
 
 Then sign and publish:
 

@@ -72,12 +72,17 @@ function Get-FullPath {
     return [IO.Path]::Combine($Root, $Rel.Replace('/', [IO.Path]::DirectorySeparatorChar))
 }
 
+function Test-HasBom {
+    param([byte[]]$Bytes)
+    return ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF)
+}
+
 # Text, BOM and line ending of a file; a missing file is empty, without a BOM, CRLF (like the examples)
 function Read-TextFile {
     param([string]$Path)
     if (-not [IO.File]::Exists($Path)) { return [pscustomobject]@{ Text = ''; Bom = $false; NewLine = "`r`n"; Exists = $false } }
     $bytes = [IO.File]::ReadAllBytes($Path)
-    $bom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+    $bom = Test-HasBom $bytes
     $start = 0
     if ($bom) { $start = 3 }
     $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes, $start, $bytes.Length - $start)
@@ -93,15 +98,28 @@ function Write-TextFile {
     [IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($Bom)))
 }
 
-# The files of the source: relative path ('/') -> full path, without hidden ones (.git...) and manifest.psd1,
-# as publish.sh lists them outside git. With -FileList, exactly the listed paths.
+# The files of the source as publish.sh signs them: relative path ('/') -> full path, without hidden ones (.git...)
+# and manifest.psd1. In a git repository what git will push (tracked and new files that aren't ignored), otherwise
+# every file; links to folders are not followed (publish.sh refuses links). With -FileList, exactly those paths.
 function Get-SourceFiles {
     param([string]$Root)
     $files = @{}   # case-insensitive, like the manifest on a computer
+    $listed = $null
     if ($FileList) {
-        foreach ($line in [IO.File]::ReadAllLines($FileList)) {
+        $listed = [IO.File]::ReadAllLines($FileList)
+    } elseif (Get-Command git -CommandType Application -ErrorAction SilentlyContinue) {
+        $inGit = (& git -C $Root rev-parse --is-inside-work-tree 2>$null) -eq 'true'
+        if ($inGit) {
+            $out = & git -C $Root ls-files -z --cached --others --exclude-standard -- . 2>$null
+            $listed = @(([string]($out -join "`n")).Split([char]0) | Where-Object { $_ })
+        }
+    }
+    if ($null -ne $listed) {
+        foreach ($line in $listed) {
             $rel = $line.Trim()
-            if ($rel -and $rel -ine 'manifest.psd1') { $files[$rel] = Get-FullPath $Root $rel }
+            if (-not $rel -or $rel -ieq 'manifest.psd1' -or ('/' + $rel) -match '/\.') { continue }
+            $full = Get-FullPath $Root $rel
+            if ([IO.File]::Exists($full)) { $files[$rel] = $full }   # a tracked file deleted here is not published
         }
         return $files
     }
@@ -113,7 +131,8 @@ function Get-SourceFiles {
         if ($rel) { $dir = Get-FullPath $Root $rel.TrimEnd('/') }
         foreach ($d in [IO.Directory]::GetDirectories($dir)) {
             $name = [IO.Path]::GetFileName($d)
-            if (-not $name.StartsWith('.')) { $todo.Push($rel + $name + '/') }
+            $link = ([IO.File]::GetAttributes($d) -band [IO.FileAttributes]::ReparsePoint) -ne 0
+            if (-not $name.StartsWith('.') -and -not $link) { $todo.Push($rel + $name + '/') }
         }
         foreach ($f in [IO.Directory]::GetFiles($dir)) {
             $name = [IO.Path]::GetFileName($f)
@@ -169,9 +188,8 @@ function Read-PackageLists {
     param([hashtable]$Files)
     $lists = @{}
     foreach ($path in @($Files.Keys)) {
-        if ($path -ieq 'choco-reqs.txt') { $group = '' }
-        elseif ($path -match '^groups/([^/]+)/choco-reqs\.txt$') { $group = $Matches[1] }
-        else { continue }
+        $group = Get-WmListOwner $path
+        if ($null -eq $group) { continue }
         try { $items = ConvertFrom-WmRequirements -Text (Read-TextFile $Files[$path]).Text }
         catch { throw "${path}: $(Format-WmErrorText $_ -English)" }
         $label = 'common'
@@ -193,27 +211,16 @@ function Get-FolderGroups {
 function Get-ComputerView {
     param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer)
     $script:MergeMessages.Clear()
-    $groups = Get-WmComputerGroups -Map $Map -ComputerName $Computer   # plain assignment, see below
-    # Not $lists: PowerShell names ignore case, so it would be the $Lists parameter
-    $toMerge = @([pscustomobject]@{ Label = (New-WmText 'managed.common_list'); IsGroup = $false; Items = @($Lists['']) })
-    foreach ($g in $groups) {
-        $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
-        if (-not $hasFiles) { Write-WmManagedWarning -Key 'managed.group_no_files' -Arguments @($g); continue }
-        if ($Lists.ContainsKey($g)) { $toMerge += [pscustomobject]@{ Label = $g; IsGroup = $true; Items = @($Lists[$g]) } }
-    }
-    # Plain assignments: these functions return their array as one object (,$result)
-    $packages = Merge-WmRequirements -Lists $toMerge
-    $scripts = Get-WmGroupScripts -Files $Files -Groups $groups
-    $jobs = Get-WmGroupJobs -Files $Files -Groups $groups
+    $c = Resolve-WmComputerContent -Map $Map -Lists $Lists -Files $Files -ComputerName $Computer
     $inMap = $false
     if ($Map.Computers -is [hashtable]) { foreach ($k in $Map.Computers.Keys) { if ([string]$k -ieq $Computer) { $inMap = $true } } }
     return [pscustomobject]@{
         Computer = $Computer
         InMap    = $inMap
-        Groups   = $groups
-        Packages = @($packages | Where-Object { $null -ne $_ })
-        Scripts  = @($scripts)
-        Jobs     = @($jobs)
+        Groups   = @($c.Groups)
+        Packages = @($c.Requirements | Where-Object { $null -ne $_ })
+        Scripts  = @($c.Scripts)
+        Jobs     = @($c.Jobs)
         Messages = $script:MergeMessages.ToArray()   # not @(...): PowerShell 7 fails on @() of a List[object]
     }
 }
@@ -302,9 +309,23 @@ function Show-Overview {
 # check
 # ---------------------------------------------------------------------------
 
-function Test-HasBom {
-    param([byte[]]$Bytes)
-    return ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF)
+# Syntax PowerShell 7 accepts and Windows PowerShell 5.1 doesn't: ?: (ternary), ??, ??=, && and || between commands,
+# ?. and ?[]. Run in 5.1, the parser already rejects them; in PowerShell 7 they would pass, and every computer would
+# fail on the script.
+function Find-Ps7Syntax {
+    param($Ast)
+    if ($PSVersionTable.PSVersion.Major -lt 6 -or -not $Ast) { return @() }
+    $found = $Ast.FindAll({
+        param($n)
+        $type = $n.GetType().Name
+        if ($type -eq 'TernaryExpressionAst' -or $type -eq 'PipelineChainAst') { return $true }
+        if ($type -eq 'BinaryExpressionAst' -and [string]$n.Operator -eq 'QuestionQuestion') { return $true }
+        if ($type -eq 'AssignmentStatementAst' -and [string]$n.Operator -eq 'QuestionQuestionEquals') { return $true }
+        if (($type -eq 'MemberExpressionAst' -or $type -eq 'InvokeMemberExpressionAst' -or $type -eq 'IndexExpressionAst') -and
+            $n.PSObject.Properties['NullConditional'] -and $n.NullConditional) { return $true }
+        return $false
+    }, $true)
+    return @($found)
 }
 
 function Invoke-Check {
@@ -325,27 +346,28 @@ function Invoke-Check {
     $lists = @{}
     $listsOk = $true
     foreach ($path in @($Files.Keys | Sort-Object)) {
-        if ($path -ine 'choco-reqs.txt' -and $path -notmatch '^groups/[^/]+/choco-reqs\.txt$') { continue }
-        try { $null = Read-PackageLists @{ $path = $Files[$path] } }
+        if ($null -eq (Get-WmListOwner $path)) { continue }
+        try { $one = Read-PackageLists @{ $path = $Files[$path] }; foreach ($k in $one.Keys) { $lists[$k] = $one[$k] } }
         catch { Write-Problem error (Format-WmErrorText $_ -English); $listsOk = $false }
     }
-    if ($listsOk) { $lists = Read-PackageLists $Files }
+    foreach ($g in (Get-FolderGroups $Files)) {
+        if ($g -ieq 'common') { Write-Problem warning "a group is named 'common': tools/groups.ps1 add-package/remove-package can't edit its list (common means the common list); rename it" }
+    }
 
     foreach ($p in @($Files.Keys | Sort-Object)) {
         if ($p -notmatch '\.(ps1|psd1|psm1)$') { continue }
-        $bytes = [IO.File]::ReadAllBytes($Files[$p])
-        $bom = Test-HasBom $bytes
-        if (-not $bom -and @($bytes | Where-Object { $_ -ge 0x80 } | Select-Object -First 1).Count -gt 0) {
+        $file = Read-TextFile $Files[$p]
+        if (-not $file.Bom -and $file.Text -match '[^\x00-\x7F]') {
             Write-Problem warning "$p has non-ASCII characters but no BOM; save it as UTF-8 with BOM (Windows PowerShell 5.1 reads it as ANSI)"
         }
         if ($p -match '^groups/[^/]+/(scripts|jobs)/.*\.ps1$') {
-            $start = 0
-            if ($bom) { $start = 3 }
-            $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes, $start, $bytes.Length - $start)
             $tokens = $null
             $errs = $null
-            [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errs)
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($file.Text, [ref]$tokens, [ref]$errs)
             foreach ($e in @($errs)) { Write-Problem error "$p, line $($e.Extent.StartLineNumber): $($e.Message)" }
+            foreach ($n in (Find-Ps7Syntax $ast)) {
+                Write-Problem error "$p, line $($n.Extent.StartLineNumber): '$($n.Extent.Text.Split([char]10)[0].Trim())' is PowerShell 7 syntax; the computers run Windows PowerShell 5.1"
+            }
         }
         if ($p -match '^groups/[^/]+/scripts/.+/.+\.ps1$') {
             Write-Problem warning "$p is not run: scripts go directly in groups/<group>/scripts/"
@@ -353,6 +375,15 @@ function Invoke-Check {
         if ($p -match '^groups/[^/]+/jobs/.*\.ps1$' -and $p -notmatch '^groups/[^/]+/jobs/(hourly|daily|weekly)/[^/]+$') {
             Write-Problem warning "$p is not run: jobs go directly in jobs/hourly, jobs/daily or jobs/weekly"
         }
+    }
+
+    # Scripts run in name order: 5-a.ps1 sorts after 10-b.ps1
+    foreach ($g in (Get-FolderGroups $Files)) {
+        $widths = @{}
+        foreach ($sp in (Get-WmGroupScripts -Files $Files -Groups @($g))) {
+            if ($sp.Path -match '/([0-9]+)-[^/]*$') { $widths[$Matches[1].Length] = $true }
+        }
+        if ($widths.Count -gt 1) { Write-Problem warning "groups/$g/scripts: number the scripts with the same number of digits (05-, 10-); they run in name order, so 5-a.ps1 runs after 10-b.ps1" }
     }
 
     if ($null -ne $map) {
@@ -555,8 +586,13 @@ function Update-Computer {
 # ---------------------------------------------------------------------------
 
 function Get-ListPath {
-    param([string]$Target)
-    if ($Target -ieq 'common') { return 'choco-reqs.txt' }
+    param([string]$Root, [string]$Target)
+    if ($Target -ieq 'common') {
+        if ([IO.Directory]::Exists((Get-FullPath $Root 'groups/common'))) {
+            throw "'common' means the common list, but there is also a group named common; rename that group to edit its list"
+        }
+        return 'choco-reqs.txt'
+    }
     if (-not (Test-WmGroupName $Target)) { throw "invalid group name '$Target' (letters, digits, '.', '-', '_'), or 'common' for the common list" }
     return "groups/$Target/choco-reqs.txt"
 }
@@ -573,7 +609,7 @@ function Find-PackageLine {
 
 function Update-PackageList {
     param([string]$Root, [string]$Target, [string]$Line, [string]$Remove)
-    $rel = Get-ListPath $Target
+    $rel = Get-ListPath $Root $Target
     $path = Get-FullPath $Root $rel
     $file = Read-TextFile $path
     $lines = New-Object 'System.Collections.Generic.List[string]'
@@ -649,16 +685,11 @@ $ErrorActionPreference = 'Stop'
 exit 0
 '@
 
-function Test-FileName {
-    param([string]$Name)
-    return ($Name -match '^[A-Za-z0-9_-][A-Za-z0-9._-]*$' -and (Test-WmManagedPath $Name))
-}
-
 function New-GroupFile {
     param([string]$Root, [string]$Group, [string]$Kind, [string]$Every, [string]$Name)
     if (-not (Test-WmGroupName $Group)) { throw "invalid group name '$Group' (letters, digits, '.', '-', '_')" }
     $base = $Name -replace '\.ps1$', ''
-    if (-not (Test-FileName $base)) { throw "invalid name '$Name' (letters, digits, '.', '-', '_')" }
+    if (-not (Test-WmGroupName $base)) { throw "invalid name '$Name' (letters, digits, '.', '-', '_')" }
     if ($Kind -eq 'script') {
         $dirRel = "groups/$Group/scripts"
         if ($base -notmatch '^[0-9]+-') {
@@ -670,7 +701,10 @@ function New-GroupFile {
                     if ([IO.Path]::GetFileName($f) -match '^([0-9]+)-') { $last = [Math]::Max($last, [int]$Matches[1]) }
                 }
             }
-            $base = '{0:D2}-{1}' -f ([int]([Math]::Floor($last / 10) * 10 + 10)), $base
+            $next = [int]([Math]::Floor($last / 10) * 10 + 10)
+            # A third digit would sort 100-x before 20-y (ordinal name order)
+            if ($next -gt 99) { throw "the scripts of $Group already reach $last; give the number yourself (e.g. 95-$base) or renumber them" }
+            $base = '{0:D2}-{1}' -f $next, $base
         }
         $text = $script:ScriptTemplate
     } else {
@@ -681,7 +715,10 @@ function New-GroupFile {
     $rel = "$dirRel/$base.ps1"
     $path = Get-FullPath $Root $rel
     if ([IO.File]::Exists($path)) { throw "$rel already exists" }
-    $text = $text.Replace('{{GROUP}}', $Group).Replace('{{NAME}}', ($base -replace '^[0-9]+-', ''))
+    # A job's Loki label is group/file name, number included, as Get-WmGroupJobs names it
+    $label = $base
+    if ($Kind -eq 'script') { $label = $base -replace '^[0-9]+-', '' }
+    $text = $text.Replace('{{GROUP}}', $Group).Replace('{{NAME}}', $label)
     $text = ($text -split '\r?\n') -join "`r`n"
     if (-not $text.EndsWith("`r`n")) { $text += "`r`n" }
     Write-TextFile $path $text $true
