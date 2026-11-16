@@ -1,0 +1,36 @@
+# Release: pushing a tag vX.Y.Z (from main) builds wmanager-vX.Y.Z.zip, install.ps1 and SHA256SUMS
+# (tools/build-release.sh) and publishes them as a GitHub release. The one-liner of the README installs
+# the latest release:  irm https://github.com/<owner>/wmanager/releases/latest/download/install.ps1 | iex
+# A tag with a suffix (v1.2.0-rc1) becomes a pre-release, which "latest" skips.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Only what went through a pull request (review, tests) reaches the computers
+      - name: The tag must be on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Build
+        run: tools/build-release.sh "$GITHUB_REF_NAME" dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=()
+          [[ $GITHUB_REF_NAME == *-* ]] && pre=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "wmanager $GITHUB_REF_NAME" --generate-notes "${pre[@]}"

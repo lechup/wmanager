@@ -29,6 +29,18 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch { }
 
+# Version of this copy: the VERSION file of a release ZIP (tools/build-release.sh); none in a git checkout
+$script:WmVersion = & {
+    $file = Join-Path (Split-Path $PSScriptRoot -Parent) 'VERSION'
+    if (Test-Path -LiteralPath $file) { ([IO.File]::ReadAllText($file)).Trim() } else { '' }
+}
+
+# 'wmanager v1.2.0' for the first line of a log, or just 'wmanager' without a VERSION file
+function Get-WmName {
+    if ($script:WmVersion) { return "wmanager $script:WmVersion" }
+    return 'wmanager'
+}
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------

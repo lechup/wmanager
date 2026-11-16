@@ -15,7 +15,10 @@ Microsoft Store, Edge, Defender and Windows Update stay.
 
 ## Quick start
 
-1. Download wmanager: on GitHub **Code → Download ZIP** (or `git clone`), and unpack it.
+From a USB drive or a network share:
+
+1. Download wmanager: the ZIP of the latest release (`wmanager-vX.Y.Z.zip` under **Releases** on GitHub), or
+   `git clone`, and unpack it.
 2. Optionally edit `choco-reqs.txt`, the list of programs (see [choco-reqs.txt](#choco-reqstxt)).
 3. Run the configuration wizard: `init.cmd` on Windows, or `pwsh ./init.ps1` on Linux or macOS (PowerShell 7).
    It asks for the update time, Grafana Cloud Loki, Healthchecks.io and the management source of computer groups,
@@ -31,6 +34,23 @@ Microsoft Store, Edge, Defender and Windows Update stay.
    From then on it updates itself every day at 12:00; logs are in `C:\ProgramData\wmanager\logs`.
 
 You can also pass the name up front: `run.cmd -ComputerName OFFICE-03`.
+
+Straight from the internet, without a USB drive: prepare `provision.config.psd1` with the wizard (steps 2-3) and put it
+on a share or at an https:// address (e.g. a private repository; with a management source, the certificate next to
+it). Then, on the computer, in PowerShell started as administrator:
+
+```powershell
+irm https://github.com/lechup/wmanager/releases/latest/download/install.ps1 | iex
+```
+
+It downloads the latest release, checks it against the release's SHA-256 sums, asks where the configuration is (a path
+or an https:// address, with an optional `Authorization` header; Enter = the example configuration) and runs
+provisioning the way `run.cmd` does. With parameters:
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/lechup/wmanager/releases/latest/download/install.ps1))) -ComputerName OFFICE-03 -Config \\server\share\wmanager\provision.config.psd1
+```
+
 Provisioning is meant to be run by a person at the console: when a safety step fails (restore point, backup,
 no internet), it asks whether to continue. Without a console the answer is "no" and provisioning stops before
 changing anything.
@@ -40,6 +60,7 @@ changing anything.
 | File | Role |
 | --- | --- |
 | `run.cmd` | Double-click launcher; elevates and passes parameters through |
+| `install.ps1` | Install from the internet: the latest release, checked, then provisioning (see [Quick start](#quick-start)) |
 | `init.cmd`, `init.ps1` | Configuration wizard: writes and checks `provision.config.psd1` (Windows PowerShell 5.1 or PowerShell 7, also on Linux) |
 | `Provision.ps1` | Main script |
 | `Update-Packages.ps1` | Scheduled update, daily by default (`wmanager-Update` task), and retry at sign-in (`wmanager-Retry`) |
@@ -49,10 +70,11 @@ changing anything.
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
 | `choco-reqs.txt` | Package list (when there is no management source) |
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks, the configuration wizard |
-| `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change) |
+| `tools/` | Linux scripts for the management source: `new-signing-cert.sh` (once), `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
 | `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
+| `.github/workflows/release.yml` | Publishes a release when a `vX.Y.Z` tag is pushed (see [Releases](#releases)) |
 
 On the computer everything lands in `C:\ProgramData\wmanager`:
 only Administrators and SYSTEM can write there, and only they can read `provision.config.psd1` (which holds the tokens).
@@ -407,6 +429,24 @@ or the configuration given as the second parameter (with the `.cer` files next t
 Run one machine at a time (6 GB RAM each). `vm.sh stop` shuts Windows down fully over SSH: the power button only
 hibernates the kernel while Fast Startup is on (the Windows default), so a new computer name or a pending update would
 wait for a restart. Over SSH there is no console, so provisioning takes the default answers (as in a scheduled task).
+
+## Releases
+
+Computers installed from the internet get the latest release, not whatever is on `main`. To release, after the
+changes are merged:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The `release` workflow checks that the tag is on `main`, builds the files with `tools/build-release.sh` and publishes
+them as a GitHub release: `wmanager-v0.2.0.zip` (the repository without `tests/` and `.github/`, plus a `VERSION`
+file), `install.ps1` and `SHA256SUMS`. A tag with a suffix, e.g. `v0.2.0-rc1`, becomes a pre-release, which
+"latest" skips; install it with `-Tag v0.2.0-rc1`. `tools/build-release.sh v0.2.0 dist` builds the same files
+locally, to look at them first.
+
+The logs show the version (`wmanager v0.2.0 provisioning: ...`, also in Loki); a copy run from a git checkout has no
+`VERSION` file and logs just `wmanager`.
 
 ## Limitations
 

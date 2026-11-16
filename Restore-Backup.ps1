@@ -58,7 +58,7 @@ try {
 $backups = @(Get-ChildItem -LiteralPath $script:WmBackupDir -Directory -ErrorAction SilentlyContinue)
 $machine = @($journal | Where-Object { $_.Scope -eq 'machine' })
 $user    = @($journal | Where-Object { $_.Scope -eq 'user' })
-Write-WmLog "wmanager: przywracanie na $($script:WmHostName). Dziennik: $($machine.Count) wartości komputera, $($user.Count) wartości użytkowników; kopii: $($backups.Count)."
+Write-WmLog "$(Get-WmName): przywracanie na $($script:WmHostName). Dziennik: $($machine.Count) wartości komputera, $($user.Count) wartości użytkowników; kopii: $($backups.Count)."
 if (-not (Confirm-WmContinue 'Cofnąć zmiany wmanagera?')) {
     Write-WmLog 'Anulowano, nic nie zmieniono.'
     Exit-WmLock $lock
