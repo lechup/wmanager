@@ -6,4 +6,5 @@
     'task.schedule_changed' = 'Agendamento da atualização alterado para: {0} {1}.'
     'task.notify_failed'    = 'Não foi possível iniciar a notificação: {0}'
     'task.every_day'        = 'todos os dias'
+    'task.days_list'        = '{0}'
 }

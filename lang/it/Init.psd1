@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Invio accetta il valore tra parentesi. Token e chiavi non vengono mostrati durante la digitazione.'
     'init.invalid_answer'           = 'Risposta non valida.'
     'init.no_answer'                = 'Nessuna risposta; procedura guidata interrotta.'
-    'init.answer_yes_no'            = 'Rispondi s o n.'
     'init.warning'                  = 'Attenzione: {0}'
 
     'init.file_exists'              = 'Questo file esiste già. Vuoi modificarne le impostazioni (n = parti dal file di esempio)?'

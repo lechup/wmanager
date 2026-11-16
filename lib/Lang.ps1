@@ -7,6 +7,7 @@
 
 $script:WmLanguages = @('en', 'de', 'fr', 'es', 'it', 'pl', 'nl', 'pt', 'ro', 'cs')
 $script:WmLang = 'en'
+$script:WmLangRoot = $null   # the folder the catalogs were loaded from
 $script:WmTextEn = @{}   # English
 $script:WmTextUi = @{}   # the chosen language over English
 
@@ -42,15 +43,29 @@ function Import-WmCatalog {
 }
 
 # Loads English and the chosen language. $Root: the folder with lang\ (default: the parent of lib\).
+# Loading again with the same result is skipped (every entry script calls this after Lang.ps1 already loaded the
+# default). A -Lang wmanager doesn't have is said once on the screen, instead of being ignored silently.
 function Initialize-WmLanguage {
     param([string]$Lang, [string]$Root)
     if (-not $Root) { $Root = Split-Path $PSScriptRoot -Parent }
     $folder = Join-Path $Root 'lang'
-    $script:WmLang = Resolve-WmLanguage $Lang
-    $script:WmTextEn = Import-WmCatalog (Join-Path $folder 'en')
+    $code = Resolve-WmLanguage $Lang
+    if ($code -ne $script:WmLang -or $Root -ne $script:WmLangRoot -or $script:WmTextEn.Count -eq 0) {
+        Import-WmLanguage -Code $code -Folder $folder
+        $script:WmLangRoot = $Root
+    }
+    if ($Lang -and -not (ConvertTo-WmLanguageCode $Lang)) {
+        Write-Host (Get-WmText 'common.unknown_language' @($Lang, $script:WmLang, ($script:WmLanguages -join ', '))) -ForegroundColor Yellow
+    }
+}
+
+function Import-WmLanguage {
+    param([Parameter(Mandatory = $true)][string]$Code, [Parameter(Mandatory = $true)][string]$Folder)
+    $script:WmLang = $Code
+    $script:WmTextEn = Import-WmCatalog (Join-Path $Folder 'en')
     $script:WmTextUi = $script:WmTextEn.Clone()
     if ($script:WmLang -ne 'en') {
-        $ui = Import-WmCatalog (Join-Path $folder $script:WmLang)
+        $ui = Import-WmCatalog (Join-Path $Folder $script:WmLang)
         foreach ($key in $ui.Keys) { $script:WmTextUi[$key] = $ui[$key] }
     }
 }
@@ -73,7 +88,9 @@ function Get-WmText {
         else { $a }
     })
     if ($null -eq $format) { return "[$Key] " + ($values -join ' ') }
-    return [string]::Format($format, [object[]]$values)
+    # A call with fewer arguments than the text's placeholders must not turn a warning into a crash
+    try { return [string]::Format($format, [object[]]$values) }
+    catch [System.FormatException] { return "[$Key] " + ($values -join ' ') }
 }
 
 # An exception whose message is English (for anything that shows it raw) and which carries the text, so the screen
@@ -101,6 +118,21 @@ function Format-WmErrorText {
     $reason = Get-WmErrorText $ErrorRecord
     if ($reason -is [string]) { return $reason }
     return Get-WmText -Key $reason.Key -Arguments $reason.Arguments -English:$English
+}
+
+# A yes/no question at the console: the answer in the chosen language or in English; Enter = $Default. Anything
+# else is asked again (an operator used to another language's "t" or "ja" must not get a silent "no"); the end of
+# redirected input gives $Default.
+function Read-WmYesNo {
+    param([Parameter(Mandatory = $true)][string]$Prompt, [bool]$Default)
+    $hint = if ($Default) { Get-WmText 'common.hint_default_yes' } else { Get-WmText 'common.hint_default_no' }
+    while ($true) {
+        $answer = Read-Host "$Prompt $hint"
+        if ($null -eq $answer -or -not $answer.Trim()) { return $Default }
+        $yes = ConvertFrom-WmYesNo $answer
+        if ($null -ne $yes) { return $yes }
+        Write-Host ('  ' + (Get-WmText 'common.answer_yes_no')) -ForegroundColor Yellow
+    }
 }
 
 # A yes/no answer: the words of the chosen language and the English ones. $null for anything else.

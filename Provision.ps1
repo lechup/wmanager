@@ -100,6 +100,17 @@ function Install-WmFiles {
     $src = (Resolve-Path -LiteralPath $here).Path.TrimEnd('\')
     $dst = (Resolve-Path -LiteralPath $script:WmRoot).Path.TrimEnd('\')
     if ($src -ne $dst) {
+        # The catalogs of the messages first: the scheduled tasks and the notification run from this copy, and new
+        # code must not meet old catalogs. Files a newer version no longer has are removed (all *.psd1 are loaded)
+        $srcLang = Join-Path $src 'lang'
+        $dstLang = Join-Path $dst 'lang'
+        New-Item -ItemType Directory -Force -Path $dstLang -ErrorAction Stop | Out-Null
+        Copy-Item -Path (Join-Path $srcLang '*') -Destination $dstLang -Recurse -Force -ErrorAction Stop
+        foreach ($old in @(Get-ChildItem -LiteralPath $dstLang -Recurse -File)) {
+            if (-not (Test-Path -LiteralPath (Join-Path $srcLang $old.FullName.Substring($dstLang.Length + 1)))) {
+                Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
         foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Invoke-Jobs.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt', 'VERSION')) {
             $p = Join-Path $src $f
             if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force -ErrorAction Stop }
@@ -109,10 +120,6 @@ function Install-WmFiles {
             Remove-Item -LiteralPath (Join-Path $dst 'VERSION') -Force -ErrorAction SilentlyContinue
         }
         Copy-Item -Path (Join-Path $src 'lib\*.ps1') -Destination (Join-Path $dst 'lib') -Force -ErrorAction Stop
-        # The catalogs of the messages: the scheduled tasks and the notification run from this copy
-        $dstLang = Join-Path $dst 'lang'
-        New-Item -ItemType Directory -Force -Path $dstLang -ErrorAction Stop | Out-Null
-        Copy-Item -Path (Join-Path $src 'lang\*') -Destination $dstLang -Recurse -Force -ErrorAction Stop
         Get-ChildItem -LiteralPath $dst -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
         Write-WmLog -Key 'provision.files_copied' -Arguments @($dst)
     }

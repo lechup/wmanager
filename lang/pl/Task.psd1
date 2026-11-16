@@ -6,4 +6,5 @@
     'task.schedule_changed' = 'Zmieniono termin aktualizacji na: {0} {1}.'
     'task.notify_failed'    = 'Nie udało się uruchomić powiadomienia: {0}'
     'task.every_day'        = 'codziennie'
+    'task.days_list'        = '{0}'
 }

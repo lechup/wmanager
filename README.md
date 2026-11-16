@@ -382,7 +382,9 @@ Czech (`cs`). The first of these that is set wins:
 
 1. `-Lang` of the script: `run.cmd -Lang de`, `init.cmd -Lang fr`, `pwsh ./init.ps1 -Lang it`, or `-Lang pl` for the
    internet installer;
-2. the environment variable `WMANAGER_LANG`, set before the run (`set WMANAGER_LANG=de`, `$env:WMANAGER_LANG = 'de'`);
+2. the environment variable `WMANAGER_LANG`, set before the run (`set WMANAGER_LANG=de`, `$env:WMANAGER_LANG = 'de'`)
+   in a console that already runs as administrator: `run.cmd` started from a normal console asks for administrator
+   rights and continues in a new console, which doesn't get the variable (use `run.cmd -Lang de` there);
 3. the Windows display language: the system's for the scheduled tasks (they run as SYSTEM), the signed-in user's for
    the restart notification;
 4. English.

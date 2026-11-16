@@ -6,4 +6,5 @@
     'task.schedule_changed' = 'Update schedule changed to: {0} {1}.'
     'task.notify_failed'    = 'Could not start the notification: {0}'
     'task.every_day'        = 'every day'
+    'task.days_list'        = '{0}'
 }

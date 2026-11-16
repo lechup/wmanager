@@ -6,4 +6,5 @@
     'task.schedule_changed' = 'Zeitplan der Aktualisierung geändert: {0} um {1}.'
     'task.notify_failed'    = 'Die Benachrichtigung konnte nicht gestartet werden: {0}'
     'task.every_day'        = 'täglich'
+    'task.days_list'        = '{0}'
 }

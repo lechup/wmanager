@@ -6,4 +6,5 @@
     'task.schedule_changed' = 'Updateschema gewijzigd in: {0} {1}.'
     'task.notify_failed'    = 'Kan de melding niet starten: {0}'
     'task.every_day'        = 'elke dag'
+    'task.days_list'        = '{0}'
 }

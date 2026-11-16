@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Enter übernimmt den Wert in Klammern. Token und Schlüssel werden bei der Eingabe nicht angezeigt.'
     'init.invalid_answer'           = 'Ungültige Antwort.'
     'init.no_answer'                = 'Keine Antwort; der Assistent wurde abgebrochen.'
-    'init.answer_yes_no'            = 'Antworten Sie mit j oder n.'
     'init.warning'                  = 'Warnung: {0}'
 
     'init.file_exists'              = 'Diese Datei ist bereits vorhanden. Möchten Sie ihre Einstellungen ändern (n = mit der Beispieldatei beginnen)?'

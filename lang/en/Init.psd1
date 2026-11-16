@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Enter takes the value in brackets. Tokens and keys are not shown as you type.'
     'init.invalid_answer'           = 'Invalid answer.'
     'init.no_answer'                = 'No answer; the wizard stopped.'
-    'init.answer_yes_no'            = 'Answer y or n.'
     'init.warning'                  = 'Warning: {0}'
 
     'init.file_exists'              = 'This file already exists. Change its settings (n = start from the example file)?'

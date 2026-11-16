@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Pulsa Intro para aceptar el valor entre corchetes. Los tokens y las claves no se muestran mientras escribes.'
     'init.invalid_answer'           = 'Respuesta no válida.'
     'init.no_answer'                = 'Sin respuesta; el asistente se ha detenido.'
-    'init.answer_yes_no'            = 'Responde s o n.'
     'init.warning'                  = 'Advertencia: {0}'
 
     'init.file_exists'              = 'Este archivo ya existe. ¿Cambiar su configuración (n = empezar desde el archivo de ejemplo)?'

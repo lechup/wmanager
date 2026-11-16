@@ -40,4 +40,6 @@
     'common.loki_rejected'          = 'Loki a respins {0} (HTTP {1}), mutat în outbox\rejected: {2}'
     'common.loki_send_failed'       = 'Trimiterea către Loki a eșuat ({0}), se va reîncerca la următoarea rulare: {1}'
     'common.healthchecks_failed'    = 'Ping-ul Healthchecks ({0}) a eșuat: {1}'
+    'common.answer_yes_no'        = 'Răspundeți cu d sau n.'
+    'common.unknown_language'     = 'Limbă necunoscută ''{0}''; se folosește {1}. Disponibile: {2}.'
 }

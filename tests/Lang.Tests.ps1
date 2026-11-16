@@ -80,6 +80,29 @@ Describe 'Get-WmText' {
         Get-WmErrorText $plain | Should -Be 'plain'
     }
 
+    It 'shows the key instead of failing when a call gives fewer arguments than the text needs' {
+        Get-WmText 'test.reason' @() | Should -Be '[test.reason] '
+    }
+
+    It 'asks a yes/no question again after an answer it does not know, and takes Enter or the end of input as the default' {
+        $script:answers = [System.Collections.Queue]::new(@('perhaps', 'tak'))
+        Mock Read-Host { $script:answers.Dequeue() }
+        Mock Write-Host { }
+        Read-WmYesNo -Prompt 'Continue?' -Default $false | Should -BeTrue
+        Should -Invoke Read-Host -Times 2 -Exactly
+        $script:answers = [System.Collections.Queue]::new(@(''))
+        Read-WmYesNo -Prompt 'Continue?' -Default $true | Should -BeTrue
+        Mock Read-Host { $null }
+        Read-WmYesNo -Prompt 'Continue?' -Default $false | Should -BeFalse
+    }
+
+    It 'says when -Lang names a language it does not have' {
+        $out = Initialize-WmLanguage -Lang 'xx' -Root $fake 6>&1 | Out-String
+        $out | Should -BeLike '*common.unknown_language*xx*'
+        $quiet = Initialize-WmLanguage -Lang 'pl' -Root $fake 6>&1 | Out-String
+        $quiet | Should -BeNullOrEmpty
+    }
+
     It 'reads yes and no in the chosen language and in English' {
         ConvertFrom-WmYesNo 'T' | Should -BeTrue
         ConvertFrom-WmYesNo 'yes' | Should -BeTrue

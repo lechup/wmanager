@@ -40,4 +40,6 @@
     'common.loki_rejected'          = 'Loki heeft {0} geweigerd (HTTP {1}), verplaatst naar outbox\rejected: {2}'
     'common.loki_send_failed'       = 'Verzenden naar Loki is mislukt ({0}), nieuwe poging bij de volgende uitvoering: {1}'
     'common.healthchecks_failed'    = 'Healthchecks-ping ({0}) is mislukt: {1}'
+    'common.answer_yes_no'        = 'Antwoord met j of n.'
+    'common.unknown_language'     = 'Onbekende taal ''{0}''; {1} wordt gebruikt. Beschikbaar: {2}.'
 }

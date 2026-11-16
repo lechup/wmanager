@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Enter preia valoarea dintre paranteze. Tokenurile și cheile nu se afișează în timp ce tastați.'
     'init.invalid_answer'           = 'Răspuns nevalid.'
     'init.no_answer'                = 'Niciun răspuns; expertul s-a oprit.'
-    'init.answer_yes_no'            = 'Răspundeți cu d sau n.'
     'init.warning'                  = 'Avertisment: {0}'
 
     'init.file_exists'              = 'Acest fișier există deja. Modificați setările lui (n = începeți de la fișierul exemplu)?'

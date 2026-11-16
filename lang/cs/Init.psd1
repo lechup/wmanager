@@ -5,7 +5,6 @@
     'init.enter_default'            = 'Enter potvrdí hodnotu v závorkách. Tokeny a klíče se při psaní nezobrazují.'
     'init.invalid_answer'           = 'Neplatná odpověď.'
     'init.no_answer'                = 'Žádná odpověď; průvodce byl přerušen.'
-    'init.answer_yes_no'            = 'Odpovězte a nebo n.'
     'init.warning'                  = 'Upozornění: {0}'
 
     'init.file_exists'              = 'Tento soubor již existuje. Změnit jeho nastavení (n = začít z ukázkového souboru)?'

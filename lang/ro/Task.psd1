@@ -6,4 +6,5 @@
     'task.schedule_changed' = 'Programul actualizării a fost schimbat la: {0} {1}.'
     'task.notify_failed'    = 'Nu s-a putut porni notificarea: {0}'
     'task.every_day'        = 'în fiecare zi'
+    'task.days_list'        = '{0}'
 }
