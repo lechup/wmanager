@@ -394,7 +394,7 @@ tools/publish.sh $src
 | `power` | script | Screen-off and sleep times, plugged in and on battery; Fast Startup off, so "Shut down" is a real one and pending updates get their restart | 15 / never, 5 / 20 min; Fast Startup off |
 | `defender-hardening` | script | Microsoft Defender: potentially unwanted apps blocked, network protection (malicious sites), 14 attack surface reduction rules in **audit mode** (they only record what they would block: event 1122 in the Defender log); after a few weeks without surprises set `$AsrAction = 'Enabled'`. Changes nothing when another antivirus is active; fails when Defender doesn't keep a rule (e.g. a policy overrules it). | PUA, network protection, ASR action, the list of rules |
 | `network-hardening` | script | SMBv1 off (exit 3010 when that needs a restart), LLMNR and NetBIOS name guessing off (a common way to capture passwords in an office network), firewall on in every profile. NetBIOS off can stop very old devices (an old NAS) from being found by name; it is set per network adapter present when the script runs. | each of the four on or off |
-| `check-disk-space` | job, daily | One JSON line per local disk; **fails** when a disk is low | 15 GB, 5 % |
+| `check-disk-space` | job, daily | One JSON line per local disk; **fails** when a disk is low: less than both thresholds free | 15 GB and 10 % |
 | `check-updates` | job, daily | Last successful Windows Update installation, a restart pending for too long (pending and the computer up for that many days); **fails** when behind | 40 days, 7 days |
 | `check-defender` | job, daily | Real-time protection, signature age, last scan, threats found; **fails** on a problem; passes when another antivirus is registered and Defender is passive | 3 days, 14 days, 1 day |
 | `system-report` | job, daily | The daily report described under **Jobs** above (no thresholds) | none |
@@ -408,6 +408,8 @@ tools/publish.sh $src
 - **New revisions:** each library file starts with `# wmanager library: <name>, revision <n>`, kept in your copy.
   When a newer wmanager brings a newer revision, `check` and `library` say which copies are older; compare the two
   files, carry your settings over, and publish (the computers run the script again). `enable` doesn't overwrite a copy.
+- **One copy per computer:** `check` warns when a computer would get the same item from two of its groups (both
+  run, and the later one's settings win).
 
 ### Updating wmanager
 

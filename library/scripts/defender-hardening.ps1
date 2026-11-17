@@ -5,14 +5,15 @@
 # (ASR) rules stop typical attack paths: Office macros starting programs, scripts from e-mail, password theft from
 # LSASS, ransomware. In AuditMode they only record what they would have blocked (Event Viewer: Applications and
 # Services Logs > Microsoft > Windows > Windows Defender > Operational, event 1122); after a few weeks without
-# surprises set $AsrAction = 'Enabled'. When another antivirus is active, Defender's settings don't apply and the
-# script changes nothing. Removing the script doesn't undo the settings.
+# surprises set $AsrAction = 'Enabled'. (Defender's "warn" mode isn't offered: some of these rules don't support it.)
+# When another antivirus is active, or Defender is off, its settings don't apply and the script changes nothing.
+# Removing the script doesn't undo the settings.
 $ErrorActionPreference = 'Stop'
 
 # --- Settings -----------------------------------------------------------------------------------------------
 $PuaProtection     = 'Enabled'     # Enabled, AuditMode or Disabled: potentially unwanted apps (adware, bundles)
 $NetworkProtection = 'Enabled'     # Enabled, AuditMode or Disabled: connections to known malicious sites, any app
-$AsrAction         = 'AuditMode'   # AuditMode (only record), Warn (the user may go on), Enabled (block)
+$AsrAction         = 'AuditMode'   # AuditMode (only record) or Enabled (block)
 # Left out on purpose: "Block process creations from PSExec and WMI commands" (breaks management tools) and
 # "Block executable files unless they meet a prevalence, age or trusted list criterion" (blocks rare in-house tools).
 $AsrRules = [ordered]@{
@@ -36,12 +37,14 @@ $AsrRules = [ordered]@{
 foreach ($v in @($PuaProtection, $NetworkProtection)) {
     if (@('Enabled', 'AuditMode', 'Disabled') -notcontains $v) { throw "PuaProtection and NetworkProtection: Enabled, AuditMode or Disabled, not '$v'" }
 }
-$asrCode = @{ Enabled = 1; AuditMode = 2; Warn = 6 }
-if (-not $asrCode.ContainsKey($AsrAction)) { throw "AsrAction: AuditMode, Warn or Enabled, not '$AsrAction'" }
+$asrCode = @{ Enabled = 1; AuditMode = 2 }
+if (-not $asrCode.ContainsKey($AsrAction)) { throw "AsrAction: AuditMode or Enabled, not '$AsrAction'" }
 
-$status = Get-MpComputerStatus
-if ([string]$status.AMRunningMode -ne 'Normal') {
-    Write-Output "Microsoft Defender is not the active antivirus (mode: $($status.AMRunningMode)); nothing changed."
+# Some antivirus products turn the Defender service off altogether; then this fails instead of reporting a mode
+$mode = 'not running'
+try { $mode = [string](Get-MpComputerStatus).AMRunningMode } catch { }
+if ($mode -ne 'Normal') {
+    Write-Output "Microsoft Defender is not the active antivirus (mode: $mode); nothing changed."
     exit 0
 }
 

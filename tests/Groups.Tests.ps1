@@ -316,7 +316,7 @@ Describe 'new-script and new-job' {
         Set-Text (Get-Path $src 'groups/accounting/scripts/90-last.ps1') "exit 0`r`n" -Bom
         $r = Invoke-Tool $src new-script accounting more
         $r.Code | Should -Be 1
-        $r.Text | Should -Match 'give the number yourself'
+        $r.Text | Should -Match 'renumber them to make room'
     }
 
     It 'creates a job in the folder of its schedule, with the Loki label the computer gives it' {
@@ -478,6 +478,29 @@ Describe 'library and enable' {
         $r = Invoke-Tool $src check
         $r.Code | Should -Be 0
         $r.Text | Should -Match 'groups/all/scripts/20-power\.ps1 is power revision 0; the library has revision 1'
+    }
+
+    It 'warns when a computer gets the same item from two of its groups' {
+        $src = New-Source
+        (Invoke-Tool $src enable power all).Code | Should -Be 0
+        (Invoke-Tool $src enable power accounting).Code | Should -Be 0
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'a computer in groups all, accounting runs power twice'
+        ([regex]::Matches($r.Text, 'runs power twice')).Count | Should -Be 1   # once, not per computer
+    }
+
+    It 'names every library file after its header, once' {
+        $names = @{}
+        foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $script:root 'library') -Recurse -Filter '*.ps1')) {
+            $first = ([IO.File]::ReadAllLines($f.FullName)[0]).TrimStart([char]0xFEFF)
+            $first | Should -Match '^# wmanager library: ([A-Za-z0-9._-]+), revision [0-9]+$'
+            $null = $first -match '^# wmanager library: ([A-Za-z0-9._-]+),'
+            $Matches[1] | Should -Be $f.BaseName
+            $names.ContainsKey($f.BaseName) | Should -BeFalse
+            $names[$f.BaseName] = $true
+        }
+        $names.Count | Should -Be 8
     }
 
     It 'keeps the example system report the same as the library''s' {

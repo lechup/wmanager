@@ -9,16 +9,18 @@
 $ErrorActionPreference = 'Stop'
 
 # --- Settings -----------------------------------------------------------------------------------------------
-$MinFreeGb      = 15   # a disk is low below this many GB free...
-$MinFreePercent = 5    # ...or below this share of its size
+$MinFreeGb      = 15   # a disk is low when it has less than this many GB free...
+$MinFreePercent = 10   # ...and less than this share of its size (so a small disk isn't low just for its size)
 # ------------------------------------------------------------------------------------------------------------
 
 $low = @()
 foreach ($d in @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3')) {
     if (-not $d.Size) { continue }
-    $gb = [math]::Round([double]$d.FreeSpace / 1GB, 1)
-    $pct = [math]::Round(100 * [double]$d.FreeSpace / [double]$d.Size)
-    $ok = ($gb -ge $MinFreeGb -and $pct -ge $MinFreePercent)
+    $freeGb = [double]$d.FreeSpace / 1GB
+    $freePct = 100 * [double]$d.FreeSpace / [double]$d.Size
+    $ok = -not ($freeGb -lt $MinFreeGb -and $freePct -lt $MinFreePercent)   # the exact values, rounded only for the output
+    $gb = [math]::Round($freeGb, 1)
+    $pct = [math]::Round($freePct)
     if (-not $ok) { $low += $d.DeviceID }
     [pscustomobject][ordered]@{
         kind = 'check'; check = 'disk_space'; ok = $ok; drive = $d.DeviceID

@@ -489,7 +489,27 @@ function Invoke-Check {
     }
     # Copies of library items with a newer revision in the library
     $library = @(Get-LibraryItems)
-    foreach ($c in @(Get-LibraryCopies $Files)) {
+    $copies = @(Get-LibraryCopies $Files)
+    # The same library item reaching one computer from two groups: both run, the later one's settings win
+    if ($null -ne $map -and $copies.Count -gt 0) {
+        $byPath = @{}
+        foreach ($c in $copies) { $byPath[$c.Path] = $c.Name }
+        $computers = @()
+        if ($map.Computers -is [hashtable]) { $computers = @($map.Computers.Keys | ForEach-Object { [string]$_ } | Sort-Object) }
+        $seen = @{}
+        foreach ($c in (@($computers) + '*')) {
+            $v = Get-ComputerView -Files $Files -Map $map -Lists @{ '' = @() } -Computer $c
+            $paths = @(@($v.Scripts) + @($v.Jobs) | ForEach-Object { $_.Path } | Where-Object { $byPath.ContainsKey($_) })
+            foreach ($name in @($paths | ForEach-Object { $byPath[$_] } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })) {
+                $twice = @($paths | Where-Object { $byPath[$_] -eq $name })
+                $key = $twice -join ' '
+                if ($seen.ContainsKey($key)) { continue }
+                $seen[$key] = $true
+                Write-Problem warning "a computer in groups $($v.Groups -join ', ') runs $name twice ($($twice -join ', ')): the later one's settings win; keep one"
+            }
+        }
+    }
+    foreach ($c in $copies) {
         $item = @($library | Where-Object { $_.Name -ieq $c.Name }) | Select-Object -First 1
         if ($item -and $item.Revision -gt $c.Revision) {
             Write-Problem warning "$($c.Path) is $($c.Name) revision $($c.Revision); the library has revision $($item.Revision) ($($item.Rel)): compare them and carry your settings over"
@@ -775,7 +795,7 @@ function Get-NumberedName {
     }
     $next = [int]([Math]::Floor($last / 10) * 10 + 10)
     # A third digit would sort 100-x before 20-y (ordinal name order)
-    if ($next -gt 99) { throw "the scripts of $Group already reach $last; give the number yourself (e.g. 95-$Base) or renumber them" }
+    if ($next -gt 99) { throw "the scripts of $Group already reach ${last}: renumber them to make room (new-script also takes a number, e.g. 95-$Base)" }
     return ('{0:D2}-{1}' -f $next, $Base)
 }
 

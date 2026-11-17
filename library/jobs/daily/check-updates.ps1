@@ -25,7 +25,8 @@ $history = @()
 if ($count -gt 0) { $history = @($searcher.QueryHistory(0, [Math]::Min($count, 300))) }
 $installs = @($history | Where-Object { $_.Operation -eq 1 -and $_.Title -notmatch 'KB2267602|KB4052623|KB915597' })
 $ok = @($installs | Where-Object { $_.ResultCode -eq 2 -or $_.ResultCode -eq 3 } | Sort-Object Date -Descending)
-$failed = @($installs | Where-Object { ($_.ResultCode -eq 4 -or $_.ResultCode -eq 5) -and $_.Date -gt $now.AddDays(-30) })
+# The history's dates are UTC
+$failed = @($installs | Where-Object { ($_.ResultCode -eq 4 -or $_.ResultCode -eq 5) -and $_.Date.ToLocalTime() -gt $now.AddDays(-30) })
 $os = Get-CimInstance Win32_OperatingSystem
 $last = $null
 if ($ok.Count -gt 0) { $last = $ok[0].Date.ToLocalTime() }

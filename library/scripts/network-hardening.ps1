@@ -26,7 +26,8 @@ function Set-Dword {
 $restart = $false
 $done = @()
 if ($DisableSmb1) {
-    $f = Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol
+    $f = $null
+    try { $f = Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol } catch { }   # unknown in some images
     if ($f -and ([string]$f.State -eq 'Enabled' -or [string]$f.State -eq 'EnablePending')) {
         $r = Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
         if ($r.RestartNeeded) { $restart = $true }
