@@ -46,6 +46,33 @@ BeforeAll {
         param([string]$Text)
         return (($Text -replace "`r`n", '') -notmatch "[`r`n]")
     }
+
+    # A release ZIP laid out like tools/build-release.sh makes it (wmanager/<file>); returns its path
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    function New-Release {
+        param([string]$Version, [switch]$NoSelfInstall, [string]$Inside = $Version)
+        $path = Join-Path $TestDrive ("wmanager-$Version-" + [guid]::NewGuid().ToString('N') + '.zip')
+        $update = 'param([switch]$OnlyIfPending, [switch]$SelfInstall, [string]$Lang)'
+        if ($NoSelfInstall) { $update = 'param([switch]$OnlyIfPending, [string]$Lang)' }
+        $fs = [IO.File]::Open($path, [IO.FileMode]::Create)
+        try {
+            $zip = New-Object IO.Compression.ZipArchive($fs, [IO.Compression.ZipArchiveMode]::Create)
+            foreach ($e in @(@('wmanager/VERSION', $Inside), @('wmanager/Update-Packages.ps1', $update))) {
+                $w = New-Object IO.StreamWriter($zip.CreateEntry($e[0]).Open())
+                $w.Write($e[1])
+                $w.Dispose()
+            }
+            $zip.Dispose()
+        } finally {
+            $fs.Dispose()
+        }
+        return $path
+    }
+
+    function Get-Sha256 {
+        param([string]$Path)
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    }
 }
 
 Describe 'show' {
@@ -306,5 +333,94 @@ Describe 'new-script and new-job' {
         $text | Should -Match ([regex]::Escape('task="all/cleanup"'))
         (Invoke-Tool $src new-job all monthly cleanup).Code | Should -Be 1
         (Invoke-Tool $src check).Code | Should -Be 0
+    }
+}
+
+# The tests give -Url as a path and -Zip as the file, so they don't go to GitHub
+Describe 'set-version and unset-version' {
+    It 'writes version.psd1 for every computer and for a group, and show and check read it' {
+        $src = New-Source
+        $zip2 = New-Release 'v0.2.0'
+        $r = Invoke-Tool $src set-version v0.2.0 -Url 'C:\rel\wmanager-v0.2.0.zip' -Zip $zip2
+        $r.Code | Should -Be 0
+        $path = Get-Path $src 'version.psd1'
+        Test-Bom $path | Should -BeTrue
+        $text = Read-Text $path
+        Test-OnlyCrLf $text | Should -BeTrue
+        $text | Should -Match ([regex]::Escape("Version = 'v0.2.0'"))
+        $text | Should -Match ([regex]::Escape("Url     = 'C:\rel\wmanager-v0.2.0.zip'"))
+        $text | Should -Match ([regex]::Escape("Sha256  = '$(Get-Sha256 $zip2)'"))
+
+        $zip3 = New-Release 'v0.3.0-rc1'
+        $r = Invoke-Tool $src set-version v0.3.0-rc1 pilot -Url 'https://files.example.com/wmanager-v0.3.0-rc1.zip' -Zip $zip3
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'no computer is in group pilot yet'
+        (Invoke-Tool $src add-computer OFFICE-07 pilot).Code | Should -Be 0
+
+        $r = Invoke-Tool $src show
+        $r.Text | Should -Match 'wmanager version: v0\.2\.0 on every computer; v0\.3\.0-rc1 in group pilot'
+        $r.Text | Should -Match 'pilot\s+1 computer.*only its own wmanager version'
+        (Invoke-Tool $src show OFFICE-07).Text | Should -Match 'wmanager: v0\.3\.0-rc1 \(group pilot\)'
+        (Invoke-Tool $src show OFFICE-01).Text | Should -Match 'wmanager: v0\.2\.0'
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Not -Match 'pilot'   # a group only for its version needs no folder
+
+        # A new version for the same group replaces its entry
+        $zip4 = New-Release 'v0.4.0'
+        (Invoke-Tool $src set-version v0.4.0 PILOT -Url 'C:\rel\wmanager-v0.4.0.zip' -Zip $zip4).Code | Should -Be 0
+        $text = Read-Text $path
+        $text | Should -Not -Match 'v0\.3\.0-rc1'
+        ([regex]::Matches($text, 'Version = ')).Count | Should -Be 2
+    }
+
+    It 'refuses a release that cannot install itself, another version in the ZIP, a bad name or address, and changes nothing' {
+        $src = New-Source
+        (Invoke-Tool $src set-version v0.2.0 -Url 'C:\rel\a.zip' -Zip (New-Release 'v0.2.0')).Code | Should -Be 0
+        $before = Read-Text (Get-Path $src 'version.psd1')
+
+        $r = Invoke-Tool $src set-version v0.1.0 -Url 'C:\rel\b.zip' -Zip (New-Release 'v0.1.0' -NoSelfInstall)
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match "can't install itself"
+        $r = Invoke-Tool $src set-version v0.3.0 -Url 'C:\rel\c.zip' -Zip (New-Release 'v0.3.0' -Inside 'v0.2.9')
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'the ZIP holds wmanager v0\.2\.9, not v0\.3\.0'
+        (Invoke-Tool $src set-version 0.3 -Url 'C:\rel\d.zip' -Zip (New-Release 'v0.3.0')).Code | Should -Be 1
+        $r = Invoke-Tool $src set-version v0.3.0 -Url 'http://files.example.com/w.zip' -Zip (New-Release 'v0.3.0')
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'https:// address or a path'
+        (Invoke-Tool $src set-version v0.3.0 'bad group' -Url 'C:\rel\e.zip' -Zip (New-Release 'v0.3.0')).Code | Should -Be 1
+        (Invoke-Tool $src set-version v0.3.0 -Url 'C:\rel\f.zip' -Zip (Join-Path $TestDrive 'missing.zip')).Code | Should -Be 1
+
+        Read-Text (Get-Path $src 'version.psd1') | Should -Be $before
+    }
+
+    It 'drops a group''s version, then the version for every computer, and deletes the empty file' {
+        $src = New-Source
+        (Invoke-Tool $src set-version v0.2.0 -Url 'C:\rel\a.zip' -Zip (New-Release 'v0.2.0')).Code | Should -Be 0
+        (Invoke-Tool $src set-version v0.3.0 pilot -Url 'C:\rel\b.zip' -Zip (New-Release 'v0.3.0')).Code | Should -Be 0
+        (Invoke-Tool $src unset-version Pilot).Code | Should -Be 0
+        Read-Text (Get-Path $src 'version.psd1') | Should -Not -Match 'pilot'
+        (Invoke-Tool $src unset-version pilot).Code | Should -Be 1
+        $r = Invoke-Tool $src unset-version
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'Deleted version\.psd1'
+        Test-Path -LiteralPath (Get-Path $src 'version.psd1') | Should -BeFalse
+        (Invoke-Tool $src unset-version).Code | Should -Be 1
+        (Invoke-Tool $src show).Text | Should -Match 'wmanager version: not set'
+    }
+
+    It 'fails the check on a version.psd1 the computers would reject, and warns about a group no computer is in' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'version.psd1') "@{ Version = 'v0.2.0'; Url = 'C:\rel\a.zip'; Sha256 = 'abc' }`r`n"
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'version\.psd1: Sha256 is not a SHA256'
+        (Invoke-Tool $src set-version v0.2.0 -Url 'C:\rel\a.zip' -Zip (New-Release 'v0.2.0')).Text | Should -Match 'fix or delete version\.psd1 first'
+
+        Set-Text (Get-Path $src 'version.psd1') "@{ Groups = @{ nobody = @{ Version = 'v0.2.0'; Url = 'C:\rel\a.zip'; Sha256 = '$('a' * 64)' } } }`r`n"
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'version\.psd1: no computer is in group nobody'
     }
 }

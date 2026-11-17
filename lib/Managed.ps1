@@ -4,6 +4,7 @@
 #   manifest.psd1                          generated and signed by tools/publish.sh (Authenticode)
 #   source-id.txt                          identifier of this source (created by tools/publish.sh)
 #   groups.psd1                            computer name -> groups
+#   version.psd1                           the wmanager version the computers run (optional; lib\SelfUpdate.ps1)
 #   choco-reqs.txt                         the common package list
 #   groups/<group>/choco-reqs.txt          extra packages for the group (optional)
 #   groups/<group>/scripts/*.ps1           run as SYSTEM (hourly task and scheduled update), again whenever their content changes
@@ -227,6 +228,12 @@ function Read-WmManagedSnapshot {
         catch { throw (New-WmError 'managed.file_error' @('groups.psd1', (Get-WmErrorText $_))) }
         Assert-WmGroupMap $map
     }
+    $versions = $null
+    if ($Manifest.Files.ContainsKey('version.psd1')) {
+        try { $data = Import-PowerShellDataFile -LiteralPath (Join-Path $Dir 'version.psd1') }
+        catch { throw (New-WmError 'managed.file_error' @('version.psd1', (Get-WmErrorText $_))) }
+        $versions = ConvertFrom-WmVersionData $data   # its messages name the file
+    }
     $lists = @{}   # '' = the common list, otherwise the group name
     foreach ($path in @($Manifest.Files.Keys)) {
         $group = Get-WmListOwner $path
@@ -236,7 +243,7 @@ function Read-WmManagedSnapshot {
         try { $lists[$group] = ConvertFrom-WmRequirements -Text $text }
         catch { throw (New-WmError 'managed.file_error' @($path, (Get-WmErrorText $_))) }
     }
-    return [pscustomobject]@{ Map = $map; Lists = $lists }
+    return [pscustomobject]@{ Map = $map; Lists = $lists; Versions = $versions }
 }
 
 # Copies replaced by a newer version. They are deleted at once, but a file kept open (e.g. by a program a
@@ -366,13 +373,15 @@ function Resolve-WmManagedContent {
     else { Write-WmManagedNote -Key 'managed.computer_no_groups' -Arguments @($script:WmHostName) }
 
     # The same resolution as tools/groups.ps1 show/check (lib\Groups.ps1)
-    $content = Resolve-WmComputerContent -Map $snap.Map -Lists $snap.Lists -Files $manifest.Files -ComputerName $script:WmHostName
+    $content = Resolve-WmComputerContent -Map $snap.Map -Lists $snap.Lists -Files $manifest.Files -ComputerName $script:WmHostName `
+                                         -Versions $snap.Versions
     return [pscustomobject]@{
         Serial       = $manifest.Serial
         Groups       = $content.Groups
         Requirements = $content.Requirements
         Scripts      = $content.Scripts
         Jobs         = $content.Jobs
+        Wmanager     = $content.Wmanager
     }
 }
 

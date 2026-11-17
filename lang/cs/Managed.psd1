@@ -67,4 +67,12 @@
     'managed.job_timeout'                = 'Úkol {0}: vypršel časový limit ({1} min), zastaven.'
     'managed.job_exit_code'              = 'Úkol {0}: skončil s ukončovacím kódem {1}.'
     'managed.job_done'                   = 'Úkol {0}: hotovo.'
+    # version.psd1 ({0}: the entry, e.g. Groups.test.Url; {1}: its value)
+    'managed.version_unknown_key'      = 'version.psd1: neznámý klíč ''{0}'' (povoleno: Version, Url, Sha256, Groups)'
+    'managed.version_missing'          = 'version.psd1: chybí {0} (verze potřebuje Version, Url a Sha256)'
+    'managed.version_bad_tag'          = 'version.psd1: {0} není verze wmanager jako v0.2.0: {1}'
+    'managed.version_bad_url'          = 'version.psd1: {0} musí být adresa https:// nebo cesta (C:\..., \\server\sdílení\...): {1}'
+    'managed.version_bad_hash'         = 'version.psd1: {0} není SHA256 (64 šestnáctkových číslic)'
+    'managed.version_bad_group'        = 'version.psd1: neplatný název skupiny v Groups: ''{0}'''
+    'managed.version_groups_not_table' = 'version.psd1: Groups musí každé skupině dát vlastní Version, Url a Sha256'
 }

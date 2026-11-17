@@ -67,6 +67,62 @@ Describe 'Assert-WmGroupMap' {
     }
 }
 
+Describe 'ConvertFrom-WmVersionData and Get-WmWantedVersion' {
+    BeforeAll {
+        $e = @{ Version = 'v0.2.0'; Url = 'https://example.com/wmanager-v0.2.0.zip'; Sha256 = ('a' * 64) }
+    }
+
+    It 'reads the version for every computer and for groups' {
+        $v = ConvertFrom-WmVersionData @{ Version = 'v0.2.0'; Url = $e.Url; Sha256 = $e.Sha256
+                                          Groups = @{ test = @{ Version = 'v0.3.0-rc1'; Url = '\\srv\share\wmanager-v0.3.0-rc1.zip'; Sha256 = ('b' * 64) } } }
+        $v.Default.Version | Should -Be 'v0.2.0'
+        $v.Default.Sha256 | Should -Be ('A' * 64)
+        $v.Groups['TEST'].Url | Should -Be '\\srv\share\wmanager-v0.3.0-rc1.zip'
+        (ConvertFrom-WmVersionData @{ Groups = @{ test = $e } }).Default | Should -BeNullOrEmpty
+        (ConvertFrom-WmVersionData @{ Version = 'v1.0.0'; Url = 'C:\rel\wmanager-v1.0.0.zip'; Sha256 = $e.Sha256 }).Default.Url | Should -Be 'C:\rel\wmanager-v1.0.0.zip'
+    }
+
+    It 'rejects what a computer could not use' {
+        { ConvertFrom-WmVersionData @{ Version = 'v0.2.0' } } | Should -Throw 'version.psd1: Url is missing*'
+        { ConvertFrom-WmVersionData @{ Version = '0.2.0'; Url = $e.Url; Sha256 = $e.Sha256 } } | Should -Throw '*Version is not a wmanager release*'
+        { ConvertFrom-WmVersionData @{ Version = 'v0.2.0'; Url = 'http://example.com/x.zip'; Sha256 = $e.Sha256 } } | Should -Throw '*Url must be an https:// address*'
+        { ConvertFrom-WmVersionData @{ Version = 'v0.2.0'; Url = 'wmanager.zip'; Sha256 = $e.Sha256 } } | Should -Throw '*Url must be*'
+        { ConvertFrom-WmVersionData @{ Version = 'v0.2.0'; Url = $e.Url; Sha256 = 'abc' } } | Should -Throw '*Sha256 is not a SHA256*'
+        { ConvertFrom-WmVersionData @{ Versoin = 'v0.2.0' } } | Should -Throw "*unknown key 'Versoin'*"
+        { ConvertFrom-WmVersionData @{ Groups = @{ test = @{ Version = 'v0.2.0'; Url = $e.Url } } } } | Should -Throw '*Groups.test.Sha256 is missing*'
+        { ConvertFrom-WmVersionData @{ Groups = @{ '../x' = $e } } } | Should -Throw '*invalid group name*'
+        { ConvertFrom-WmVersionData @{ Groups = @('test') } } | Should -Throw '*Groups must*'
+    }
+
+    It 'gives a computer the version of its first group that has one, otherwise the default' {
+        $v = ConvertFrom-WmVersionData @{ Version = 'v0.2.0'; Url = $e.Url; Sha256 = $e.Sha256
+                                          Groups = @{ test  = @{ Version = 'v0.3.0'; Url = $e.Url; Sha256 = $e.Sha256 }
+                                                      pilot = @{ Version = 'v0.4.0'; Url = $e.Url; Sha256 = $e.Sha256 } } }
+        $w = Get-WmWantedVersion -Versions $v -Groups @('all', 'accounting')
+        $w.Version | Should -Be 'v0.2.0'
+        $w.Group | Should -Be ''
+        $w = Get-WmWantedVersion -Versions $v -Groups @('all', 'PILOT', 'test')
+        $w.Version | Should -Be 'v0.4.0'
+        $w.Group | Should -Be 'pilot'
+        Get-WmWantedVersion -Versions $null -Groups @('all') | Should -BeNullOrEmpty
+        Get-WmWantedVersion -Versions (ConvertFrom-WmVersionData @{ Groups = @{ test = $e } }) -Groups @('all') | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Resolve-WmComputerContent' {
+    It 'names the wmanager version, and a group that exists only for its version is no warning' {
+        $script:WmLogBuffer.Clear()
+        $v = ConvertFrom-WmVersionData @{ Groups = @{ pilot = @{ Version = 'v0.3.0'; Url = 'C:\rel\w.zip'; Sha256 = ('d' * 64) } } }
+        $c = Resolve-WmComputerContent -Map @{ Computers = @{ 'PC-1' = @('pilot', 'ghost') } } -Lists @{ '' = @() } `
+                                       -Files @{ 'choco-reqs.txt' = $hashA } -ComputerName 'pc-1' -Versions $v
+        $c.Wmanager.Version | Should -Be 'v0.3.0'
+        $c.Wmanager.Group | Should -Be 'pilot'
+        $warn = @($script:WmLogBuffer | Where-Object { $_.Level -eq 'warn' } | ForEach-Object { $_.Line }) -join "`n"
+        $warn | Should -Match 'Group ghost has no files'
+        $warn | Should -Not -Match 'Group pilot'
+    }
+}
+
 Describe 'Get-WmComputerGroups' {
     BeforeAll {
         $map = @{ Default = @('all'); Computers = @{ 'OFFICE-01' = @('accounting', 'ALL') } }
@@ -159,6 +215,27 @@ Describe 'Read-WmManagedSnapshot' {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $dir 'choco-reqs.txt') -Value 'vlc !cos' -Encoding UTF8
         { Read-WmManagedSnapshot -Dir $dir -Manifest ([pscustomobject]@{ Files = @{ 'choco-reqs.txt' = $hashA } }) } | Should -Throw
+    }
+}
+
+Describe 'Read-WmManagedSnapshot with version.psd1' {
+    It 'reads the version and rejects an invalid one' {
+        $dir = Join-Path $TestDrive 'ver'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $file = Join-Path $dir 'version.psd1'
+        $manifest = [pscustomobject]@{ Files = @{ 'version.psd1' = $hashA } }
+        Set-Content -LiteralPath $file -Value "@{ Version = 'v0.2.0'; Url = 'C:\rel\wmanager-v0.2.0.zip'; Sha256 = '$('c' * 64)' }" -Encoding UTF8
+        (Read-WmManagedSnapshot -Dir $dir -Manifest $manifest).Versions.Default.Version | Should -Be 'v0.2.0'
+        Set-Content -LiteralPath $file -Value "@{ Version = 'v0.2.0' }" -Encoding UTF8
+        { Read-WmManagedSnapshot -Dir $dir -Manifest $manifest } | Should -Throw 'version.psd1: Url is missing*'
+        Set-Content -LiteralPath $file -Value "@{ Version = (Get-Date) }" -Encoding UTF8
+        { Read-WmManagedSnapshot -Dir $dir -Manifest $manifest } | Should -Throw 'version.psd1: *'
+    }
+
+    It 'has no version without the file' {
+        $dir = Join-Path $TestDrive 'nover'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        (Read-WmManagedSnapshot -Dir $dir -Manifest ([pscustomobject]@{ Files = @{} })).Versions | Should -BeNullOrEmpty
     }
 }
 

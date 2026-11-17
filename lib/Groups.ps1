@@ -1,5 +1,5 @@
 ﻿# Content of a management source without system dependencies: paths, the group map, package lists and how they
-# combine, the scripts and jobs of a computer's groups, computer names. Platform-neutral: lib\Managed.ps1 and
+# combine, the scripts and jobs of a computer's groups, the wmanager version (version.psd1), computer names. Platform-neutral: lib\Managed.ps1 and
 # lib\Choco.ps1 load it on the computers, tools/groups.ps1 on the administrator's machine (also Linux), so both
 # read a source the same way. Needs lib\Lang.ps1 (New-WmError). Merge-WmRequirements reports through
 # Write-WmManagedNote and Write-WmManagedWarning, which the caller defines.
@@ -150,17 +150,112 @@ function Get-WmListOwner {
     return $null
 }
 
-# What a computer gets from a source: its groups, the common list and its groups' lists merged, and the scripts and
-# jobs of its groups. $Files: the paths of the source (the manifest's Files); $Lists: '' = the common list, otherwise
-# group -> its parsed list. A group without files is reported (Write-WmManagedWarning) and skipped.
+# ---------------------------------------------------------------------------
+# version.psd1: the wmanager version the computers of the source run (tools/groups.ps1 set-version writes it)
+#   @{ Version = 'v0.2.0'; Url = 'https://.../wmanager-v0.2.0.zip'; Sha256 = '<64 hex>'
+#      Groups  = @{ 'test' = @{ Version = ...; Url = ...; Sha256 = ... } } }
+# Both parts are optional; a version always comes with the address of its release ZIP and the ZIP's SHA256.
+# ---------------------------------------------------------------------------
+
+# A release tag: v1.2.3, optionally with a suffix (v1.2.3-rc1)
+function Test-WmReleaseTag {
+    param([AllowEmptyString()][string]$Tag)
+    return ($Tag.Length -le 64 -and $Tag -match '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$')
+}
+
+# Where the computers fetch a release ZIP: an https:// address or a path (C:\..., \\server\share\...)
+function Test-WmReleaseUrl {
+    param([AllowEmptyString()][string]$Url)
+    return ($Url -match '^https://[^\s]+$' -or $Url -match '^[A-Za-z]:\\[^\r\n]+$' -or $Url -match '^\\\\[^\\\s]+\\[^\r\n]+$')
+}
+
+# One version entry ($Prefix names it in errors: '' or 'Groups.<group>.')
+function ConvertFrom-WmVersionEntry {
+    param([Parameter(Mandatory = $true)][hashtable]$Data, [string]$Prefix = '')
+    foreach ($k in $Data.Keys) {
+        if (@('Version', 'Url', 'Sha256') -notcontains $k) { throw (New-WmError 'managed.version_unknown_key' @("$Prefix$k")) }
+    }
+    foreach ($k in @('Version', 'Url', 'Sha256')) {
+        if (-not $Data.ContainsKey($k) -or -not [string]$Data[$k]) { throw (New-WmError 'managed.version_missing' @("$Prefix$k")) }
+    }
+    $version = [string]$Data.Version
+    $url = [string]$Data.Url
+    $sha = [string]$Data.Sha256
+    if (-not (Test-WmReleaseTag $version)) { throw (New-WmError 'managed.version_bad_tag' @("${Prefix}Version", $version)) }
+    if (-not (Test-WmReleaseUrl $url)) { throw (New-WmError 'managed.version_bad_url' @("${Prefix}Url", $url)) }
+    if ($sha -notmatch '^[0-9A-Fa-f]{64}$') { throw (New-WmError 'managed.version_bad_hash' @("${Prefix}Sha256")) }
+    return [pscustomobject]@{ Version = $version; Url = $url; Sha256 = $sha.ToUpperInvariant() }
+}
+
+# The data of version.psd1, checked. Returns Default (the entry for every computer, or $null) and Groups
+# (group -> entry, names compared without regard to case). Throws when invalid.
+function ConvertFrom-WmVersionData {
+    param([Parameter(Mandatory = $true)][hashtable]$Data)
+    $own = @{}
+    foreach ($k in $Data.Keys) {
+        if ($k -eq 'Groups') { continue }
+        if (@('Version', 'Url', 'Sha256') -notcontains $k) { throw (New-WmError 'managed.version_unknown_key' @($k)) }
+        $own[$k] = $Data[$k]
+    }
+    $default = $null
+    if ($own.Count -gt 0) { $default = ConvertFrom-WmVersionEntry -Data $own }
+    $groups = @{}
+    if ($null -ne $Data.Groups) {
+        if (-not ($Data.Groups -is [hashtable])) { throw (New-WmError 'managed.version_groups_not_table') }
+        foreach ($g in $Data.Groups.Keys) {
+            $name = [string]$g
+            if (-not (Test-WmGroupName $name)) { throw (New-WmError 'managed.version_bad_group' @($name)) }
+            if (-not ($Data.Groups[$g] -is [hashtable])) { throw (New-WmError 'managed.version_groups_not_table') }
+            $groups[$name] = ConvertFrom-WmVersionEntry -Data $Data.Groups[$g] -Prefix "Groups.$name."
+        }
+    }
+    return [pscustomobject]@{ Default = $default; Groups = $groups }
+}
+
+# The version for a computer in these groups: the entry of its first group that has one, otherwise the default.
+# Returns Version, Url, Sha256 and Group ('' = the default), or $null when the source names none for it.
+function Get-WmWantedVersion {
+    param($Versions, [string[]]$Groups = @())
+    if ($null -eq $Versions) { return $null }
+    foreach ($g in $Groups) {
+        foreach ($k in @($Versions.Groups.Keys)) {
+            if ($k -ieq $g) {
+                $e = $Versions.Groups[$k]
+                return [pscustomobject]@{ Version = $e.Version; Url = $e.Url; Sha256 = $e.Sha256; Group = $k }
+            }
+        }
+    }
+    if ($Versions.Default) {
+        $e = $Versions.Default
+        return [pscustomobject]@{ Version = $e.Version; Url = $e.Url; Sha256 = $e.Sha256; Group = '' }
+    }
+    return $null
+}
+
+# Does version.psd1 give this group a version of its own? (Such a group needs no folder.)
+function Test-WmGroupHasVersion {
+    param($Versions, [string]$Group)
+    if ($null -eq $Versions) { return $false }
+    return [bool](@($Versions.Groups.Keys) | Where-Object { $_ -ieq $Group })
+}
+
+# What a computer gets from a source: its groups, the common list and its groups' lists merged, the scripts and
+# jobs of its groups, and the wmanager version it should run (Wmanager, see Get-WmWantedVersion). $Files: the paths
+# of the source (the manifest's Files); $Lists: '' = the common list, otherwise group -> its parsed list; $Versions:
+# ConvertFrom-WmVersionData of version.psd1, or $null. A group without files is reported (Write-WmManagedWarning)
+# and skipped, unless version.psd1 gives it a version: a group may exist only for that.
 function Resolve-WmComputerContent {
     param([Parameter(Mandatory = $true)][hashtable]$Map, [Parameter(Mandatory = $true)][hashtable]$Lists,
-          [Parameter(Mandatory = $true)][hashtable]$Files, [Parameter(Mandatory = $true)][string]$ComputerName)
+          [Parameter(Mandatory = $true)][hashtable]$Files, [Parameter(Mandatory = $true)][string]$ComputerName,
+          $Versions = $null)
     $groups = Get-WmComputerGroups -Map $Map -ComputerName $ComputerName
     $toMerge = @([pscustomobject]@{ Label = (New-WmText 'managed.common_list'); IsGroup = $false; Items = @($Lists['']) })
     foreach ($g in $groups) {
         $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
-        if (-not $hasFiles) { Write-WmManagedWarning -Key 'managed.group_no_files' -Arguments @($g); continue }
+        if (-not $hasFiles) {
+            if (-not (Test-WmGroupHasVersion $Versions $g)) { Write-WmManagedWarning -Key 'managed.group_no_files' -Arguments @($g) }
+            continue
+        }
         if ($Lists.ContainsKey($g)) { $toMerge += [pscustomobject]@{ Label = $g; IsGroup = $true; Items = @($Lists[$g]) } }
     }
     return [pscustomobject]@{
@@ -168,6 +263,7 @@ function Resolve-WmComputerContent {
         Requirements = (Merge-WmRequirements -Lists $toMerge)
         Scripts      = (Get-WmGroupScripts -Files $Files -Groups $groups)
         Jobs         = (Get-WmGroupJobs -Files $Files -Groups $groups)
+        Wmanager     = (Get-WmWantedVersion -Versions $Versions -Groups $groups)
     }
 }
 

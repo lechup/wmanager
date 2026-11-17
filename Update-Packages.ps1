@@ -1,7 +1,11 @@
 ﻿# Scheduled package update, debloat and group scripts (wmanager-Update task, SYSTEM account, every day by default).
 # With -OnlyIfPending (wmanager-Retry task at sign-in): runs only when something was deferred.
+# When the management source names another wmanager version (version.psd1), a full run first switches to it
+# (lib\SelfUpdate.ps1): it unpacks that release and hands over to its Update-Packages.ps1 -SelfInstall, which
+# copies the new version into the installed folder and does the run. Keep -SelfInstall in every later version:
+# the version before it calls it.
 [CmdletBinding()]
-param([switch]$OnlyIfPending, [string]$Lang)
+param([switch]$OnlyIfPending, [switch]$SelfInstall, [string]$Lang)
 
 $ErrorActionPreference = 'Continue'
 $here = $PSScriptRoot
@@ -11,6 +15,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Choco.ps1')
 . (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
+. (Join-Path $here 'lib\SelfUpdate.ps1')
 Initialize-WmLanguage -Lang $Lang   # as SYSTEM (the task): the system's display language
 
 # A scheduled run that couldn't run (no internet, another run busy for too long) leaves 'full' in the retry
@@ -26,14 +31,18 @@ function Set-WmFullRunPending {
     }
 }
 
-$fullRun = -not $OnlyIfPending
-if ($OnlyIfPending) {
+$fullRun = -not $OnlyIfPending -or $SelfInstall
+if ($OnlyIfPending -and -not $SelfInstall) {
     if (-not (Test-Path -LiteralPath $script:WmRetryFlag)) { exit 0 }
     $marks = @(Get-Content -LiteralPath $script:WmRetryFlag -ErrorAction SilentlyContinue)
     if ($marks -contains 'full' -or $marks -contains 'offline') { $fullRun = $true }
 }
 
-$config = Import-WmConfig (Join-Path $here 'provision.config.psd1')
+# -SelfInstall runs from the unpacked new version; the configuration (and the base of relative ReqsSources) is the
+# installed one
+$base = $here
+if ($SelfInstall) { $base = $script:WmRoot }
+$config = Import-WmConfig (Join-Path $base 'provision.config.psd1')
 $job = 'update'
 if (-not $fullRun) { $job = 'retry' }
 
@@ -50,6 +59,19 @@ if (-not $lock) {
 Initialize-WmLog $job
 Write-WmLog -Key 'update.start' -Arguments @((Get-WmName), $job, $script:WmHostName)
 
+if ($SelfInstall -and ((Resolve-Path -LiteralPath $here).Path.TrimEnd('\') -ne (Resolve-Path -LiteralPath $script:WmRoot).Path.TrimEnd('\'))) {
+    try {
+        Copy-WmProgramFiles -From $here -To $script:WmRoot
+        Write-WmLog -Key 'update.self_installed' -Arguments @((Get-WmName))
+    } catch {
+        # The previous version sees its own VERSION still in place and carries on with this run
+        Write-WmLog -Key 'update.self_install_failed' -Arguments @((Get-WmName), $script:WmRoot, (Get-WmErrorText $_)) -Level error
+        Send-WmLokiLog -Config $config
+        Exit-WmLock $lock
+        exit 1
+    }
+}
+
 # Without internet: change nothing, report nothing, try again at the next sign-in (wmanager-Retry)
 $unreachable = @(Get-WmUnreachableHosts -Config $config)
 if ($unreachable.Count -gt 0) {
@@ -57,6 +79,31 @@ if ($unreachable.Count -gt 0) {
     if ($fullRun) { Set-WmFullRunPending }
     Exit-WmLock $lock
     exit 0
+}
+
+# Another wmanager version named by the management source: hand the run over to it. When it doesn't install itself,
+# this run goes on with the version already installed, and the next scheduled update tries again.
+if ($fullRun -and -not $SelfInstall) {
+    $release = Get-WmSelfUpdateRelease -Config $config
+    if ($release) {
+        Write-WmLog -Key 'update.self_update_handover' -Arguments @($release.Version)
+        Send-WmLokiLog -Config $config
+        $script:WmLogBuffer.Clear()
+        Exit-WmLock $lock
+        $code = Invoke-WmSelfInstall -Folder $release.Folder -Lang $Lang
+        if ((Get-WmInstalledVersion) -eq $release.Version) {
+            Remove-Item -LiteralPath $script:WmSelfUpdateDir -Recurse -Force -ErrorAction SilentlyContinue
+            exit $code
+        }
+        $lock = Enter-WmLock -WaitSeconds 3000
+        if (-not $lock) {
+            Write-Host (Get-WmText 'update.busy')
+            Set-WmFullRunPending
+            exit 1
+        }
+        Write-WmLog -Key 'update.self_update_failed' -Arguments @($release.Version, $code, (Get-WmName)) -Level error
+        Remove-Item -LiteralPath $script:WmSelfUpdateDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $failed = $false
@@ -68,7 +115,7 @@ try {
     $script:WmDeferred = $null
     if (Invoke-WmStep 'step.chocolatey' { Install-WmChocolatey -Config $config }) {
         $null = Invoke-WmStep 'step.packages' {
-            $reqs = Get-WmRequirements -Config $config -BaseDir $here
+            $reqs = Get-WmRequirements -Config $config -BaseDir $base
             $script:WmDeferred = Sync-WmPackages -Requirements $reqs -Upgrade `
                                     -SkipRunning:([bool](Get-WmSetting $config 'SkipRunningPackages' $true)) `
                                     -ProcessMap (Get-WmSetting $config 'RunningProcessMap' @{})
