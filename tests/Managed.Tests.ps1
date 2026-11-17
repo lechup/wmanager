@@ -129,7 +129,8 @@ Describe 'Resolve-WmComputerContent' {
         $files = @{ 'groups/all/x.txt' = $hashA; 'groups/pilot/x.txt' = $hashA; 'groups/accounting/x.txt' = $hashA }
         (Resolve-WmComputerContent -Map $map -Lists @{ '' = @() } -Files $files -ComputerName 'PC-1' -Versions $v).Wmanager.Version | Should -Be 'v0.3.0'
         (Resolve-WmComputerContent -Map $map -Lists @{ '' = @() } -Files $files -ComputerName 'PC-2' -Versions $v).Wmanager.Version | Should -Be 'v0.2.0'
-        Get-WmVersionGroupOrder -Map $map -Groups @('all', 'pilot', 'floor-1') | Should -Be @('pilot', 'floor-1', 'all')
+        $order = Get-WmVersionGroupOrder -Map $map -Groups @('all', 'pilot', 'floor-1')   # one array, not its items
+        $order | Should -Be @('pilot', 'floor-1', 'all')
     }
 }
 
