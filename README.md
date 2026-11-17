@@ -369,6 +369,45 @@ Notes:
 - Script and job output goes through the console code page (e.g. 852 on Polish Windows): characters outside it come
   out as `?`.
 
+### Several companies
+
+wmanager has no server of its own, so looking after several companies takes no extra setup: each company is one
+management source, one signing key and one `provision.config.psd1`. The same copy of wmanager and the same tools
+serve all of them; `tools/groups.ps1` and `tools/publish.sh` take the source folder (and the key folder) as arguments.
+
+```
+~/wmanager/sources/company1/       management source of company 1 (its own private repository or server folder)
+~/wmanager/sources/company2/
+~/wmanager/keys/company1/          key.pem, cert.pem, wmanager-signing.cer
+~/wmanager/keys/company2/
+~/wmanager/configs/company1/       provision.config.psd1 and its wmanager-signing.cer
+~/wmanager/configs/company2/
+```
+
+```bash
+mkdir -p ~/wmanager/sources ~/wmanager/configs/company2
+tools/new-signing-cert.sh ~/wmanager/keys/company2
+cp -r examples/management ~/wmanager/sources/company2      # a fresh source, without anyone's source-id.txt
+pwsh tools/groups.ps1 ~/wmanager/sources/company2 add-computer OFFICE-07 accounting
+tools/publish.sh ~/wmanager/sources/company2 ~/wmanager/keys/company2   # then push or copy it to its server
+pwsh ./init.ps1 -ConfigPath ~/wmanager/configs/company2/provision.config.psd1
+```
+
+- **A key per company.** One key could sign every source (each manifest carries its own `SourceId`, so company 2's
+  computers reject company 1's source), but each computer trusts its key completely (see
+  [How a computer checks the source](#how-a-computer-checks-the-source)). With a key per company, a company that
+  leaves, or gets another administrator, takes its own key and source and has no way into the others.
+- **A new source starts from `examples/management/`**, not from a copy of another company's source: `source-id.txt`
+  must be different in each one (the first `publish.sh` creates it). If you do copy a source, delete `source-id.txt`
+  and `manifest.psd1` from the copy before its first `publish.sh`.
+- **A config per company:** its `Management` (address, `SourceId`, login, certificate) and its own monitoring. Run the
+  wizard once for each company with `-ConfigPath` (it puts the certificate next to the config it writes); at
+  provisioning, give a computer its company's config (on the USB drive, or the path or address `install.ps1` asks for).
+- **Monitoring:** Loki entries have no company label, only the computer name (`host`). To keep companies apart in
+  Grafana, give each one its own Grafana Cloud stack (its own `LokiUrl`, `LokiUser`, `LokiToken`), or keep computer
+  names unique across companies. In Healthchecks.io the ping key belongs to a project, so a project per company keeps
+  their checks and alerts apart.
+
 ## Scheduled update
 
 - `wmanager-Update` (SYSTEM): scheduled by `UpdateDays` and `UpdateTime`, every day at 12:00 by default
