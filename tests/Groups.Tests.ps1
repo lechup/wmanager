@@ -425,3 +425,64 @@ Describe 'set-version and unset-version' {
         $r.Text | Should -Match 'version\.psd1: no computer is in group nobody'
     }
 }
+
+Describe 'library and enable' {
+    It 'lists the library and the groups that have its items' {
+        $src = New-Source
+        $r = Invoke-Tool $src library
+        $r.Code | Should -Be 0
+        foreach ($name in @('windows-update', 'power', 'defender-hardening', 'network-hardening', 'check-disk-space', 'check-updates', 'check-defender', 'system-report')) {
+            $r.Text | Should -Match "(?m)^  $name\s"
+        }
+        $r.Text | Should -Match 'in groups/all/jobs/daily/system-report\.ps1 \(r1\)'   # the example's copy
+    }
+
+    It 'copies a script with the next number and a job into its schedule, as UTF-8 with BOM and CRLF' {
+        $src = New-Source
+        (Invoke-Tool $src enable windows-update accounting).Code | Should -Be 0
+        $path = Get-Path $src 'groups/accounting/scripts/20-windows-update.ps1'
+        Test-Bom $path | Should -BeTrue
+        $text = Read-Text $path
+        Test-OnlyCrLf $text | Should -BeTrue
+        $text.TrimStart([char]0xFEFF) | Should -Match '^# wmanager library: windows-update, revision 1'
+        (Invoke-Tool $src enable check-disk-space all).Code | Should -Be 0
+        Test-Path -LiteralPath (Get-Path $src 'groups/all/jobs/daily/check-disk-space.ps1') | Should -BeTrue
+        (Invoke-Tool $src enable check-updates all weekly).Code | Should -Be 0
+        Test-Path -LiteralPath (Get-Path $src 'groups/all/jobs/weekly/check-updates.ps1') | Should -BeTrue
+        $r = Invoke-Tool $src enable power pilot
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'no computer is in group pilot yet'
+    }
+
+    It 'refuses a second copy in the same group, an unknown name, a schedule for a script and a bad schedule' {
+        $src = New-Source
+        $r = Invoke-Tool $src enable system-report all
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'group all already has system-report'
+        (Invoke-Tool $src enable no-such-thing all).Code | Should -Be 1
+        (Invoke-Tool $src enable power all daily).Code | Should -Be 1
+        (Invoke-Tool $src enable check-defender all monthly).Code | Should -Be 1
+        (Invoke-Tool $src enable power 'bad group').Code | Should -Be 1
+    }
+
+    It 'passes check with every item enabled, and warns about a copy older than the library' {
+        $src = New-Source
+        foreach ($name in @('windows-update', 'power', 'defender-hardening', 'network-hardening', 'check-disk-space', 'check-updates', 'check-defender')) {
+            (Invoke-Tool $src enable $name all).Code | Should -Be 0
+        }
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'Checked \d+ files: 0 errors, 0 warnings'
+        $path = Get-Path $src 'groups/all/scripts/20-power.ps1'
+        Set-Text $path ((Read-Text $path).Replace('# wmanager library: power, revision 1', '# wmanager library: power, revision 0')) -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'groups/all/scripts/20-power\.ps1 is power revision 0; the library has revision 1'
+    }
+
+    It 'keeps the example system report the same as the library''s' {
+        $lib = Join-Path (Join-Path (Join-Path (Join-Path $script:root 'library') 'jobs') 'daily') 'system-report.ps1'
+        $example = Get-Path (Join-Path (Join-Path $script:root 'examples') 'management') 'groups/all/jobs/daily/system-report.ps1'
+        (Read-Text $example) | Should -Be (Read-Text $lib)
+    }
+}

@@ -14,6 +14,8 @@
 #   pwsh tools/groups.ps1 <folder> new-job <group> <hourly|daily|weekly> <name>
 #   pwsh tools/groups.ps1 <folder> set-version <version> [<group>] [-Url <address>] [-Zip <file>]
 #   pwsh tools/groups.ps1 <folder> unset-version [<group>]
+#   pwsh tools/groups.ps1 <folder> library
+#   pwsh tools/groups.ps1 <folder> enable <name> <group> [<hourly|daily|weekly>]
 #
 # PowerShell 7 (pwsh) on Linux or macOS, or Windows PowerShell 5.1. Messages are in English, like the other tools.
 # -FileList <file>: check only these paths (one per line, relative, '/'), as publish.sh passes what git will push.
@@ -71,6 +73,8 @@ usage: pwsh tools/groups.ps1 <folder> <command> ...
   set-version <version> [<group>]             the wmanager release the computers (or a group's) switch to, e.g. v0.2.0
       [-Url <address>] [-Zip <file>]          where they fetch it (default: the GitHub release); a local copy to read
   unset-version [<group>]                     drop that version (the computers keep the one they have)
+  library                                     the ready scripts and jobs of library/, and the groups that have them
+  enable <name> <group> [<schedule>]          copy one into a group (a job keeps its schedule unless given one)
 Quote a package line with ' ' in bash ('7zip@24.8.0 !noupdate', 'vlc | --params "/X"').
 '@
 }
@@ -483,6 +487,14 @@ function Invoke-Check {
             }
         }
     }
+    # Copies of library items with a newer revision in the library
+    $library = @(Get-LibraryItems)
+    foreach ($c in @(Get-LibraryCopies $Files)) {
+        $item = @($library | Where-Object { $_.Name -ieq $c.Name }) | Select-Object -First 1
+        if ($item -and $item.Revision -gt $c.Revision) {
+            Write-Problem warning "$($c.Path) is $($c.Name) revision $($c.Revision); the library has revision $($item.Revision) ($($item.Rel)): compare them and carry your settings over"
+        }
+    }
     Write-Host "Checked $($Files.Count) files: $script:ProblemErrors errors, $script:ProblemWarnings warnings."
     return ($script:ProblemErrors -eq 0)
 }
@@ -751,6 +763,22 @@ $ErrorActionPreference = 'Stop'
 exit 0
 '@
 
+# Scripts run in name order: the next number in tens after the last script of the group (10-x, 20-y...)
+function Get-NumberedName {
+    param([string]$Root, [string]$Group, [string]$Base)
+    $last = 0
+    $dir = Get-FullPath $Root "groups/$Group/scripts"
+    if ([IO.Directory]::Exists($dir)) {
+        foreach ($f in [IO.Directory]::GetFiles($dir, '*.ps1')) {
+            if ([IO.Path]::GetFileName($f) -match '^([0-9]+)-') { $last = [Math]::Max($last, [int]$Matches[1]) }
+        }
+    }
+    $next = [int]([Math]::Floor($last / 10) * 10 + 10)
+    # A third digit would sort 100-x before 20-y (ordinal name order)
+    if ($next -gt 99) { throw "the scripts of $Group already reach $last; give the number yourself (e.g. 95-$Base) or renumber them" }
+    return ('{0:D2}-{1}' -f $next, $Base)
+}
+
 function New-GroupFile {
     param([string]$Root, [string]$Group, [string]$Kind, [string]$Every, [string]$Name)
     if (-not (Test-WmGroupName $Group)) { throw "invalid group name '$Group' (letters, digits, '.', '-', '_')" }
@@ -758,20 +786,7 @@ function New-GroupFile {
     if (-not (Test-WmGroupName $base)) { throw "invalid name '$Name' (letters, digits, '.', '-', '_')" }
     if ($Kind -eq 'script') {
         $dirRel = "groups/$Group/scripts"
-        if ($base -notmatch '^[0-9]+-') {
-            # Scripts run in name order: number them in tens after the last one
-            $last = 0
-            $dir = Get-FullPath $Root $dirRel
-            if ([IO.Directory]::Exists($dir)) {
-                foreach ($f in [IO.Directory]::GetFiles($dir, '*.ps1')) {
-                    if ([IO.Path]::GetFileName($f) -match '^([0-9]+)-') { $last = [Math]::Max($last, [int]$Matches[1]) }
-                }
-            }
-            $next = [int]([Math]::Floor($last / 10) * 10 + 10)
-            # A third digit would sort 100-x before 20-y (ordinal name order)
-            if ($next -gt 99) { throw "the scripts of $Group already reach $last; give the number yourself (e.g. 95-$base) or renumber them" }
-            $base = '{0:D2}-{1}' -f $next, $base
-        }
+        if ($base -notmatch '^[0-9]+-') { $base = Get-NumberedName $Root $Group $base }
         $text = $script:ScriptTemplate
     } else {
         if (@('hourly', 'daily', 'weekly') -notcontains $Every) { throw "a job runs hourly, daily or weekly, not '$Every'" }
@@ -789,6 +804,114 @@ function New-GroupFile {
     if (-not $text.EndsWith("`r`n")) { $text += "`r`n" }
     Write-TextFile $path $text $true
     Write-Host "Created $rel. Edit it, then: pwsh tools/groups.ps1 <folder> check, and tools/publish.sh."
+}
+
+# ---------------------------------------------------------------------------
+# The library: ready scripts and jobs (library/ of the wmanager repository), copied into a group by "enable"
+# ---------------------------------------------------------------------------
+
+$script:LibraryRoot = Join-Path $repo 'library'
+
+# The first two lines of a library file, kept in its copies: name and revision, then a one-line summary.
+# $null for any other file.
+function Get-LibraryHeader {
+    param([string]$Text)
+    $lines = @($Text.TrimStart([char]0xFEFF) -split "\r?\n", 3)
+    if ($lines[0] -notmatch '^# wmanager library: ([A-Za-z0-9._-]+), revision ([0-9]+)\s*$') { return $null }
+    $name = $Matches[1]
+    $revision = [int]$Matches[2]
+    $summary = ''
+    if ($lines.Count -gt 1 -and $lines[1] -match '^#\s*(.*)$') { $summary = $Matches[1].Trim() }
+    return [pscustomobject]@{ Name = $name; Revision = $revision; Summary = $summary }
+}
+
+# The items of the library: Name, Revision, Summary, Kind (script or job), Every (a job's schedule), Path, Rel
+function Get-LibraryItems {
+    $items = New-Object 'System.Collections.Generic.List[object]'
+    $places = @(, @('script', '', 'scripts'))
+    foreach ($e in @('hourly', 'daily', 'weekly')) { $places += , @('job', $e, "jobs/$e") }
+    foreach ($place in $places) {
+        $dir = Get-FullPath $script:LibraryRoot $place[2]
+        if (-not [IO.Directory]::Exists($dir)) { continue }
+        foreach ($f in @([IO.Directory]::GetFiles($dir, '*.ps1') | Sort-Object)) {
+            $h = Get-LibraryHeader (Read-TextFile $f).Text
+            if (-not $h) { continue }
+            $items.Add([pscustomobject]@{
+                Name = $h.Name; Revision = $h.Revision; Summary = $h.Summary; Kind = $place[0]; Every = $place[1]
+                Path = $f; Rel = "library/$($place[2])/$([IO.Path]::GetFileName($f))"
+            })
+        }
+    }
+    return $items.ToArray()   # callers wrap it in @()
+}
+
+# Copies of library items in a source: Path, Group, Name, Revision
+function Get-LibraryCopies {
+    param([hashtable]$Files)
+    $copies = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($p in @($Files.Keys | Sort-Object)) {
+        if ($p -notmatch '^groups/([^/]+)/(scripts/[^/]+|jobs/(hourly|daily|weekly)/[^/]+)\.ps1$') { continue }
+        $group = $Matches[1]
+        $h = Get-LibraryHeader (Read-TextFile $Files[$p]).Text
+        if ($h) { $copies.Add([pscustomobject]@{ Path = $p; Group = $group; Name = $h.Name; Revision = $h.Revision }) }
+    }
+    return $copies.ToArray()   # callers wrap it in @()
+}
+
+function Show-Library {
+    param([hashtable]$Files)
+    $items = @(Get-LibraryItems)
+    if ($items.Count -eq 0) { Write-Host "The library is empty or missing ($script:LibraryRoot)."; return }
+    $copies = @(Get-LibraryCopies $Files)
+    Write-Host 'Library (pwsh tools/groups.ps1 <folder> enable <name> <group>); the settings are at the top of each file:'
+    foreach ($kind in @('script', 'job')) {
+        Write-Host ''
+        if ($kind -eq 'script') { Write-Host 'Scripts (run once, and again whenever the file changes):' }
+        else { Write-Host 'Jobs (run on a schedule; enable takes another one as the last word):' }
+        foreach ($i in @($items | Where-Object { $_.Kind -eq $kind })) {
+            $when = ''
+            if ($i.Every) { $when = $i.Every }
+            Write-Host ('  {0,-20} {1,-7} r{2}  {3}' -f $i.Name, $when, $i.Revision, $i.Summary)
+            foreach ($c in @($copies | Where-Object { $_.Name -ieq $i.Name })) {
+                $note = ''
+                if ($c.Revision -lt $i.Revision) { $note = '  (older revision)' }
+                Write-Host ('      in {0} (r{1}){2}' -f $c.Path, $c.Revision, $note)
+            }
+        }
+    }
+}
+
+function Enable-LibraryItem {
+    param([string]$Root, [string]$Name, [string]$Group, [string]$Every)
+    $item = @(@(Get-LibraryItems) | Where-Object { $_.Name -ieq $Name }) | Select-Object -First 1
+    if (-not $item) { throw "the library has no '$Name'; see: pwsh tools/groups.ps1 <folder> library" }
+    if (-not (Test-WmGroupName $Group)) { throw "invalid group name '$Group' (letters, digits, '.', '-', '_')" }
+    $files = Get-SourceFiles $Root
+    $have = @(@(Get-LibraryCopies $files) | Where-Object { $_.Group -ieq $Group -and $_.Name -ieq $item.Name })
+    if ($have.Count -gt 0) {
+        throw "group $Group already has $($item.Name): $($have[0].Path) (revision $($have[0].Revision)); for another revision compare it with $($item.Rel), or delete it and enable it again"
+    }
+    if ($item.Kind -eq 'script') {
+        if ($Every) { throw "$($item.Name) is a script: it runs once (and again when the file changes), not on a schedule" }
+        $rel = "groups/$Group/scripts/$(Get-NumberedName $Root $Group $item.Name).ps1"
+    } else {
+        if (-not $Every) { $Every = $item.Every }
+        if (@('hourly', 'daily', 'weekly') -notcontains $Every) { throw "a job runs hourly, daily or weekly, not '$Every'" }
+        $rel = "groups/$Group/jobs/$Every/$($item.Name).ps1"
+    }
+    $path = Get-FullPath $Root $rel
+    if ([IO.File]::Exists($path)) { throw "$rel already exists" }
+    # As the computers want it: UTF-8 with BOM, CRLF
+    $text = ((Read-TextFile $item.Path).Text -split '\r?\n') -join "`r`n"
+    if (-not $text.EndsWith("`r`n")) { $text += "`r`n" }
+    Write-TextFile $path $text $true
+    Write-Host "Enabled $($item.Name) (revision $($item.Revision)) in group ${Group}: $rel"
+    Write-Host 'Its settings are at the top of the file. Then: pwsh tools/groups.ps1 <folder> check, and tools/publish.sh.'
+    $map = $null
+    try { $map = Read-GroupMap $files } catch { }
+    if ($null -ne $map -and -not (Get-ReferencedGroups $map).ContainsKey($Group)) {
+        Write-Problem warning "no computer is in group $Group yet: pwsh tools/groups.ps1 <folder> add-computer <computer> $Group"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1154,15 @@ try {
             $group = ''
             if ($args1.Count -eq 2) { $group = $args1[1] }
             Set-Version -Root $root -Version $args1[0] -Group $group
+        }
+        'library' {
+            Show-Library (Get-SourceFiles $root)
+        }
+        'enable' {
+            if ($args1.Count -lt 2 -or $args1.Count -gt 3) { throw 'usage: enable <name> <group> [<hourly|daily|weekly>]' }
+            $every = ''
+            if ($args1.Count -eq 3) { $every = $args1[2] }
+            Enable-LibraryItem -Root $root -Name $args1[0] -Group $args1[1] -Every $every
         }
         'unset-version' {
             if ($args1.Count -gt 1) { throw 'usage: unset-version [<group>]' }
