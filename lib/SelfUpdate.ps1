@@ -71,33 +71,40 @@ function Get-WmSelfUpdateRelease {
         return $null
     }
     $zip = Join-Path $dir ('wmanager-{0}.zip' -f $want.Version)
+    $ready = $false
     try {
-        # Without Management.AuthHeader: that login is for the management source, not for the release server
-        Get-WmRemoteFile -Location $want.Url -Destination $zip
-    } catch {
-        Write-WmLog -Key 'update.self_update_download_failed' -Arguments @($want.Version, (Get-WmErrorText $_), (Get-WmName)) -Level warn
-        return $null
-    }
-    $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
-    if ($hash -ne $want.Sha256) {
-        Write-WmLog -Key 'update.self_update_bad_hash' -Arguments @($want.Version, $hash, $want.Sha256) -Level error
-        return $null
-    }
-    try {
-        $out = Join-Path $dir 'unpacked'
-        Expand-Archive -LiteralPath $zip -DestinationPath $out -Force -ErrorAction Stop
-        $folder = Join-Path $out 'wmanager'
-        $versionFile = Join-Path $folder 'VERSION'
-        $found = ''
-        if (Test-Path -LiteralPath $versionFile) { $found = ([IO.File]::ReadAllText($versionFile)).Trim() }
-        if ($found -ne $want.Version -or -not (Test-Path -LiteralPath (Join-Path $folder 'Update-Packages.ps1'))) {
-            throw (New-WmError 'update.self_update_not_release' @($want.Version))
+        try {
+            # Without Management.AuthHeader: that login is for the management source, not for the release server
+            Get-WmRemoteFile -Location $want.Url -Destination $zip
+        } catch {
+            Write-WmLog -Key 'update.self_update_download_failed' -Arguments @($want.Version, (Get-WmErrorText $_), (Get-WmName)) -Level warn
+            return $null
         }
-    } catch {
-        Write-WmLog -Key 'update.self_update_error' -Arguments @($want.Version, (Get-WmErrorText $_)) -Level error
-        return $null
+        $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+        if ($hash -ne $want.Sha256) {
+            Write-WmLog -Key 'update.self_update_bad_hash' -Arguments @($want.Version, $hash, $want.Sha256) -Level error
+            return $null
+        }
+        try {
+            $out = Join-Path $dir 'unpacked'
+            Expand-Archive -LiteralPath $zip -DestinationPath $out -Force -ErrorAction Stop
+            $folder = Join-Path $out 'wmanager'
+            $versionFile = Join-Path $folder 'VERSION'
+            $found = ''
+            if (Test-Path -LiteralPath $versionFile) { $found = ([IO.File]::ReadAllText($versionFile)).Trim() }
+            if ($found -ne $want.Version -or -not (Test-Path -LiteralPath (Join-Path $folder 'Update-Packages.ps1'))) {
+                throw (New-WmError 'update.self_update_not_release' @($want.Version))
+            }
+        } catch {
+            Write-WmLog -Key 'update.self_update_error' -Arguments @($want.Version, (Get-WmErrorText $_)) -Level error
+            return $null
+        }
+        $ready = $true
+        return [pscustomobject]@{ Version = $want.Version; Folder = $folder }
+    } finally {
+        # Nothing of a release that won't be installed stays behind
+        if (-not $ready) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    return [pscustomobject]@{ Version = $want.Version; Folder = $folder }
 }
 
 # Runs the new version's Update-Packages.ps1 -SelfInstall (unpacked by Get-WmSelfUpdateRelease) and waits for it;

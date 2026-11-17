@@ -121,7 +121,7 @@ Describe 'Get-WmSelfUpdateRelease' {
         Set-Wanted -Version 'v0.3.0' -Url $zip -Sha256 ('B' * 64)
         Get-WmSelfUpdateRelease -Config $config | Should -BeNullOrEmpty
         (Get-Logged -Level 'error') -join "`n" | Should -Match 'the management source names B{64}; not installed'
-        Test-Path -LiteralPath (Join-Path $script:WmSelfUpdateDir 'unpacked') | Should -BeFalse
+        Test-Path -LiteralPath $script:WmSelfUpdateDir | Should -BeFalse   # nothing stays behind
     }
 
     It 'refuses a ZIP that is not the named version' {
@@ -130,6 +130,7 @@ Describe 'Get-WmSelfUpdateRelease' {
         Set-Wanted -Version 'v0.3.0' -Url $zip -Sha256 $hash
         Get-WmSelfUpdateRelease -Config $config | Should -BeNullOrEmpty
         (Get-Logged -Level 'error') -join "`n" | Should -Match 'not the wmanager v0\.3\.0 release'
+        Test-Path -LiteralPath $script:WmSelfUpdateDir | Should -BeFalse
     }
 
     It 'only warns when the release cannot be fetched, so the next update tries again' {
