@@ -343,6 +343,7 @@ Describe 'set-version and unset-version' {
         $zip2 = New-Release 'v0.2.0'
         $r = Invoke-Tool $src set-version v0.2.0 -Url 'C:\rel\wmanager-v0.2.0.zip' -Zip $zip2
         $r.Code | Should -Be 0
+        $r.Text | Should -Match 'not checked against a SHA256SUMS'   # nothing to compare with: it says so
         $path = Get-Path $src 'version.psd1'
         Test-Bom $path | Should -BeTrue
         $text = Read-Text $path

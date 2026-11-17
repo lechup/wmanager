@@ -20,4 +20,6 @@
     'update.self_installed'              = '{0} instalado; esta execução continua com ele.'
     'update.self_install_failed'         = 'Não é possível copiar {0} para {1}: {2}'
     'update.self_update_failed'          = 'O wmanager {0} não se instalou (código de saída {1}); esta execução continua com {2} e a próxima atualização tenta de novo.'
+    'update.self_install_restored'       = '{0}; a versão anterior foi reposta'
+    'update.self_install_not_restored'   = '{0}; também não foi possível repor a versão anterior ({1}): execute novamente o Provision.ps1 neste computador'
 }

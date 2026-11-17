@@ -212,17 +212,16 @@ function ConvertFrom-WmVersionData {
     return [pscustomobject]@{ Default = $default; Groups = $groups }
 }
 
-# The version for a computer in these groups: the entry of its first group that has one, otherwise the default.
-# Returns Version, Url, Sha256 and Group ('' = the default), or $null when the source names none for it.
+# The version for a computer in these groups (in the order they are tried): the entry of the first group that has
+# one, otherwise the default. Returns Version, Url, Sha256 and Group ('' = the default), or $null when the source
+# names none for it. Groups is case-insensitive, like group names everywhere.
 function Get-WmWantedVersion {
     param($Versions, [string[]]$Groups = @())
     if ($null -eq $Versions) { return $null }
     foreach ($g in $Groups) {
-        foreach ($k in @($Versions.Groups.Keys)) {
-            if ($k -ieq $g) {
-                $e = $Versions.Groups[$k]
-                return [pscustomobject]@{ Version = $e.Version; Url = $e.Url; Sha256 = $e.Sha256; Group = $k }
-            }
+        if ($Versions.Groups.ContainsKey($g)) {
+            $e = $Versions.Groups[$g]
+            return [pscustomobject]@{ Version = $e.Version; Url = $e.Url; Sha256 = $e.Sha256; Group = $g }
         }
     }
     if ($Versions.Default) {
@@ -236,11 +235,24 @@ function Get-WmWantedVersion {
 function Test-WmGroupHasVersion {
     param($Versions, [string]$Group)
     if ($null -eq $Versions) { return $false }
-    return [bool](@($Versions.Groups.Keys) | Where-Object { $_ -ieq $Group })
+    return $Versions.Groups.ContainsKey($Group)
+}
+
+# For the version a computer's own groups come before the default ones (Default, every computer): the more specific
+# group wins, so a pilot group still gets its version when a default group has one too.
+function Get-WmVersionGroupOrder {
+    param([Parameter(Mandatory = $true)][hashtable]$Map, [string[]]$Groups = @())
+    $default = @($Map.Default | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $own = @(); $shared = @()
+    foreach ($g in $Groups) {
+        if ($default | Where-Object { $_ -ieq $g }) { $shared += $g } else { $own += $g }
+    }
+    return ,@($own + $shared)
 }
 
 # What a computer gets from a source: its groups, the common list and its groups' lists merged, the scripts and
-# jobs of its groups, and the wmanager version it should run (Wmanager, see Get-WmWantedVersion). $Files: the paths
+# jobs of its groups, and the wmanager version it should run (Wmanager: the version of its own groups first, in their
+# order, then of the default groups, then the one for every computer; see Get-WmWantedVersion). $Files: the paths
 # of the source (the manifest's Files); $Lists: '' = the common list, otherwise group -> its parsed list; $Versions:
 # ConvertFrom-WmVersionData of version.psd1, or $null. A group without files is reported (Write-WmManagedWarning)
 # and skipped, unless version.psd1 gives it a version: a group may exist only for that.
@@ -263,7 +275,7 @@ function Resolve-WmComputerContent {
         Requirements = (Merge-WmRequirements -Lists $toMerge)
         Scripts      = (Get-WmGroupScripts -Files $Files -Groups $groups)
         Jobs         = (Get-WmGroupJobs -Files $Files -Groups $groups)
-        Wmanager     = (Get-WmWantedVersion -Versions $Versions -Groups $groups)
+        Wmanager     = (Get-WmWantedVersion -Versions $Versions -Groups (Get-WmVersionGroupOrder -Map $Map -Groups $groups))
     }
 }
 

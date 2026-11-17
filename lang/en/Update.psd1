@@ -20,4 +20,6 @@
     'update.self_installed'              = '{0} installed; this run continues with it.'
     'update.self_install_failed'         = 'Cannot copy {0} into {1}: {2}'
     'update.self_update_failed'          = 'wmanager {0} did not install itself (exit code {1}); this run continues with {2}, and the next update tries again.'
+    'update.self_install_restored'       = '{0}; the previous version was put back'
+    'update.self_install_not_restored'   = '{0}; putting the previous version back failed too ({1}): run Provision.ps1 on this computer again'
 }

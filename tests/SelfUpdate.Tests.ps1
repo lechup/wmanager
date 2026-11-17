@@ -81,6 +81,42 @@ Describe 'Copy-WmProgramFiles' {
     }
 }
 
+Describe 'Install-WmProgramFiles' {
+    BeforeEach {
+        $base = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $new = Join-Path $base 'new'
+        $installed = Join-Path $base 'installed'
+        $backup = Join-Path $base 'previous'
+        foreach ($f in @('lang\en\Common.psd1', 'lib\Common.ps1', 'Update-Packages.ps1', 'VERSION')) {
+            New-TestFile (Join-Path $new $f) "new $f"
+            New-TestFile (Join-Path $installed $f) "old $f"
+        }
+    }
+
+    It 'installs the new version and keeps the old one aside' {
+        Install-WmProgramFiles -From $new -To $installed -Backup $backup
+        Get-Content -LiteralPath (Join-Path $installed 'lib\Common.ps1') -Raw | Should -Be 'new lib\Common.ps1'
+        Get-Content -LiteralPath (Join-Path $backup 'lib\Common.ps1') -Raw | Should -Be 'old lib\Common.ps1'
+    }
+
+    It 'puts the old version back when the copy stops partway' {
+        # The new catalogs are in place, then the copy fails
+        Mock Copy-WmProgramFiles -ParameterFilter { $From -eq $new } {
+            Copy-Item -LiteralPath (Join-Path $From 'lang\en\Common.psd1') -Destination (Join-Path $To 'lang\en\Common.psd1') -Force
+            throw 'disk full'
+        }
+        { Install-WmProgramFiles -From $new -To $installed -Backup $backup } | Should -Throw '*disk full; the previous version was put back*'
+        Get-Content -LiteralPath (Join-Path $installed 'lang\en\Common.psd1') -Raw | Should -Be 'old lang\en\Common.psd1'
+        Get-Content -LiteralPath (Join-Path $installed 'VERSION') -Raw | Should -Be 'old VERSION'
+    }
+
+    It 'says so when the old version can''t be put back either' {
+        Mock Copy-WmProgramFiles -ParameterFilter { $From -eq $new } { throw 'disk full' }
+        Mock Copy-WmProgramFiles -ParameterFilter { $From -eq $backup } { throw 'still full' }
+        { Install-WmProgramFiles -From $new -To $installed -Backup $backup } | Should -Throw '*disk full; putting the previous version back failed too (still full)*'
+    }
+}
+
 Describe 'Get-WmSelfUpdateRelease' {
     BeforeEach {
         $script:WmSelfUpdateDir = Join-Path $TestDrive ('self-update-' + [guid]::NewGuid().ToString('N'))

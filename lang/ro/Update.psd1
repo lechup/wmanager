@@ -20,4 +20,6 @@
     'update.self_installed'              = '{0} instalat; această rulare continuă cu el.'
     'update.self_install_failed'         = 'Nu se poate copia {0} în {1}: {2}'
     'update.self_update_failed'          = 'wmanager {0} nu s-a instalat (cod de ieșire {1}); această rulare continuă cu {2}, iar următoarea actualizare va reîncerca.'
+    'update.self_install_restored'       = '{0}; versiunea anterioară a fost pusă la loc'
+    'update.self_install_not_restored'   = '{0}; nici punerea la loc a versiunii anterioare nu a reușit ({1}): rulați din nou Provision.ps1 pe acest computer'
 }

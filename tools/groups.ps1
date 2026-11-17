@@ -30,6 +30,10 @@ $repo = Split-Path $PSScriptRoot -Parent
 . (Join-Path (Join-Path $repo 'lib') 'Lang.ps1')
 . (Join-Path (Join-Path $repo 'lib') 'Groups.ps1')
 Initialize-WmLanguage -Lang 'en' -Root $repo
+# Windows PowerShell 5.1 doesn't enable TLS 1.2 by default (set-version downloads from GitHub)
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
 
 $script:ProblemErrors = 0
 $script:ProblemWarnings = 0
@@ -232,6 +236,17 @@ function Format-Wanted {
     if (-not $Wanted) { return 'not set (keeps the version it has)' }
     if ($Wanted.Group) { return "$($Wanted.Version) (group $($Wanted.Group))" }
     return $Wanted.Version
+}
+
+# Groups some computer is in: Default and every entry of Computers (case-insensitive table)
+function Get-ReferencedGroups {
+    param([hashtable]$Map)
+    $referenced = @{}
+    foreach ($g in @($Map.Default)) { if ($g) { $referenced[[string]$g] = $true } }
+    if ($Map.Computers -is [hashtable]) {
+        foreach ($c in $Map.Computers.Keys) { foreach ($g in @($Map.Computers[$c])) { if ($g) { $referenced[[string]$g] = $true } } }
+    }
+    return $referenced
 }
 
 function Get-FolderGroups {
@@ -441,9 +456,7 @@ function Invoke-Check {
                 Write-Problem warning "groups.psd1: '$c' is not a valid Windows computer name (1-15 letters, digits, hyphens), so no computer matches it"
             }
         }
-        $referenced = @{}
-        foreach ($g in @($map.Default)) { if ($g) { $referenced[[string]$g] = $true } }
-        foreach ($c in $computers) { foreach ($g in @($map.Computers[$c])) { if ($g) { $referenced[[string]$g] = $true } } }
+        $referenced = Get-ReferencedGroups $map
         $folders = Get-FolderGroups $Files
         foreach ($g in @($referenced.Keys | Sort-Object)) {
             # A group may exist only for its own wmanager version
@@ -788,8 +801,8 @@ $script:VersionHeader = @(
     '# The wmanager version the computers of this source run. tools/groups.ps1 set-version and unset-version write'
     '# this file whole, so changes by hand don''t last.'
     '# At its scheduled update a computer downloads the release from Url, installs it only when its SHA256 matches, and'
-    '# then runs exactly this version (also an older one). A computer in a group under Groups runs that group''s version'
-    '# (with several such groups, the first of them in its groups.psd1 order); without a version it keeps its own.'
+    '# then runs exactly this version (also an older one). A computer in a group under Groups runs that group''s version:'
+    '# its own groups come before the default ones, then the groups.psd1 order decides. Without a version it keeps its own.'
 )
 
 function Read-ZipText {
@@ -836,6 +849,9 @@ function Get-ReleaseInfo {
             throw "$Url can't be read from here; give a copy of the ZIP with -Zip"
         }
         $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+        # The release's SHA256SUMS next to the ZIP. Whatever hash goes into version.psd1 is what every computer
+        # installs, so say so when the file couldn't be checked against it
+        $checked = $false
         if ($Url -match '^https://') {
             $sums = Join-Path $tmp 'SHA256SUMS'
             $name = $Url.Substring($Url.LastIndexOf('/') + 1)
@@ -848,8 +864,12 @@ function Get-ReleaseInfo {
                     $listed = ($line[0] -split '\s+')[0].ToUpperInvariant()
                     if ($listed -ne $hash) { throw "the SHA256 of the ZIP ($hash) differs from the release's SHA256SUMS ($listed)" }
                     Write-Host "The SHA256 matches the release's SHA256SUMS."
+                    $checked = $true
                 }
             }
+        }
+        if (-not $checked) {
+            Write-Problem warning "the ZIP was not checked against a SHA256SUMS of the release; the computers will install exactly $file (SHA256 $hash), so make sure it is the release you mean"
         }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $archive = [IO.Compression.ZipFile]::OpenRead($file)
@@ -922,15 +942,13 @@ function Set-Version {
     $versions = Read-VersionFile $Root
     $info = Get-ReleaseInfo -Version $Version -Url $Url -Zip $Zip
     if ($Group) {
-        foreach ($k in @($versions.Groups.Keys)) { if ($k -ieq $Group) { $versions.Groups.Remove($k) } }
+        $versions.Groups.Remove($Group)   # case-insensitive: the new spelling replaces the old entry
         $versions.Groups[$Group] = $info
         Write-Host "version.psd1: group $Group -> wmanager $Version (SHA256 $($info.Sha256))."
-        $files = Get-SourceFiles $Root
-        $map = @{}
-        try { $map = Read-GroupMap $files } catch { }
-        $members = @($map.Default)
-        if ($map.Computers -is [hashtable]) { foreach ($c in $map.Computers.Keys) { $members += @($map.Computers[$c]) } }
-        if (-not ($members | Where-Object { $_ -ieq $Group })) {
+        # An invalid groups.psd1 is check's to report; then there is nothing to say about the group here
+        $map = $null
+        try { $map = Read-GroupMap (Get-SourceFiles $Root) } catch { }
+        if ($null -ne $map -and -not (Get-ReferencedGroups $map).ContainsKey($Group)) {
             Write-Problem warning "no computer is in group $Group yet: pwsh tools/groups.ps1 <folder> add-computer <computer> $Group"
         }
     } else {
@@ -945,9 +963,8 @@ function Remove-Version {
     param([string]$Root, [string]$Group)
     $versions = Read-VersionFile $Root
     if ($Group) {
-        $key = @($versions.Groups.Keys | Where-Object { $_ -ieq $Group })
-        if ($key.Count -eq 0) { throw "group $Group has no version of its own in version.psd1" }
-        $versions.Groups.Remove($key[0])
+        if (-not $versions.Groups.ContainsKey($Group)) { throw "group $Group has no version of its own in version.psd1" }
+        $versions.Groups.Remove($Group)
     } else {
         if (-not $versions.Default) { throw 'version.psd1 names no version for every computer' }
         $versions.Default = $null

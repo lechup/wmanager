@@ -103,7 +103,7 @@ Describe 'ConvertFrom-WmVersionData and Get-WmWantedVersion' {
         $w.Group | Should -Be ''
         $w = Get-WmWantedVersion -Versions $v -Groups @('all', 'PILOT', 'test')
         $w.Version | Should -Be 'v0.4.0'
-        $w.Group | Should -Be 'pilot'
+        $w.Group | Should -Be 'PILOT'
         Get-WmWantedVersion -Versions $null -Groups @('all') | Should -BeNullOrEmpty
         Get-WmWantedVersion -Versions (ConvertFrom-WmVersionData @{ Groups = @{ test = $e } }) -Groups @('all') | Should -BeNullOrEmpty
     }
@@ -120,6 +120,16 @@ Describe 'Resolve-WmComputerContent' {
         $warn = @($script:WmLogBuffer | Where-Object { $_.Level -eq 'warn' } | ForEach-Object { $_.Line }) -join "`n"
         $warn | Should -Match 'Group ghost has no files'
         $warn | Should -Not -Match 'Group pilot'
+    }
+
+    It 'lets a computer''s own group win over a default group for the version' {
+        $v = ConvertFrom-WmVersionData @{ Groups = @{ all   = @{ Version = 'v0.2.0'; Url = 'C:\rel\a.zip'; Sha256 = ('d' * 64) }
+                                                      pilot = @{ Version = 'v0.3.0'; Url = 'C:\rel\b.zip'; Sha256 = ('e' * 64) } } }
+        $map = @{ Default = @('all'); Computers = @{ 'PC-1' = @('pilot'); 'PC-2' = @('accounting') } }
+        $files = @{ 'groups/all/x.txt' = $hashA; 'groups/pilot/x.txt' = $hashA; 'groups/accounting/x.txt' = $hashA }
+        (Resolve-WmComputerContent -Map $map -Lists @{ '' = @() } -Files $files -ComputerName 'PC-1' -Versions $v).Wmanager.Version | Should -Be 'v0.3.0'
+        (Resolve-WmComputerContent -Map $map -Lists @{ '' = @() } -Files $files -ComputerName 'PC-2' -Versions $v).Wmanager.Version | Should -Be 'v0.2.0'
+        Get-WmVersionGroupOrder -Map $map -Groups @('all', 'pilot', 'floor-1') | Should -Be @('pilot', 'floor-1', 'all')
     }
 }
 

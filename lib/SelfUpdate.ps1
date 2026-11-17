@@ -39,6 +39,25 @@ function Copy-WmProgramFiles {
     else { Remove-Item -LiteralPath (Join-Path $To 'VERSION') -Force -ErrorAction SilentlyContinue }
 }
 
+# Puts the version in $From into the installed folder $To, after keeping the installed one in $Backup: if the copy
+# stops partway (a file in use, a full disk), the old version is put back, so old entry scripts never meet a new lib
+# (or the other way round) and the next scheduled update still starts. Throws when the copy failed; the message says
+# whether the old version is back.
+function Install-WmProgramFiles {
+    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$To,
+          [Parameter(Mandatory = $true)][string]$Backup)
+    if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction Stop }
+    Copy-WmProgramFiles -From $To -To $Backup
+    try {
+        Copy-WmProgramFiles -From $From -To $To
+    } catch {
+        $err = $_
+        try { Copy-WmProgramFiles -From $Backup -To $To }
+        catch { throw (New-WmError 'update.self_install_not_restored' @((Get-WmErrorText $err), (Get-WmErrorText $_))) }
+        throw (New-WmError 'update.self_install_restored' @((Get-WmErrorText $err)))
+    }
+}
+
 # The version of the installed copy (its VERSION file), '' without one
 function Get-WmInstalledVersion {
     $file = Join-Path $script:WmRoot 'VERSION'
@@ -52,8 +71,13 @@ function Get-WmInstalledVersion {
 # fails is a warning and is tried again at the next update; a file that doesn't match is an error).
 function Get-WmSelfUpdateRelease {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
-    if (-not (Get-WmManagementSettings $Config)) { return $null }
-    try { $content = Get-WmManagedContent -Config $Config } catch { return $null }
+    # An invalid setting or an unreadable source is reported by the package stage, which uses them too
+    try {
+        if (-not (Get-WmManagementSettings $Config)) { return $null }
+        $content = Get-WmManagedContent -Config $Config
+    } catch {
+        return $null
+    }
     $want = $content.Wmanager
     if (-not $want -or $want.Version -eq $script:WmVersion) { return $null }
 

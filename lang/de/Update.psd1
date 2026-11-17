@@ -20,4 +20,6 @@
     'update.self_installed'              = '{0} installiert; dieser Durchlauf geht damit weiter.'
     'update.self_install_failed'         = '{0} kann nicht nach {1} kopiert werden: {2}'
     'update.self_update_failed'          = 'wmanager {0} hat sich nicht installiert (Exitcode {1}); dieser Durchlauf geht mit {2} weiter, das nächste Update versucht es erneut.'
+    'update.self_install_restored'       = '{0}; die vorherige Version wurde wiederhergestellt'
+    'update.self_install_not_restored'   = '{0}; auch das Wiederherstellen der vorherigen Version ist fehlgeschlagen ({1}): Provision.ps1 auf diesem Computer erneut ausführen'
 }

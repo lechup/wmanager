@@ -53,6 +53,7 @@ $lock = Enter-WmLock -WaitSeconds $wait
 if (-not $lock) {
     Write-Host (Get-WmText 'update.busy')
     if ($fullRun) { Set-WmFullRunPending }
+    if ($SelfInstall) { exit 1 }   # nothing installed: the previous version carries on with the run
     exit 0
 }
 
@@ -61,7 +62,7 @@ Write-WmLog -Key 'update.start' -Arguments @((Get-WmName), $job, $script:WmHostN
 
 if ($SelfInstall -and ((Resolve-Path -LiteralPath $here).Path.TrimEnd('\') -ne (Resolve-Path -LiteralPath $script:WmRoot).Path.TrimEnd('\'))) {
     try {
-        Copy-WmProgramFiles -From $here -To $script:WmRoot
+        Install-WmProgramFiles -From $here -To $script:WmRoot -Backup (Join-Path $script:WmSelfUpdateDir 'previous')
         Write-WmLog -Key 'update.self_installed' -Arguments @((Get-WmName))
     } catch {
         # The previous version sees its own VERSION still in place and carries on with this run

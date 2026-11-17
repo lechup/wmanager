@@ -388,8 +388,10 @@ tools/publish.sh $src
 
 `set-version` downloads the release ZIP from GitHub, checks it against the release's `SHA256SUMS`, checks that it is
 that version and that it can install itself, and writes the version, the address of the ZIP and its SHA256 to
-`version.psd1`. A computer in a group with a version of its own runs that one (with several such groups, the first in
-its `groups.psd1` order); a group may exist only for that, without a folder. `unset-version` without a group drops the
+`version.psd1`. A computer in a group with a version of its own runs that one: its own groups come before the default
+ones (`Default`), so a pilot group wins even when a default group has a version too, and among them the `groups.psd1`
+order decides; a group may exist only for that, without a folder. Without `SHA256SUMS` to check against (another
+`-Url`, or `-Zip` that can't be compared) it warns: whatever file it hashes is what every computer installs. `unset-version` without a group drops the
 version for every computer: from then on they keep the one they have. `show` and `show <computer>` print the version.
 
 At the scheduled update (not in the hourly run) a computer whose version differs:
@@ -397,7 +399,9 @@ At the scheduled update (not in the hourly run) a computer whose version differs
 1. downloads the ZIP into `state\self-update` and checks it against the SHA256 from the signed source; it doesn't use
    a file that differs or holds another version;
 2. hands the run over to the new version, which copies itself into `C:\ProgramData\wmanager` (the configuration,
-   state and logs stay) and does the rest of the scheduled update.
+   state and logs stay) and does the rest of the scheduled update. It keeps a copy of the old version first: if
+   copying stops partway (a file in use, a full disk), it puts the old version back, so old and new files never
+   mix.
 
 It installs exactly the named version, also an older one, so going back is `set-version` with the previous release.
 If the download fails (a warning) or the new version doesn't install itself (an error), the run goes on with the

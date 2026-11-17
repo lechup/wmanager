@@ -20,4 +20,6 @@
     'update.self_installed'              = '{0} nainstalován; tento běh pokračuje s ním.'
     'update.self_install_failed'         = '{0} nelze zkopírovat do {1}: {2}'
     'update.self_update_failed'          = 'wmanager {0} se nenainstaloval (návratový kód {1}); tento běh pokračuje s {2} a další aktualizace to zkusí znovu.'
+    'update.self_install_restored'       = '{0}; předchozí verze byla vrácena'
+    'update.self_install_not_restored'   = '{0}; vrácení předchozí verze také selhalo ({1}): spusťte na tomto počítači znovu Provision.ps1'
 }

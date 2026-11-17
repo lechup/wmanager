@@ -20,4 +20,6 @@
     'update.self_installed'              = '{0} geïnstalleerd; deze uitvoering gaat daarmee verder.'
     'update.self_install_failed'         = 'Kan {0} niet naar {1} kopiëren: {2}'
     'update.self_update_failed'          = 'wmanager {0} heeft zichzelf niet geïnstalleerd (afsluitcode {1}); deze uitvoering gaat verder met {2} en de volgende update probeert het opnieuw.'
+    'update.self_install_restored'       = '{0}; de vorige versie is teruggezet'
+    'update.self_install_not_restored'   = '{0}; ook het terugzetten van de vorige versie is mislukt ({1}): voer Provision.ps1 opnieuw uit op deze computer'
 }
