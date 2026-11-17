@@ -67,4 +67,12 @@
     'managed.job_timeout'                = 'Travail {0} : délai dépassé ({1} min), arrêté.'
     'managed.job_exit_code'              = 'Travail {0} : terminé avec le code de sortie {1}.'
     'managed.job_done'                   = 'Travail {0} : terminé.'
+    # version.psd1 ({0}: the entry, e.g. Groups.test.Url; {1}: its value)
+    'managed.version_unknown_key'      = 'version.psd1 : clé inconnue ''{0}'' (autorisées : Version, Url, Sha256, Groups)'
+    'managed.version_missing'          = 'version.psd1 : {0} manque (une version demande Version, Url et Sha256)'
+    'managed.version_bad_tag'          = 'version.psd1 : {0} n''est pas une version de wmanager comme v0.2.0 : {1}'
+    'managed.version_bad_url'          = 'version.psd1 : {0} doit être une adresse https:// ou un chemin (C:\..., \\serveur\partage\...) : {1}'
+    'managed.version_bad_hash'         = 'version.psd1 : {0} n''est pas un SHA256 (64 chiffres hexadécimaux)'
+    'managed.version_bad_group'        = 'version.psd1 : nom de groupe non valide dans Groups : ''{0}'''
+    'managed.version_groups_not_table' = 'version.psd1 : Groups doit donner à chaque groupe ses propres Version, Url et Sha256'
 }

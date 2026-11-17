@@ -67,4 +67,12 @@
     'managed.job_timeout'                = 'Lucrarea {0}: timpul a expirat ({1} min), oprită.'
     'managed.job_exit_code'              = 'Lucrarea {0}: s-a încheiat cu codul de ieșire {1}.'
     'managed.job_done'                   = 'Lucrarea {0}: gata.'
+    # version.psd1 ({0}: the entry, e.g. Groups.test.Url; {1}: its value)
+    'managed.version_unknown_key'      = 'version.psd1: cheie necunoscută ''{0}'' (permise: Version, Url, Sha256, Groups)'
+    'managed.version_missing'          = 'version.psd1: lipsește {0} (o versiune are nevoie de Version, Url și Sha256)'
+    'managed.version_bad_tag'          = 'version.psd1: {0} nu este o versiune wmanager precum v0.2.0: {1}'
+    'managed.version_bad_url'          = 'version.psd1: {0} trebuie să fie o adresă https:// sau o cale (C:\..., \\server\partajare\...): {1}'
+    'managed.version_bad_hash'         = 'version.psd1: {0} nu este un SHA256 (64 de cifre hexazecimale)'
+    'managed.version_bad_group'        = 'version.psd1: nume de grup nevalid în Groups: ''{0}'''
+    'managed.version_groups_not_table' = 'version.psd1: Groups trebuie să dea fiecărui grup propriile Version, Url și Sha256'
 }

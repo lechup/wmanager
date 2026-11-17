@@ -9,4 +9,17 @@
     'update.reboot_pending'    = 'Il sistema è in attesa di un riavvio; l''utente riceverà una notifica.'
     'update.run_failed'        = 'Esecuzione interrotta: {0}'
     'update.summary'           = 'Fine: avvisi {0}, errori {1}.'
+    # Self-update ({0} of self_update, self_installed and {2} of download_failed, self_update_failed: wmanager and its version)
+    'update.self_update'                 = '{0} -> wmanager {1}: l''origine di gestione indica questa versione; download di {2}'
+    'update.self_update_group'           = '{0} -> wmanager {1} (gruppo {2}): l''origine di gestione indica questa versione; download di {3}'
+    'update.self_update_download_failed' = 'Impossibile scaricare wmanager {0}: {1}. Resta {2}; il prossimo aggiornamento riproverà.'
+    'update.self_update_bad_hash'        = 'wmanager {0}: il file scaricato ha SHA256 {1}, ma l''origine di gestione indica {2}; non installato.'
+    'update.self_update_not_release'     = 'il file non è la versione {0} di wmanager (wmanager\VERSION manca o indica un''altra versione)'
+    'update.self_update_error'           = 'Impossibile preparare wmanager {0}: {1}'
+    'update.self_update_handover'        = 'Questa esecuzione passa a wmanager {0}.'
+    'update.self_installed'              = '{0} installato; questa esecuzione prosegue con esso.'
+    'update.self_install_failed'         = 'Impossibile copiare {0} in {1}: {2}'
+    'update.self_update_failed'          = 'wmanager {0} non si è installato (codice di uscita {1}); questa esecuzione prosegue con {2} e il prossimo aggiornamento riproverà.'
+    'update.self_install_restored'       = '{0}; la versione precedente è stata ripristinata'
+    'update.self_install_not_restored'   = '{0}; anche il ripristino della versione precedente non è riuscito ({1}): eseguire di nuovo Provision.ps1 su questo computer'
 }

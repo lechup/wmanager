@@ -9,4 +9,17 @@
     'update.reboot_pending'    = 'Systém čeká na restart; uživatel dostane oznámení.'
     'update.run_failed'        = 'Běh přerušen: {0}'
     'update.summary'           = 'Konec. Upozornění: {0}, chyby: {1}.'
+    # Self-update ({0} of self_update, self_installed and {2} of download_failed, self_update_failed: wmanager and its version)
+    'update.self_update'                 = '{0} -> wmanager {1}: zdroj správy určuje tuto verzi; stahuje se {2}'
+    'update.self_update_group'           = '{0} -> wmanager {1} (skupina {2}): zdroj správy určuje tuto verzi; stahuje se {3}'
+    'update.self_update_download_failed' = 'wmanager {0} nelze stáhnout: {1}. Zůstává {2}; další aktualizace to zkusí znovu.'
+    'update.self_update_bad_hash'        = 'wmanager {0}: stažený soubor má SHA256 {1}, ale zdroj správy uvádí {2}; neinstaluje se.'
+    'update.self_update_not_release'     = 'soubor není verze {0} wmanager (wmanager\VERSION chybí nebo uvádí jinou verzi)'
+    'update.self_update_error'           = 'wmanager {0} nelze připravit: {1}'
+    'update.self_update_handover'        = 'Tento běh se předává wmanager {0}.'
+    'update.self_installed'              = '{0} nainstalován; tento běh pokračuje s ním.'
+    'update.self_install_failed'         = '{0} nelze zkopírovat do {1}: {2}'
+    'update.self_update_failed'          = 'wmanager {0} se nenainstaloval (návratový kód {1}); tento běh pokračuje s {2} a další aktualizace to zkusí znovu.'
+    'update.self_install_restored'       = '{0}; předchozí verze byla vrácena'
+    'update.self_install_not_restored'   = '{0}; vrácení předchozí verze také selhalo ({1}): spusťte na tomto počítači znovu Provision.ps1'
 }

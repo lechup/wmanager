@@ -1,7 +1,8 @@
 ﻿# wmanager: manage a management source (computer groups) from the terminal. Shows what a computer gets, checks
 # the source the way the computers read it (lib/Groups.ps1, the same code), and edits groups.psd1, the package
-# lists and new scripts and jobs. Edits keep the rest of each file as it is: comments, order, BOM, line endings.
-# Sign and publish afterwards with tools/publish.sh (which runs "check" first).
+# lists and new scripts and jobs, and sets the wmanager version the computers run (version.psd1). Edits keep the rest
+# of each file as it is: comments, order, BOM, line endings (version.psd1 is written whole). Sign and publish
+# afterwards with tools/publish.sh (which runs "check" first).
 #
 #   pwsh tools/groups.ps1 <folder> show [<computer>]
 #   pwsh tools/groups.ps1 <folder> check
@@ -11,6 +12,8 @@
 #   pwsh tools/groups.ps1 <folder> remove-package <group|common> <package>
 #   pwsh tools/groups.ps1 <folder> new-script <group> <name>
 #   pwsh tools/groups.ps1 <folder> new-job <group> <hourly|daily|weekly> <name>
+#   pwsh tools/groups.ps1 <folder> set-version <version> [<group>] [-Url <address>] [-Zip <file>]
+#   pwsh tools/groups.ps1 <folder> unset-version [<group>]
 #
 # PowerShell 7 (pwsh) on Linux or macOS, or Windows PowerShell 5.1. Messages are in English, like the other tools.
 # -FileList <file>: check only these paths (one per line, relative, '/'), as publish.sh passes what git will push.
@@ -18,13 +21,19 @@ param(
     [Parameter(Position = 0)][string]$Folder,
     [Parameter(Position = 1)][string]$Command,
     [Parameter(Position = 2, ValueFromRemainingArguments = $true)][string[]]$Rest = @(),
-    [string]$FileList
+    [string]$FileList,
+    [string]$Url,
+    [string]$Zip
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 . (Join-Path (Join-Path $repo 'lib') 'Lang.ps1')
 . (Join-Path (Join-Path $repo 'lib') 'Groups.ps1')
 Initialize-WmLanguage -Lang 'en' -Root $repo
+# Windows PowerShell 5.1 doesn't enable TLS 1.2 by default (set-version downloads from GitHub)
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
 
 $script:ProblemErrors = 0
 $script:ProblemWarnings = 0
@@ -59,6 +68,9 @@ usage: pwsh tools/groups.ps1 <folder> <command> ...
   remove-package <group|common> <package>     remove a package from a list (computers don't uninstall it)
   new-script <group> <name>                   new script groups/<group>/scripts/<NN>-<name>.ps1 from a template
   new-job <group> <hourly|daily|weekly> <name>  new job groups/<group>/jobs/<when>/<name>.ps1 from a template
+  set-version <version> [<group>]             the wmanager release the computers (or a group's) switch to, e.g. v0.2.0
+      [-Url <address>] [-Zip <file>]          where they fetch it (default: the GitHub release); a local copy to read
+  unset-version [<group>]                     drop that version (the computers keep the one they have)
 Quote a package line with ' ' in bash ('7zip@24.8.0 !noupdate', 'vlc | --params "/X"').
 '@
 }
@@ -153,11 +165,11 @@ function Get-SourceFiles {
 
 # The hashtable of groups.psd1 as a syntax tree, so edits can change one entry and leave the rest of the text alone
 function Get-MapAst {
-    param([string]$Text)
+    param([string]$Text, [string]$Name = 'groups.psd1', [string]$Shape = '@{ Default = @(...); Computers = @{ ... } }')
     $tokens = $null
     $errs = $null
     $sb = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$errs)
-    if (@($errs).Count -gt 0) { throw "groups.psd1, line $($errs[0].Extent.StartLineNumber): $($errs[0].Message)" }
+    if (@($errs).Count -gt 0) { throw "$Name, line $($errs[0].Extent.StartLineNumber): $($errs[0].Message)" }
     $ht = $null
     if ($sb.EndBlock -and -not $sb.ParamBlock -and -not $sb.BeginBlock -and -not $sb.ProcessBlock) {
         $st = @($sb.EndBlock.Statements)
@@ -167,7 +179,7 @@ function Get-MapAst {
                 $el[0].Expression -is [System.Management.Automation.Language.HashtableAst]) { $ht = $el[0].Expression }
         }
     }
-    if (-not $ht) { throw "groups.psd1 must hold one hashtable: @{ Default = @(...); Computers = @{ ... } }" }
+    if (-not $ht) { throw "$Name must hold one hashtable: $Shape" }
     return $ht
 }
 
@@ -204,6 +216,39 @@ function Read-PackageLists {
     return $lists
 }
 
+# version.psd1 checked like on a computer (lib/Groups.ps1), or $null without it
+function ConvertTo-Versions {
+    param([string]$Text)
+    $ast = Get-MapAst $Text 'version.psd1' "@{ Version = 'v0.2.0'; Url = '...'; Sha256 = '...'; Groups = @{ ... } }"
+    try { $data = $ast.SafeGetValue() }
+    catch { throw "version.psd1 may hold only constant data (strings, @{...}): $($_.Exception.Message)" }
+    return ConvertFrom-WmVersionData $data
+}
+
+function Read-Versions {
+    param([hashtable]$Files)
+    if (-not $Files.ContainsKey('version.psd1')) { return $null }
+    return ConvertTo-Versions (Read-TextFile $Files['version.psd1']).Text
+}
+
+function Format-Wanted {
+    param($Wanted)
+    if (-not $Wanted) { return 'not set (keeps the version it has)' }
+    if ($Wanted.Group) { return "$($Wanted.Version) (group $($Wanted.Group))" }
+    return $Wanted.Version
+}
+
+# Groups some computer is in: Default and every entry of Computers (case-insensitive table)
+function Get-ReferencedGroups {
+    param([hashtable]$Map)
+    $referenced = @{}
+    foreach ($g in @($Map.Default)) { if ($g) { $referenced[[string]$g] = $true } }
+    if ($Map.Computers -is [hashtable]) {
+        foreach ($c in $Map.Computers.Keys) { foreach ($g in @($Map.Computers[$c])) { if ($g) { $referenced[[string]$g] = $true } } }
+    }
+    return $referenced
+}
+
 function Get-FolderGroups {
     param([hashtable]$Files)
     $names = @{}
@@ -213,9 +258,9 @@ function Get-FolderGroups {
 
 # What one computer gets, as lib/Managed.ps1 resolves it: groups, merged packages, scripts and jobs
 function Get-ComputerView {
-    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer)
+    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer, $Versions = $null)
     $script:MergeMessages.Clear()
-    $c = Resolve-WmComputerContent -Map $Map -Lists $Lists -Files $Files -ComputerName $Computer
+    $c = Resolve-WmComputerContent -Map $Map -Lists $Lists -Files $Files -ComputerName $Computer -Versions $Versions
     $inMap = $false
     if ($Map.Computers -is [hashtable]) { foreach ($k in $Map.Computers.Keys) { if ([string]$k -ieq $Computer) { $inMap = $true } } }
     return [pscustomobject]@{
@@ -225,6 +270,7 @@ function Get-ComputerView {
         Packages = @($c.Requirements | Where-Object { $null -ne $_ })
         Scripts  = @($c.Scripts)
         Jobs     = @($c.Jobs)
+        Wmanager = $c.Wmanager
         Messages = $script:MergeMessages.ToArray()   # not @(...): PowerShell 7 fails on @() of a List[object]
     }
 }
@@ -243,12 +289,13 @@ function Format-Package {
 # ---------------------------------------------------------------------------
 
 function Show-Computer {
-    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer)
-    $v = Get-ComputerView -Files $Files -Map $Map -Lists $Lists -Computer $Computer
+    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer, $Versions = $null)
+    $v = Get-ComputerView -Files $Files -Map $Map -Lists $Lists -Computer $Computer -Versions $Versions
     $groups = '(none)'
     if ($v.Groups.Count -gt 0) { $groups = $v.Groups -join ', ' }
     if ($v.InMap) { Write-Host "$($Computer.ToUpperInvariant()): groups $groups" }
     else { Write-Host "$($Computer.ToUpperInvariant()) is not in groups.psd1, so only the default groups: $groups" }
+    Write-Host "wmanager: $(Format-Wanted $v.Wmanager)"
     Write-Host ''
     Write-Host "Packages ($($v.Packages.Count)):"
     $width = 0
@@ -271,7 +318,7 @@ function Show-Computer {
 }
 
 function Show-Overview {
-    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists)
+    param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, $Versions = $null)
     $default = @($Map.Default | Where-Object { $_ })
     $defaultText = '(none)'
     if ($default.Count -gt 0) { $defaultText = $default -join ', ' }
@@ -282,6 +329,12 @@ function Show-Overview {
     foreach ($c in $computers) { Write-Host ('  {0,-15}  {1}' -f $c, (@($Map.Computers[$c]) -join ', ')) }
     $common = @($Lists[''] | Where-Object { $null -ne $_ })
     Write-Host "Common list: $($common.Count) packages"
+    $line = 'not set (the computers keep the version they have)'
+    if ($Versions -and $Versions.Default) { $line = "$($Versions.Default.Version) on every computer" }
+    if ($Versions) {
+        foreach ($g in @($Versions.Groups.Keys | Sort-Object)) { $line += "; $($Versions.Groups[$g].Version) in group $g" }
+    }
+    Write-Host "wmanager version: $line"
     Write-Host ''
     $names = @{}
     foreach ($g in $default) { $names[[string]$g] = [string]$g }
@@ -304,7 +357,10 @@ function Show-Overview {
         $jb = @($jobs).Count
         $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
         $extra = ''
-        if (-not $hasFiles) { $extra = '   (no folder groups/' + $g + '/)' }
+        if (-not $hasFiles) {
+            $extra = '   (no folder groups/' + $g + '/)'
+            if (Test-WmGroupHasVersion $Versions $g) { $extra = '   (only its own wmanager version)' }
+        }
         Write-Host ('  {0,-15}  {1,-15}  packages: {2}  scripts: {3}  jobs: {4}{5}' -f $g, $members, $pk, $sc, $jb, $extra)
     }
 }
@@ -346,6 +402,8 @@ function Invoke-Check {
         try { $map = Read-GroupMap $Files } catch { Write-Problem error (Format-WmErrorText $_ -English) }
     }
     if (-not $Files.ContainsKey('choco-reqs.txt')) { Write-Problem warning 'no choco-reqs.txt: the common list is empty' }
+    $versions = $null
+    try { $versions = Read-Versions $Files } catch { Write-Problem error (Format-WmErrorText $_ -English) }
 
     $lists = @{}
     $listsOk = $true
@@ -398,13 +456,17 @@ function Invoke-Check {
                 Write-Problem warning "groups.psd1: '$c' is not a valid Windows computer name (1-15 letters, digits, hyphens), so no computer matches it"
             }
         }
-        $referenced = @{}
-        foreach ($g in @($map.Default)) { if ($g) { $referenced[[string]$g] = $true } }
-        foreach ($c in $computers) { foreach ($g in @($map.Computers[$c])) { if ($g) { $referenced[[string]$g] = $true } } }
+        $referenced = Get-ReferencedGroups $map
         $folders = Get-FolderGroups $Files
         foreach ($g in @($referenced.Keys | Sort-Object)) {
-            if (-not ($folders | Where-Object { $_ -ieq $g })) {
+            # A group may exist only for its own wmanager version
+            if (-not ($folders | Where-Object { $_ -ieq $g }) -and -not (Test-WmGroupHasVersion $versions $g)) {
                 Write-Problem warning "group $g (groups.psd1) has no folder groups/$g/: its computers get nothing from it"
+            }
+        }
+        if ($versions) {
+            foreach ($g in @($versions.Groups.Keys | Sort-Object)) {
+                if (-not $referenced.ContainsKey($g)) { Write-Problem warning "version.psd1: no computer is in group $g, so its version reaches none" }
             }
         }
         foreach ($g in $folders) {
@@ -414,7 +476,7 @@ function Invoke-Check {
             # Package conflicts as each computer would report them; '*' stands for the computers not in the map
             $seen = @{}
             foreach ($c in (@($computers) + '*')) {
-                $v = Get-ComputerView -Files $Files -Map $map -Lists $lists -Computer $c
+                $v = Get-ComputerView -Files $Files -Map $map -Lists $lists -Computer $c -Versions $versions
                 foreach ($m in @($v.Messages | Where-Object { $_.Key -eq 'managed.package_conflict' })) {
                     if (-not $seen.ContainsKey($m.Text)) { $seen[$m.Text] = $true; Write-Problem warning "groups $($v.Groups -join ', '): $($m.Text)" }
                 }
@@ -730,6 +792,194 @@ function New-GroupFile {
 }
 
 # ---------------------------------------------------------------------------
+# version.psd1: the wmanager version the computers run (written whole, from the data)
+# ---------------------------------------------------------------------------
+
+$script:ReleaseDownload = 'https://github.com/lechup/wmanager/releases/download'
+
+$script:VersionHeader = @(
+    '# The wmanager version the computers of this source run. tools/groups.ps1 set-version and unset-version write'
+    '# this file whole, so changes by hand don''t last.'
+    '# At its scheduled update a computer downloads the release from Url, installs it only when its SHA256 matches, and'
+    '# then runs exactly this version (also an older one). A computer in a group under Groups runs that group''s version:'
+    '# its own groups come before the default ones, then the groups.psd1 order decides. Without a version it keeps its own.'
+)
+
+function Read-ZipText {
+    param($Archive, [string]$Name)
+    $entry = $Archive.GetEntry($Name)
+    if (-not $entry) { return $null }
+    $reader = New-Object System.IO.StreamReader($entry.Open(), [Text.Encoding]::UTF8)
+    try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+}
+
+# Can this Update-Packages.ps1 install itself (Update-Packages.ps1 -SelfInstall, lib/SelfUpdate.ps1)?
+function Test-SelfInstall {
+    param([string]$Text)
+    if (-not $Text) { return $false }
+    $tokens = $null
+    $errs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$errs)
+    if (-not $ast.ParamBlock) { return $false }
+    return [bool](@($ast.ParamBlock.Parameters) | Where-Object { $_.Name.VariablePath.UserPath -eq 'SelfInstall' })
+}
+
+# A release as the computers will use it: its SHA256, checked against the release's SHA256SUMS when it has one; the
+# version in wmanager/VERSION; and whether it can install itself (releases before self-update, such as v0.1.0, can't).
+function Get-ReleaseInfo {
+    param([string]$Version, [string]$Url, [string]$Zip)
+    if (-not (Test-WmReleaseTag $Version)) { throw "'$Version' is not a wmanager release such as v0.2.0" }
+    if (-not $Url) { $Url = "$script:ReleaseDownload/$Version/wmanager-$Version.zip" }
+    if (-not (Test-WmReleaseUrl $Url)) { throw "the computers fetch a release from an https:// address or a path (C:\..., \\server\share\...), not from $Url" }
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('wmanager-release-' + [guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($tmp)
+    try {
+        $file = $Zip
+        if ($file) {
+            if (-not [IO.File]::Exists($file)) { throw "file $file not found" }
+        } elseif ($Url -match '^https://') {
+            $file = Join-Path $tmp "wmanager-$Version.zip"
+            Write-Host "Downloading $Url ..."
+            $ProgressPreference = 'SilentlyContinue'
+            try { Invoke-WebRequest -Uri $Url -OutFile $file -UseBasicParsing -TimeoutSec 300 }
+            catch { throw "cannot download $Url ($($_.Exception.Message)); is $Version released? With a copy of the ZIP, give it with -Zip" }
+        } elseif ([IO.File]::Exists($Url)) {
+            $file = $Url
+        } else {
+            throw "$Url can't be read from here; give a copy of the ZIP with -Zip"
+        }
+        $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+        # The release's SHA256SUMS next to the ZIP. Whatever hash goes into version.psd1 is what every computer
+        # installs, so say so when the file couldn't be checked against it
+        $checked = $false
+        if ($Url -match '^https://') {
+            $sums = Join-Path $tmp 'SHA256SUMS'
+            $name = $Url.Substring($Url.LastIndexOf('/') + 1)
+            $got = $true
+            try { Invoke-WebRequest -Uri ($Url.Substring(0, $Url.LastIndexOf('/') + 1) + 'SHA256SUMS') -OutFile $sums -UseBasicParsing -TimeoutSec 60 }
+            catch { $got = $false }
+            if ($got) {
+                $line = @([IO.File]::ReadAllLines($sums) | Where-Object { $_ -match ('^[0-9A-Fa-f]{64}\s+\*?' + [regex]::Escape($name) + '$') })
+                if ($line.Count -eq 1) {
+                    $listed = ($line[0] -split '\s+')[0].ToUpperInvariant()
+                    if ($listed -ne $hash) { throw "the SHA256 of the ZIP ($hash) differs from the release's SHA256SUMS ($listed)" }
+                    Write-Host "The SHA256 matches the release's SHA256SUMS."
+                    $checked = $true
+                }
+            }
+        }
+        if (-not $checked) {
+            Write-Problem warning "the ZIP was not checked against a SHA256SUMS of the release; the computers will install exactly $file (SHA256 $hash), so make sure it is the release you mean"
+        }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [IO.Compression.ZipFile]::OpenRead($file)
+        try {
+            $found = Read-ZipText $archive 'wmanager/VERSION'
+            if ($null -eq $found) { throw 'the ZIP is not a wmanager release: it has no wmanager/VERSION' }
+            if ($found.Trim() -ne $Version) { throw "the ZIP holds wmanager $($found.Trim()), not $Version" }
+            if (-not (Test-SelfInstall (Read-ZipText $archive 'wmanager/Update-Packages.ps1'))) {
+                throw "wmanager $Version can't install itself (its Update-Packages.ps1 has no -SelfInstall); pick a newer release"
+            }
+        } finally {
+            $archive.Dispose()
+        }
+        return [pscustomobject]@{ Version = $Version; Url = $Url; Sha256 = $hash }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# version.psd1 of the folder (also a new file git doesn't know yet); empty without it
+function Read-VersionFile {
+    param([string]$Root)
+    $path = Get-FullPath $Root 'version.psd1'
+    if (-not [IO.File]::Exists($path)) { return [pscustomobject]@{ Default = $null; Groups = @{} } }
+    try { return ConvertTo-Versions (Read-TextFile $path).Text }
+    catch { throw "$(Format-WmErrorText $_ -English) (fix or delete version.psd1 first)" }
+}
+
+function Format-VersionEntry {
+    param($Entry, [string]$Indent)
+    return @(
+        "${Indent}Version = $(Format-Quoted $Entry.Version)"
+        "${Indent}Url     = $(Format-Quoted $Entry.Url)"
+        "${Indent}Sha256  = $(Format-Quoted $Entry.Sha256)"
+    )
+}
+
+# Writes version.psd1 from the data (UTF-8 with BOM, CRLF), read back first the way a computer reads it; deletes it
+# when it would be empty. Returns whether the file is there.
+function Write-VersionFile {
+    param([string]$Root, $Versions)
+    $path = Get-FullPath $Root 'version.psd1'
+    if (-not $Versions.Default -and $Versions.Groups.Count -eq 0) {
+        if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
+        return $false
+    }
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($l in $script:VersionHeader) { $lines.Add($l) }
+    $lines.Add('@{')
+    if ($Versions.Default) { foreach ($l in (Format-VersionEntry $Versions.Default '    ')) { $lines.Add($l) } }
+    if ($Versions.Groups.Count -gt 0) {
+        $lines.Add('    Groups  = @{')
+        foreach ($g in @($Versions.Groups.Keys | Sort-Object)) {
+            $lines.Add("        $(Format-Quoted $g) = @{")
+            foreach ($l in (Format-VersionEntry $Versions.Groups[$g] '            ')) { $lines.Add($l) }
+            $lines.Add('        }')
+        }
+        $lines.Add('    }')
+    }
+    $lines.Add('}')
+    $text = ($lines.ToArray() -join "`r`n") + "`r`n"
+    $null = ConvertTo-Versions $text
+    Write-TextFile $path $text $true
+    return $true
+}
+
+function Set-Version {
+    param([string]$Root, [string]$Version, [string]$Group)
+    if ($Group -and -not (Test-WmGroupName $Group)) { throw "invalid group name '$Group' (letters, digits, '.', '-', '_')" }
+    $versions = Read-VersionFile $Root
+    $info = Get-ReleaseInfo -Version $Version -Url $Url -Zip $Zip
+    if ($Group) {
+        $versions.Groups.Remove($Group)   # case-insensitive: the new spelling replaces the old entry
+        $versions.Groups[$Group] = $info
+        Write-Host "version.psd1: group $Group -> wmanager $Version (SHA256 $($info.Sha256))."
+        # An invalid groups.psd1 is check's to report; then there is nothing to say about the group here
+        $map = $null
+        try { $map = Read-GroupMap (Get-SourceFiles $Root) } catch { }
+        if ($null -ne $map -and -not (Get-ReferencedGroups $map).ContainsKey($Group)) {
+            Write-Problem warning "no computer is in group $Group yet: pwsh tools/groups.ps1 <folder> add-computer <computer> $Group"
+        }
+    } else {
+        $versions.Default = $info
+        Write-Host "version.psd1: every computer -> wmanager $Version (SHA256 $($info.Sha256))."
+    }
+    $null = Write-VersionFile $Root $versions
+    Write-Host 'Sign and publish with tools/publish.sh; each computer switches at its next scheduled update.'
+}
+
+function Remove-Version {
+    param([string]$Root, [string]$Group)
+    $versions = Read-VersionFile $Root
+    if ($Group) {
+        if (-not $versions.Groups.ContainsKey($Group)) { throw "group $Group has no version of its own in version.psd1" }
+        $versions.Groups.Remove($Group)
+    } else {
+        if (-not $versions.Default) { throw 'version.psd1 names no version for every computer' }
+        $versions.Default = $null
+    }
+    if (-not (Write-VersionFile $Root $versions)) {
+        Write-Host 'Deleted version.psd1: the computers keep the version they have.'
+    } elseif ($Group) {
+        Write-Host "version.psd1: group $Group has no version of its own any more; its computers follow the rest."
+    } else {
+        Write-Host 'version.psd1: no version for every computer any more; they keep the one they have (groups with their own still switch).'
+    }
+    Write-Host 'Sign and publish with tools/publish.sh.'
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -744,8 +994,9 @@ try {
             $files = Get-SourceFiles $root
             $map = Read-GroupMap $files
             $lists = Read-PackageLists $files
-            if ($args1.Count -gt 0) { Show-Computer -Files $files -Map $map -Lists $lists -Computer $args1[0] }
-            else { Show-Overview -Files $files -Map $map -Lists $lists }
+            $versions = Read-Versions $files
+            if ($args1.Count -gt 0) { Show-Computer -Files $files -Map $map -Lists $lists -Computer $args1[0] -Versions $versions }
+            else { Show-Overview -Files $files -Map $map -Lists $lists -Versions $versions }
         }
         'check' {
             if (-not (Invoke-Check (Get-SourceFiles $root))) { exit 1 }
@@ -774,6 +1025,18 @@ try {
         'new-job' {
             if ($args1.Count -ne 3) { throw 'usage: new-job <group> <hourly|daily|weekly> <name>' }
             New-GroupFile -Root $root -Group $args1[0] -Kind 'job' -Every $args1[1] -Name $args1[2]
+        }
+        'set-version' {
+            if ($args1.Count -lt 1 -or $args1.Count -gt 2) { throw 'usage: set-version <version> [<group>] [-Url <address>] [-Zip <file>]' }
+            $group = ''
+            if ($args1.Count -eq 2) { $group = $args1[1] }
+            Set-Version -Root $root -Version $args1[0] -Group $group
+        }
+        'unset-version' {
+            if ($args1.Count -gt 1) { throw 'usage: unset-version [<group>]' }
+            $group = ''
+            if ($args1.Count -eq 1) { $group = $args1[0] }
+            Remove-Version -Root $root -Group $group
         }
         default { Show-Usage; exit 2 }
     }

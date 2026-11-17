@@ -67,4 +67,12 @@
     'managed.job_timeout'                = 'Job {0}: timed out ({1} min), stopped.'
     'managed.job_exit_code'              = 'Job {0}: ended with exit code {1}.'
     'managed.job_done'                   = 'Job {0}: done.'
+    # version.psd1 ({0}: the entry, e.g. Groups.test.Url; {1}: its value)
+    'managed.version_unknown_key'      = 'version.psd1: unknown key ''{0}'' (allowed: Version, Url, Sha256, Groups)'
+    'managed.version_missing'          = 'version.psd1: {0} is missing (a version needs Version, Url and Sha256)'
+    'managed.version_bad_tag'          = 'version.psd1: {0} is not a wmanager release such as v0.2.0: {1}'
+    'managed.version_bad_url'          = 'version.psd1: {0} must be an https:// address or a path (C:\..., \\server\share\...): {1}'
+    'managed.version_bad_hash'         = 'version.psd1: {0} is not a SHA256 (64 hexadecimal digits)'
+    'managed.version_bad_group'        = 'version.psd1: invalid group name in Groups: ''{0}'''
+    'managed.version_groups_not_table' = 'version.psd1: Groups must give each group its own Version, Url and Sha256'
 }

@@ -73,8 +73,8 @@ changing anything.
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
 | `choco-reqs.txt` | Package list (when there is no management source) |
 | `lang\<code>\*.psd1` | Messages in each language (see [Languages](#languages)) |
-| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, scheduled tasks, the configuration wizard |
-| `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts and jobs; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
+| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, wmanager's own updates, scheduled tasks, the configuration wizard |
+| `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts, jobs and the wmanager version; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
 | `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
@@ -181,13 +181,15 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
 Optional. A **management source** is a signed folder of plain files that computers download from an `https://` address
 (your own web server, a private Git repository), a network share or a local folder (see
 [Where to keep the source](#where-to-keep-the-source)).
-It holds the common package list, the map of computers to groups, and each group's own packages, scripts and jobs.
+It holds the common package list, the map of computers to groups, each group's own packages, scripts and jobs, and
+the wmanager version the computers run.
 Every computer checks it at provisioning and in each scheduled update (the hourly job run at most once a day):
 
 ```
 manifest.psd1                        generated and signed by tools/publish.sh; don't edit
 source-id.txt                        identifier of this source, created by tools/publish.sh; don't copy it to another source
 groups.psd1                          computer name -> groups
+version.psd1                         wmanager version the computers run (optional; see Updating wmanager)
 choco-reqs.txt                       common list (every computer)
 groups/<group>/choco-reqs.txt        extra packages for the group (optional)
 groups/<group>/scripts/*.ps1         scripts run as SYSTEM when their content changes (optional)
@@ -322,12 +324,13 @@ pwsh tools/groups.ps1 $src add-package common '7zip@24.8.0'
 pwsh tools/groups.ps1 $src remove-package floor-1 vlc
 pwsh tools/groups.ps1 $src new-script accounting printers    # groups/accounting/scripts/20-printers.ps1
 pwsh tools/groups.ps1 $src new-job all weekly cleanup        # groups/all/jobs/weekly/cleanup.ps1
+pwsh tools/groups.ps1 $src set-version v0.2.0                # see Updating wmanager below
 pwsh tools/groups.ps1 $src check
 ```
 
 Quote package lines with `' '` (in bash `!` inside `" "` is history expansion). New scripts and jobs come from a
 template, as UTF-8 with BOM and CRLF, and scripts are numbered in tens after the last one (they run in name order).
-`check` reports what the computers would reject: a `groups.psd1` or package list that doesn't parse, a script with a
+`check` reports what the computers would reject: a `groups.psd1`, `version.psd1` or package list that doesn't parse, a script with a
 syntax error, a file name they don't accept. It also warns about what they would ignore or do differently than you
 might expect: a group without a folder, a folder no computer uses, scripts and jobs in the wrong folder, a script
 with non-ASCII characters and no BOM, a package two groups of one computer describe differently, script numbers of
@@ -368,6 +371,52 @@ Notes:
   source to an existing computer, run provisioning again.
 - Script and job output goes through the console code page (e.g. 852 on Polish Windows): characters outside it come
   out as `?`.
+
+### Updating wmanager
+
+The scripts on the computers (`C:\ProgramData\wmanager`) are the version that provisioned them. With a management
+source, `version.psd1` in the source names the version they run, and each computer switches to it at its next
+scheduled update; nobody has to visit it. Without a management source, update a computer by provisioning it again.
+
+```bash
+pwsh tools/groups.ps1 $src set-version v0.2.0             # every computer
+pwsh tools/groups.ps1 $src add-computer OFFICE-07 pilot   # a few computers first...
+pwsh tools/groups.ps1 $src set-version v0.3.0 pilot       # ...get the new version a few days earlier
+pwsh tools/groups.ps1 $src unset-version pilot            # then they follow the rest again
+tools/publish.sh $src
+```
+
+`set-version` downloads the release ZIP from GitHub, checks it against the release's `SHA256SUMS`, checks that it is
+that version and that it can install itself, and writes the version, the address of the ZIP and its SHA256 to
+`version.psd1`. A computer in a group with a version of its own runs that one: its own groups come before the default
+ones (`Default`), so a pilot group wins even when a default group has a version too, and among them the `groups.psd1`
+order decides; a group may exist only for that, without a folder. Without `SHA256SUMS` to check against (another
+`-Url`, or `-Zip` that can't be compared) it warns: whatever file it hashes is what every computer installs. `unset-version` without a group drops the
+version for every computer: from then on they keep the one they have. `show` and `show <computer>` print the version.
+
+At the scheduled update (not in the hourly run) a computer whose version differs:
+
+1. downloads the ZIP into `state\self-update` and checks it against the SHA256 from the signed source; it doesn't use
+   a file that differs or holds another version;
+2. hands the run over to the new version, which copies itself into `C:\ProgramData\wmanager` (the configuration,
+   state and logs stay) and does the rest of the scheduled update. It keeps a copy of the old version first: if
+   copying stops partway (a file in use, a full disk), it puts the old version back, so old and new files never
+   mix.
+
+It installs exactly the named version, also an older one, so going back is `set-version` with the previous release.
+If the download fails (a warning) or the new version doesn't install itself (an error), the run goes on with the
+version the computer has, and the next scheduled update tries again. The log shows each step
+(`wmanager v0.2.0 -> wmanager v0.3.0 ...`), and so does Loki.
+
+- The version and the hash come from the signed source, so only the key holder decides what the computers run: a new
+  release on GitHub reaches no computer until you name it, and a changed file on GitHub is refused.
+- Releases before self-update (v0.1.0) can't install themselves; `set-version` refuses them.
+- `-Url <address>` points the computers elsewhere: an `https://` address without a login (`Management.AuthHeader`
+  is not sent there), a share or a folder, e.g. for computers that can't reach GitHub. `-Zip <file>` gives
+  `set-version` a local copy to read when it can't fetch that address itself:
+  `pwsh tools/groups.ps1 $src set-version v0.2.0 -Url '\\server\wmanager\wmanager-v0.2.0.zip' -Zip ./wmanager-v0.2.0.zip`.
+- A newly provisioned computer runs the version it was provisioned with until its first scheduled update.
+- The scheduled tasks are not registered again; a new version that needs other tasks does that itself.
 
 ### Several companies
 
@@ -424,7 +473,8 @@ pwsh ./init.ps1 -ConfigPath ~/wmanager/configs/company2/provision.config.psd1
   An empty process list (as for `rustdesk`, which always runs as a service) means the package is never deferred.
 - When a restart is needed, `wmanager-Notify` shows the user a notification. The computer never restarts on its own.
 - With a management source it also fetches and checks the source and runs the group scripts whose content changed
-  or that failed before (after debloat).
+  or that failed before (after debloat). When the source names another wmanager version, it first switches to it
+  (see [Updating wmanager](#updating-wmanager)).
 - Runs never overlap. When the hourly `wmanager-Jobs` is busy (e.g. both start after a boot), the update waits up
   to 50 minutes for it; if it is still busy, `wmanager-Retry` does the full run at the next sign-in. The hourly
   run skips its turn when another run is busy, and provisioning waits up to 10 minutes.
@@ -567,7 +617,8 @@ publish releases in the repository decides what computers install, so guard that
 locally, to look at them first.
 
 The logs show the version (`wmanager v0.2.0 provisioning: ...`, also in Loki); a copy run from a git checkout has no
-`VERSION` file and logs just `wmanager`.
+`VERSION` file and logs just `wmanager`. Computers that are already installed don't follow "latest": with a management
+source, name the new release in each source (see [Updating wmanager](#updating-wmanager)).
 
 ## Limitations
 

@@ -67,4 +67,12 @@
     'managed.job_timeout'                = 'Opdracht {0}: time-out ({1} min), gestopt.'
     'managed.job_exit_code'              = 'Opdracht {0}: beëindigd met afsluitcode {1}.'
     'managed.job_done'                   = 'Opdracht {0}: voltooid.'
+    # version.psd1 ({0}: the entry, e.g. Groups.test.Url; {1}: its value)
+    'managed.version_unknown_key'      = 'version.psd1: onbekende sleutel ''{0}'' (toegestaan: Version, Url, Sha256, Groups)'
+    'managed.version_missing'          = 'version.psd1: {0} ontbreekt (een versie heeft Version, Url en Sha256 nodig)'
+    'managed.version_bad_tag'          = 'version.psd1: {0} is geen wmanager-versie zoals v0.2.0: {1}'
+    'managed.version_bad_url'          = 'version.psd1: {0} moet een https://-adres of een pad zijn (C:\..., \\server\share\...): {1}'
+    'managed.version_bad_hash'         = 'version.psd1: {0} is geen SHA256 (64 hexadecimale cijfers)'
+    'managed.version_bad_group'        = 'version.psd1: ongeldige groepsnaam in Groups: ''{0}'''
+    'managed.version_groups_not_table' = 'version.psd1: Groups moet elke groep een eigen Version, Url en Sha256 geven'
 }
