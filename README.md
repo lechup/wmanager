@@ -74,8 +74,9 @@ changing anything.
 | `choco-reqs.txt` | Package list (when there is no management source) |
 | `lang\<code>\*.psd1` | Messages in each language (see [Languages](#languages)) |
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, wmanager's own updates, scheduled tasks, the configuration wizard |
-| `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts, jobs and the wmanager version; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
-| `examples/management/` | Template of a management source (group map, lists, an example script, a daily system report job) |
+| `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts, jobs and the wmanager version, switch on library items; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
+| `library/` | Ready group scripts and jobs to switch on with `tools/groups.ps1 enable` (see [Library](#library-of-ready-scripts-and-jobs)) |
+| `examples/management/` | Template of a management source (group map, lists, an example script, the daily system report from the library) |
 | `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
 | `.github/workflows/release.yml` | Publishes a release when a `vX.Y.Z` tag is pushed (see [Releases](#releases)) |
@@ -231,7 +232,8 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   catches up at the next hour it is on. The start time is recorded before the job runs, so a failed job waits for its
   next turn (the error is in the log). Time limit `JobTimeoutMinutes` (10 by default). Every line a job prints goes to
   Loki unchanged, with the label `task="<group>/<file name>"` (`job="jobs"`): print one JSON object per line and Grafana
-  can read it with `| json`. The local log is `logs\jobs-YYYY-MM-DD.log`. Example:
+  can read it with `| json`. The local log is `logs\jobs-YYYY-MM-DD.log`. Example (also in the
+  [library](#library-of-ready-scripts-and-jobs)):
   `examples/management/groups/all/jobs/daily/system-report.ps1`, a daily report (model and serial number, disks, RAM,
   uptime, Windows Update, Defender, BitLocker, TPM, Secure Boot, firewall, local administrators, disk health, battery):
 
@@ -371,6 +373,43 @@ Notes:
   source to an existing computer, run provisioning again.
 - Script and job output goes through the console code page (e.g. 852 on Polish Windows): characters outside it come
   out as `?`.
+
+### Library of ready scripts and jobs
+
+`library/` holds scripts and jobs for common office settings and checks. `enable` copies one into a group of your
+source; the copy is yours: its settings are at the top of the file, and like any group file it runs on the computers
+of that group once the source is signed and published.
+
+```bash
+pwsh tools/groups.ps1 $src library                           # what there is, and which groups have it
+pwsh tools/groups.ps1 $src enable windows-update all         # groups/all/scripts/20-windows-update.ps1
+pwsh tools/groups.ps1 $src enable check-disk-space all       # groups/all/jobs/daily/check-disk-space.ps1
+pwsh tools/groups.ps1 $src enable check-updates all weekly   # a job on another schedule
+tools/publish.sh $src
+```
+
+| Name | Kind | What it does | Settings (top of the file) |
+| --- | --- | --- | --- |
+| `windows-update` | script | Windows Update for Business policies: no automatic restart during active hours, new Windows versions (feature updates) deferred, monthly updates optionally deferred, drivers optionally excluded. Home ignores the deferrals. | active hours (7-19), feature deferral (90 days), quality deferral (0), exclude drivers (no) |
+| `power` | script | Screen-off and sleep times, plugged in and on battery; Fast Startup off, so "Shut down" is a real one and pending updates get their restart | 15 / never, 5 / 20 min; Fast Startup off |
+| `defender-hardening` | script | Microsoft Defender: potentially unwanted apps blocked, network protection (malicious sites), 14 attack surface reduction rules in **audit mode** (they only record what they would block: event 1122 in the Defender log); after a few weeks without surprises set `$AsrAction = 'Enabled'`. Changes nothing when another antivirus is active; fails when Defender doesn't keep a rule (e.g. a policy overrules it). | PUA, network protection, ASR action, the list of rules |
+| `network-hardening` | script | SMBv1 off (exit 3010 when that needs a restart), LLMNR and NetBIOS name guessing off (a common way to capture passwords in an office network), firewall on in every profile. NetBIOS off can stop very old devices (an old NAS) from being found by name; it is set per network adapter present when the script runs. | each of the four on or off |
+| `check-disk-space` | job, daily | One JSON line per local disk; **fails** when a disk is low: less than both thresholds free | 15 GB and 10 % |
+| `check-updates` | job, daily | Last successful Windows Update installation, a restart pending for too long (pending and the computer up for that many days); **fails** when behind | 40 days, 7 days |
+| `check-defender` | job, daily | Real-time protection, signature age, last scan, threats found; **fails** on a problem; passes when another antivirus is registered and Defender is passive | 3 days, 14 days, 1 day |
+| `system-report` | job, daily | The daily report described under **Jobs** above (no thresholds) | none |
+
+- **Alerts:** a check job that finds a problem ends with exit code 1, which wmanager logs as an error with
+  `job="jobs"`, so one Grafana alert covers every check, e.g. on
+  `count_over_time({service_name="wmanager", job="jobs", level="error"} [1d]) > 0`. Its JSON lines
+  (`| json | kind="check" | ok="false"`) say what and where.
+- **Scripts run once per content**, like every group script: changing a setting runs the script again on every
+  computer of the group. Removing a script or a computer leaving the group doesn't undo what it set.
+- **New revisions:** each library file starts with `# wmanager library: <name>, revision <n>`, kept in your copy.
+  When a newer wmanager brings a newer revision, `check` and `library` say which copies are older; compare the two
+  files, carry your settings over, and publish (the computers run the script again). `enable` doesn't overwrite a copy.
+- **One copy per computer:** `check` warns when a computer would get the same item from two of its groups (both
+  run, and the later one's settings win).
 
 ### Updating wmanager
 

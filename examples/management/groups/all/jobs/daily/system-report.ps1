@@ -1,6 +1,9 @@
-﻿# Example job: daily system report. wmanager runs it as SYSTEM once a day (folder jobs/daily) and sends
-# every line it prints to Loki unchanged, labelled task="all/system-report". Each line is one JSON object
-# with a "kind" field, so Grafana can turn the report into tables, e.g. free space on every computer:
+﻿# wmanager library: system-report, revision 1
+# Daily system report: hardware and serial, disks, RAM, uptime, updates, Defender, BitLocker, TPM, Secure Boot, admins.
+#
+# Job: wmanager runs it as SYSTEM on its schedule (the jobs/<schedule> folder) and sends every line it prints to Loki
+# unchanged, labelled task="<group>/system-report". Each line is one JSON object with a "kind" field, so Grafana can
+# turn the report into tables, e.g. free space on every computer:
 #   {service_name="wmanager", task="all/system-report"} | json | kind="disk"
 # A section that fails prints {"kind": ..., "error": ...} instead of stopping the report.
 # Exit code 0 = done; anything else is an error in the log. Save as UTF-8 with BOM.
