@@ -488,6 +488,8 @@ its folders: 2 to 40 letters, digits, `.`, `-`, `_`, with at least one letter.
 ```bash
 pwsh tools/wm.ps1                                            # menu: choose a company, then what to do
 pwsh tools/wm.ps1 list                                       # the companies and what each still lacks
+pwsh tools/wm.ps1 status                                     # the computers of every company, a line each
+pwsh tools/wm.ps1 globex status                              # its computers: Healthchecks, last update, errors
 pwsh tools/wm.ps1 new globex                                 # key, source, first signature, the wizard
 pwsh tools/wm.ps1 globex add-computer OFFICE-07 accounting   # any tools/groups.ps1 command, on its source
 pwsh tools/wm.ps1 globex publish                             # check and sign; then push it or copy it to its server
@@ -501,6 +503,17 @@ pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and ever
   (`$VISUAL` or `$EDITOR`, else nano or vi); when you close it, the source is checked, and a mistake opens the file
   again. The list of companies says what each one still lacks: a key, a signature of the latest changes, a
   configuration.
+- **`status`** shows what the computers of a company reported: the state of each one's Healthchecks check, its last
+  update (time, warnings, errors), the errors of the last 24 hours (jobs included) and the wmanager version it runs,
+  with `v0.2.0 -> v0.3.0` while it hasn't switched to the version of the source yet. It lists the computers of
+  `groups.psd1` and every computer that reported, so one that never did stands out. `pwsh tools/wm.ps1 status`
+  sums up every company in a line. It reads with read-only keys, which `pwsh tools/wm.ps1 <company> monitoring` asks
+  for and keeps in `<company>/monitoring.psd1` (only on your computer; the computers have write-only ones):
+  - Healthchecks: in the project the computers ping, Settings > API Access > Create API key (read-only);
+  - Grafana Cloud: Administration > Access policies, a policy with the `logs:read` scope, then Add token (the user is
+    the configuration's `LokiUser`).
+
+  Loki is read 14 days back, as long as Grafana Cloud's free plan keeps logs.
 - **`new`** goes step by step: a key of its own, the source from `examples/management/` (never a copy of another
   company's source, whose `source-id.txt` must stay its own), the first signature, which creates `source-id.txt`, and
   the wizard, which already offers that identifier. Each step checks whether it is done, so running `new` again

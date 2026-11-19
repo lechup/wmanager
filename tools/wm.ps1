@@ -9,11 +9,14 @@
 #
 #   pwsh tools/wm.ps1                          the menu
 #   pwsh tools/wm.ps1 list                     the companies and their state
+#   pwsh tools/wm.ps1 status                   the computers of every company, one line each (Healthchecks, Loki)
 #   pwsh tools/wm.ps1 new <company>            key, source (from examples/management), first signature, configuration;
 #                                              run it again and it carries on where it stopped
 #   pwsh tools/wm.ps1 usb <folder>             wmanager (the latest release, when the folder has none) and every
 #                                              company's configuration, for run.cmd, which then asks which company
 #   pwsh tools/wm.ps1 <company>                the menu of one company
+#   pwsh tools/wm.ps1 <company> status         its computers: Healthchecks, the last update, errors, wmanager version
+#   pwsh tools/wm.ps1 <company> monitoring     the read-only keys status needs (kept in <company>/monitoring.psd1)
 #   pwsh tools/wm.ps1 <company> publish        check and sign its source (tools/publish.sh)
 #   pwsh tools/wm.ps1 <company> config         the configuration wizard (init.ps1) for its provision.config.psd1
 #   pwsh tools/wm.ps1 <company> <command> ...  a tools/groups.ps1 command on its source, e.g.
@@ -32,6 +35,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $repo = Split-Path $PSScriptRoot -Parent
 . (Join-Path (Join-Path $repo 'lib') 'Lang.ps1')
+. (Join-Path (Join-Path $repo 'lib') 'Groups.ps1')   # the version each computer should run, as the computers work it out
 Initialize-WmLanguage -Lang 'en' -Root $repo
 
 $script:Self = $PSCommandPath
@@ -44,7 +48,7 @@ function ConvertTo-FullPath {
 }
 
 $script:Root = if ($env:WMANAGER_COMPANIES) { ConvertTo-FullPath $env:WMANAGER_COMPANIES } else { Join-Path $HOME 'wmanager-companies' }
-$script:Commands = @('list', 'new', 'usb', 'help')
+$script:Commands = @('list', 'new', 'usb', 'status', 'help')
 $script:Releases = 'https://github.com/lechup/wmanager/releases'
 
 function Show-Usage {
@@ -502,8 +506,335 @@ function Copy-ToUsb {
 }
 
 # ---------------------------------------------------------------------------
+# The computers: what Healthchecks and Loki know, read with read-only keys kept on this computer
+# ---------------------------------------------------------------------------
+
+$script:StatusDays = 14   # how far back Loki is read (Grafana Cloud's free plan keeps 14 days)
+
+# https only, except on this computer (the tests' stand-in servers)
+function Test-ServiceUrl {
+    param([string]$Url)
+    return ($Url -match '^https://[^/]' -or $Url -match '^http://(127\.0\.0\.1|localhost)(:\d+)?(/|$)')
+}
+
+# A single-quoted PowerShell string
+function ConvertTo-PsdLiteral {
+    param([AllowEmptyString()][string]$Value)
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
+# A secret typed at the terminal without showing it (piped input: as it comes)
+function Read-Secret {
+    param([string]$Prompt)
+    if ([Console]::IsInputRedirected) { return [string](Read-Line $Prompt) }
+    $secure = Read-Host $Prompt -AsSecureString
+    return ([Net.NetworkCredential]::new('', $secure).Password).Trim()
+}
+
+# <company>/monitoring.psd1: the read-only keys of its Healthchecks project and Grafana Cloud stack. Never on the
+# computers or the drive: the computers have write-only ones in their configuration.
+function Get-MonitoringPath {
+    param($Company)
+    return (Join-Path $Company.Dir 'monitoring.psd1')
+}
+
+function Read-Monitoring {
+    param($Company)
+    $path = Get-MonitoringPath $Company
+    if (-not [IO.File]::Exists($path)) { return $null }
+    return (Import-PowerShellDataFile -LiteralPath $path)
+}
+
+# Where the company's computers send their logs and pings: from its provision.config.psd1
+function Read-Reporting {
+    param($Company)
+    if (-not [IO.File]::Exists($Company.Config)) { throw "$($Company.Name) has no configuration yet: pwsh tools/wm.ps1 $($Company.Name) config" }
+    $cfg = Import-PowerShellDataFile -LiteralPath $Company.Config
+    $loki = [string]$cfg.LokiUrl
+    $loki = ($loki -replace '/loki/api/v1/push$', '').TrimEnd('/')
+    $hcBase = if ($cfg.HealthchecksBaseUrl) { [string]$cfg.HealthchecksBaseUrl } else { 'https://hc-ping.com' }
+    # The API of healthchecks.io for hc-ping.com; a server of your own has both under one address (.../ping)
+    $hcApi = if ($hcBase -match '^https://hc-ping\.com/?$') { 'https://healthchecks.io' } else { ($hcBase.TrimEnd('/') -replace '/ping$', '') }
+    return [pscustomobject]@{
+        LokiUrl     = $loki
+        LokiUser    = [string]$cfg.LokiUser
+        HasLoki     = [bool]($loki -and $cfg.LokiToken)
+        HasPings    = [bool]$cfg.HealthchecksPingKey
+        HcApiUrl    = $hcApi
+        SlugPrefix  = [string]$cfg.HealthchecksSlugPrefix
+    }
+}
+
+# Asks for the read-only keys and keeps them in <company>/monitoring.psd1 (readable by you only)
+function Set-Monitoring {
+    param($Company)
+    $r = Read-Reporting $Company
+    if (-not $r.HasPings -and -not $r.HasLoki) {
+        throw "the configuration of $($Company.Name) sends nothing to Healthchecks or Loki; set them up first: pwsh tools/wm.ps1 $($Company.Name) config"
+    }
+    $old = Read-Monitoring $Company
+    if ($null -eq $old) { $old = @{} }
+    Write-Step "Read-only access for the status of the computers of $($Company.Name)"
+    Write-Host '  The keys stay on this computer, in' (Get-MonitoringPath $Company)
+    $hcKey = [string]$old.HealthchecksApiKey
+    $hcUrl = if ($old.HealthchecksApiUrl) { [string]$old.HealthchecksApiUrl } else { $r.HcApiUrl }
+    if ($r.HasPings) {
+        Write-Host "  Healthchecks: in the project the computers ping, Settings > API Access > Create API key (read-only)."
+        $hint = if ($hcKey) { 'Enter = keep the one you have, - = none' } else { 'Enter = none' }
+        $a = Read-Secret "  Healthchecks read-only API key ($hint)"
+        if ($a -eq '-') { $hcKey = '' } elseif ($a) { $hcKey = $a }
+    }
+    $lokiToken = [string]$old.LokiReadToken
+    if ($r.HasLoki) {
+        Write-Host "  Grafana Cloud: Administration > Access policies > a policy with the logs:read scope, then Add token."
+        Write-Host "  (The user is the configuration's LokiUser, $($r.LokiUser).)"
+        $hint = if ($lokiToken) { 'Enter = keep the one you have, - = none' } else { 'Enter = none' }
+        $a = Read-Secret "  Grafana Cloud token with logs:read ($hint)"
+        if ($a -eq '-') { $lokiToken = '' } elseif ($a) { $lokiToken = $a }
+    }
+    $text = @(
+        '# Read-only access for pwsh tools/wm.ps1 <company> status. Written by it; it stays on this computer, never on the'
+        '# drive or the computers (they have write-only keys in provision.config.psd1).'
+        '@{'
+        '    # Healthchecks: the read-only API key of the project the computers ping, and the address of its API'
+        "    HealthchecksApiKey = $(ConvertTo-PsdLiteral $hcKey)"
+        "    HealthchecksApiUrl = $(ConvertTo-PsdLiteral $hcUrl)"
+        '    # Grafana Cloud: a token with the logs:read scope (with the LokiUser and LokiUrl of the configuration)'
+        "    LokiReadToken      = $(ConvertTo-PsdLiteral $lokiToken)"
+        '}'
+    ) -join "`n"
+    $path = Get-MonitoringPath $Company
+    [IO.File]::WriteAllText($path, $text + "`n")
+    if (-not $IsWindows) { & chmod 600 $path }
+    Write-Host "  Saved: $path"
+}
+
+# Healthchecks: the check of each computer (slug = the prefix of the configuration + the computer name, as the
+# computers ping it), by computer name in lowercase
+function Get-HealthchecksStatus {
+    param($Reporting, $Monitoring)
+    $url = ([string]$Monitoring.HealthchecksApiUrl).TrimEnd('/')
+    if (-not (Test-ServiceUrl $url)) { throw "HealthchecksApiUrl must be an https:// address ('$url')" }
+    $resp = Invoke-RestMethod -Uri "$url/api/v3/checks/" -Headers @{ 'X-Api-Key' = [string]$Monitoring.HealthchecksApiKey } -TimeoutSec 30
+    $result = @{}
+    $prefix = $Reporting.SlugPrefix.ToLowerInvariant() -replace '[^a-z0-9_-]', '-'
+    foreach ($c in @($resp.checks)) {
+        $slug = [string]$c.slug
+        if (-not $slug -or ($prefix -and -not $slug.StartsWith($prefix))) { continue }
+        $result[$slug.Substring($prefix.Length)] = [pscustomobject]@{ Status = [string]$c.status; LastPing = ConvertTo-Time $c.last_ping }
+    }
+    return $result
+}
+
+# A time from an API (an ISO 8601 text, or what ConvertFrom-Json already made of it); $null for none
+function ConvertTo-Time {
+    param($Value)
+    if ($null -eq $Value -or "$Value" -eq '') { return $null }
+    if ($Value -is [datetime]) { return ([datetimeoffset]$Value.ToUniversalTime()).ToLocalTime() }
+    return [datetimeoffset]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture).ToLocalTime()
+}
+
+function ConvertFrom-LokiTime {
+    param([string]$Nanoseconds)
+    return [datetimeoffset]::FromUnixTimeMilliseconds([long]($Nanoseconds.Substring(0, $Nanoseconds.Length - 6))).ToLocalTime()
+}
+
+function Invoke-Loki {
+    param($Reporting, $Monitoring, [string]$Path, [hashtable]$Query)
+    if (-not (Test-ServiceUrl $Reporting.LokiUrl)) { throw "LokiUrl must be an https:// address ('$($Reporting.LokiUrl)')" }
+    $pair = '{0}:{1}' -f $Reporting.LokiUser, $Monitoring.LokiReadToken
+    $headers = @{ Authorization = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair)) }
+    $q = @($Query.Keys | ForEach-Object { '{0}={1}' -f $_, [uri]::EscapeDataString([string]$Query[$_]) }) -join '&'
+    return Invoke-RestMethod -Uri "$($Reporting.LokiUrl)$Path`?$q" -Headers $headers -TimeoutSec 60
+}
+
+# Loki: for each computer (the host label, lowercase) its last run (the start line names the wmanager version, the
+# summary line the warnings and errors) and the errors of the last 24 hours, jobs included. The log lines are
+# always English, so the same patterns read every computer.
+function Get-LokiStatus {
+    param($Reporting, $Monitoring)
+    $now = [datetimeoffset]::UtcNow
+    $ns = { param($t) [string]($t.ToUnixTimeMilliseconds() * 1000000) }
+    $runs = Invoke-Loki $Reporting $Monitoring '/loki/api/v1/query_range' @{
+        query     = '{service_name="wmanager", job=~"update|retry|provision"} |~ `^(wmanager( v\S+)? (update|retry) on |wmanager( v\S+)? provisioning: |End: warnings |Done: \d+ warnings)`'
+        start     = (& $ns $now.AddDays(-$script:StatusDays))
+        end       = (& $ns $now)
+        limit     = 5000
+        direction = 'backward'
+    }
+    $result = @{}
+    foreach ($s in @($runs.data.result)) {
+        $hostName = [string]$s.stream.host
+        if (-not $hostName) { continue }
+        if (-not $result.ContainsKey($hostName)) {
+            $result[$hostName] = [pscustomobject]@{ Version = $null; VersionAt = $null; LastRun = $null; Warnings = 0; Errors = 0; Errors24h = 0 }
+        }
+        $r = $result[$hostName]
+        foreach ($v in @($s.values)) {
+            $at = ConvertFrom-LokiTime $v[0]
+            $line = [string]$v[1]
+            if ($line -match '^wmanager(?: (v\S+))? (?:update|retry) on |^wmanager(?: (v\S+))? provisioning: ') {
+                if ($null -eq $r.VersionAt -or $at -gt $r.VersionAt) {
+                    $r.VersionAt = $at
+                    $r.Version = if ($Matches[1]) { $Matches[1] } elseif ($Matches[2]) { $Matches[2] } else { '?' }
+                }
+            } elseif ($line -match '^End: warnings (\d+), errors (\d+)' -or $line -match '^Done: (\d+) warnings, (\d+) errors') {
+                if ($null -eq $r.LastRun -or $at -gt $r.LastRun) { $r.LastRun = $at; $r.Warnings = [int]$Matches[1]; $r.Errors = [int]$Matches[2] }
+            }
+        }
+    }
+    $errors = Invoke-Loki $Reporting $Monitoring '/loki/api/v1/query' @{
+        query = 'sum by (host) (count_over_time({service_name="wmanager", level="error"}[24h]))'
+        time  = (& $ns $now)
+    }
+    foreach ($e in @($errors.data.result)) {
+        $hostName = [string]$e.metric.host
+        if (-not $hostName) { continue }
+        if (-not $result.ContainsKey($hostName)) {
+            $result[$hostName] = [pscustomobject]@{ Version = $null; VersionAt = $null; LastRun = $null; Warnings = 0; Errors = 0; Errors24h = 0 }
+        }
+        $result[$hostName].Errors24h = [int][double]$e.value[1]
+    }
+    return $result
+}
+
+# How long ago, short: (45m), (5h), (3d)
+function Format-Age {
+    param($Time)
+    if ($null -eq $Time) { return '' }
+    $span = [datetimeoffset]::Now - $Time
+    if ($span.TotalMinutes -lt 60) { return '({0}m)' -f [int][math]::Max(0, [math]::Floor($span.TotalMinutes)) }
+    if ($span.TotalHours -lt 48) { return '({0}h)' -f [int][math]::Floor($span.TotalHours) }
+    return '({0}d)' -f [int][math]::Floor($span.TotalDays)
+}
+
+# The computers of a company: the ones groups.psd1 names and the ones Healthchecks or Loki know, with what each
+# reported. Returns the rows; -Quiet doesn't print them (the summary of every company).
+function Get-ComputerStatus {
+    param($Company)
+    $r = Read-Reporting $Company
+    $m = Read-Monitoring $Company
+    if ($null -eq $m -or (-not $m.HealthchecksApiKey -and -not $m.LokiReadToken)) {
+        throw "no read-only keys for $($Company.Name) yet: pwsh tools/wm.ps1 $($Company.Name) monitoring"
+    }
+    $problems = New-Object System.Collections.Generic.List[string]
+    $hc = $null
+    if ($m.HealthchecksApiKey -and $r.HasPings) {
+        try { $hc = Get-HealthchecksStatus $r $m } catch { $problems.Add("Healthchecks: $($_.Exception.Message)") }
+    }
+    $loki = $null
+    if ($m.LokiReadToken -and $r.HasLoki) {
+        try { $loki = Get-LokiStatus $r $m } catch { $problems.Add("Loki: $($_.Exception.Message)") }
+    }
+
+    # The names: groups.psd1's spelling, otherwise what reported, in capitals (Windows computer names)
+    $names = @{}
+    $map = $null
+    $versions = $null
+    try {
+        $map = Import-PowerShellDataFile -LiteralPath (Join-Path $Company.Source 'groups.psd1')
+        if ($map.Computers -is [hashtable]) { foreach ($k in $map.Computers.Keys) { $names[([string]$k).ToLowerInvariant()] = [string]$k } }
+    } catch { }
+    try {
+        $vf = Join-Path $Company.Source 'version.psd1'
+        if ([IO.File]::Exists($vf)) { $versions = ConvertFrom-WmVersionData (Import-PowerShellDataFile -LiteralPath $vf) }
+    } catch { }
+    foreach ($k in @(@($hc.Keys) + @($loki.Keys))) {
+        if ($k -and -not $names.ContainsKey($k)) { $names[$k] = $k.ToUpperInvariant() }
+    }
+
+    $rows = foreach ($k in ($names.Keys | Sort-Object)) {
+        $h = if ($hc) { $hc[$k] } else { $null }
+        $l = if ($loki) { $loki[$k] } else { $null }
+        $want = $null
+        if ($versions -and $map) {
+            $groups = Get-WmComputerGroups -Map $map -ComputerName $names[$k]
+            $w = Get-WmWantedVersion $versions (Get-WmVersionGroupOrder -Map $map -Groups $groups)
+            if ($w) { $want = $w.Version }
+        }
+        $flags = New-Object System.Collections.Generic.List[string]
+        if ($h -and $h.Status -eq 'down') { $flags.Add('down') }
+        if ($l -and ($l.Errors -gt 0 -or $l.Errors24h -gt 0)) { $flags.Add('errors') }
+        if ($want -and $l -and $l.Version -and $l.Version -ne $want) { $flags.Add('version') }
+        if (-not $h -and -not $l) { $flags.Add('silent') }
+        [pscustomobject]@{
+            Name = $names[$k]; Check = $h; Log = $l; Want = $want; Flags = @($flags)
+        }
+    }
+    return [pscustomobject]@{ Rows = @($rows); Problems = @($problems); HasPings = [bool]$hc; HasLoki = [bool]$loki }
+}
+
+function Show-ComputerStatus {
+    param($Company)
+    $s = Get-ComputerStatus $Company
+    foreach ($p in $s.Problems) { Write-Warn $p }
+    if ($s.Rows.Count -eq 0) { Write-Host "No computers of $($Company.Name) in groups.psd1, Healthchecks or Loki yet."; return }
+    $format = '{0,-16} {1,-14} {2,-24} {3,-24} {4}'
+    Write-Host ($format -f 'Computer', 'Healthchecks', 'Last update', 'Result', 'wmanager')
+    foreach ($row in $s.Rows) {
+        $check = '-'
+        if ($row.Check) { $check = ('{0} {1}' -f $row.Check.Status, (Format-Age $row.Check.LastPing)).Trim() }
+        elseif (-not $s.HasPings) { $check = '' }
+        $last = '-'; $result = '-'; $version = '-'
+        if ($row.Log) {
+            if ($row.Log.LastRun) {
+                $last = '{0} {1}' -f $row.Log.LastRun.ToString('yyyy-MM-dd HH:mm'), (Format-Age $row.Log.LastRun)
+                $result = if ($row.Log.Errors) { "$($row.Log.Errors) errors" } elseif ($row.Log.Warnings) { "$($row.Log.Warnings) warnings" } else { 'ok' }
+            }
+            if ($row.Log.Errors24h) { $result = ('{0}, {1} errors/24h' -f $result, $row.Log.Errors24h).TrimStart('-, ') }
+            if ($row.Log.Version) { $version = $row.Log.Version }
+        } elseif (-not $s.HasLoki) { $last = ''; $result = ''; $version = '' }
+        if ($row.Flags -contains 'version') { $version = "$version -> $($row.Want)" }
+        $color = if ($row.Flags -contains 'down' -or $row.Flags -contains 'errors') { 'Red' } elseif ($row.Flags.Count -gt 0) { 'Yellow' } else { 'Gray' }
+        Write-Host ($format -f $row.Name, $check, $last, $result, $version) -ForegroundColor $color
+    }
+    Write-Host ''
+    Write-Host (Format-StatusSummary $s)
+    Write-Host "Loki: the last $($script:StatusDays) days; (5h) = 5 hours ago, '-' = nothing reported, 'a -> b' = on a, switches to b at its next update."
+}
+
+function Format-StatusSummary {
+    param($Status)
+    $count = { param($f) @($Status.Rows | Where-Object { $_.Flags -contains $f }).Count }
+    $parts = @('{0} computers' -f $Status.Rows.Count)
+    foreach ($f in @(@('down', 'down'), @('errors', 'with errors'), @('version', 'not on their version yet'), @('silent', 'never reported'))) {
+        $n = & $count $f[0]
+        if ($n -gt 0) { $parts += "$n $($f[1])" }
+    }
+    if ($parts.Count -eq 1) { $parts += 'all fine' }
+    return ($parts -join ', ')
+}
+
+# One line per company: the summary of its computers
+function Show-AllStatus {
+    $companies = @(Get-Companies)
+    if ($companies.Count -eq 0) { Write-Host "No companies in $($script:Root) yet: pwsh tools/wm.ps1 new <company>"; return }
+    foreach ($c in $companies) {
+        try {
+            $s = Get-ComputerStatus $c
+            $line = Format-StatusSummary $s
+            if ($s.Problems.Count -gt 0) { $line += ' (' + ($s.Problems -join '; ') + ')' }
+        } catch {
+            $line = Format-WmErrorText $_ -English
+        }
+        Write-Host ('{0,-20} {1}' -f $c.Name, $line)
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Menus
 # ---------------------------------------------------------------------------
+
+function Show-StatusStep {
+    param($Company)
+    $m = Read-Monitoring $Company
+    if ($null -eq $m -or (-not $m.HealthchecksApiKey -and -not $m.LokiReadToken)) {
+        Write-Host '  The status needs read-only keys of Healthchecks and Grafana Cloud (the computers have write-only ones).'
+        if (-not (Read-WmYesNo '  Set them up now?' $true)) { return }
+        Set-Monitoring $Company
+    }
+    Show-ComputerStatus $Company
+}
 
 function Add-ComputerStep {
     param($Company)
@@ -613,17 +944,19 @@ function Invoke-CompanyMenu {
         $setUp = (Test-HasKey $Company) -and [IO.File]::Exists((Join-Path $Company.Source 'manifest.psd1')) -and
                  [IO.File]::Exists($Company.Config)
         if (-not $setUp) { Write-Host '  0) finish setting it up (key, source, first signature, configuration)' }
-        Write-Host '  1) show the groups, or what one computer gets'
-        Write-Host '  2) add a computer to groups'
-        Write-Host '  3) remove a computer from groups'
-        Write-Host '  4) add a package (to a group, or to every computer)'
-        Write-Host '  5) new script for a group (from a template, in your editor)'
-        Write-Host '  6) new job for a group: hourly, daily or weekly (from a template, in your editor)'
-        Write-Host '  7) enable a ready script or job from the library'
-        Write-Host '  8) set the wmanager version the computers run'
-        Write-Host '  9) check the source'
-        Write-Host ' 10) sign and publish'
-        Write-Host ' 11) configuration wizard (provision.config.psd1)'
+        Write-Host '  1) status of the computers (Healthchecks, Loki)'
+        Write-Host '  2) show the groups, or what one computer gets'
+        Write-Host '  3) add a computer to groups'
+        Write-Host '  4) remove a computer from groups'
+        Write-Host '  5) add a package (to a group, or to every computer)'
+        Write-Host '  6) new script for a group (from a template, in your editor)'
+        Write-Host '  7) new job for a group: hourly, daily or weekly (from a template, in your editor)'
+        Write-Host '  8) enable a ready script or job from the library'
+        Write-Host '  9) set the wmanager version the computers run'
+        Write-Host ' 10) check the source'
+        Write-Host ' 11) sign and publish'
+        Write-Host ' 12) configuration wizard (provision.config.psd1)'
+        Write-Host ' 13) read-only keys for the status (Healthchecks, Grafana Cloud)'
         Write-Host '  b) back'
         $answer = Read-Line 'Choose'
         if ($null -eq $answer -or $answer -eq 'b' -or $answer -eq 'q') { return }
@@ -631,20 +964,22 @@ function Invoke-CompanyMenu {
             $changed = $false
             switch ($answer) {
                 '0' { New-Company $Company.Name }
-                '1' {
+                '1' { Show-StatusStep $Company }
+                '2' {
                     $pc = [string](Read-Line 'Computer (Enter = all groups)')
                     $null = Invoke-Groups $Company 'show' @($pc | Where-Object { $_ })
                 }
-                '2' { $changed = Add-ComputerStep $Company }
-                '3' { $changed = Remove-ComputerStep $Company }
-                '4' { $changed = Add-PackageStep $Company }
-                '5' { $changed = New-GroupFileStep $Company 'script' }
-                '6' { $changed = New-GroupFileStep $Company 'job' }
-                '7' { $changed = Enable-LibraryStep $Company }
-                '8' { $changed = Set-VersionStep $Company }
-                '9' { $null = Invoke-Groups $Company 'check' }
-                '10' { Publish-Company $Company }
-                '11' { Invoke-Wizard $Company }
+                '3' { $changed = Add-ComputerStep $Company }
+                '4' { $changed = Remove-ComputerStep $Company }
+                '5' { $changed = Add-PackageStep $Company }
+                '6' { $changed = New-GroupFileStep $Company 'script' }
+                '7' { $changed = New-GroupFileStep $Company 'job' }
+                '8' { $changed = Enable-LibraryStep $Company }
+                '9' { $changed = Set-VersionStep $Company }
+                '10' { $null = Invoke-Groups $Company 'check' }
+                '11' { Publish-Company $Company }
+                '12' { Invoke-Wizard $Company }
+                '13' { Set-Monitoring $Company }
                 default { if ($answer) { Write-Host '  Choose a number from the list, or b.' -ForegroundColor Yellow } }
             }
             if ($changed -and (Test-UnsignedChanges $Company) -and
@@ -666,6 +1001,7 @@ function Invoke-Menu {
         for ($i = 0; $i -lt $companies.Count; $i++) {
             Write-Host ('  {0}) {1,-20} {2}' -f ($i + 1), $companies[$i].Name, (Get-CompanyState $companies[$i]))
         }
+        Write-Host '  s) status of the computers of every company'
         Write-Host '  n) a new company'
         Write-Host '  u) wmanager and the configurations onto a USB drive or a share'
         Write-Host '  q) quit'
@@ -678,6 +1014,8 @@ function Invoke-Menu {
                 Invoke-CompanyMenu $companies[$n - 1]
             } elseif ($named.Count -eq 1) {
                 Invoke-CompanyMenu $named[0]
+            } elseif ($answer -eq 's') {
+                Show-AllStatus
             } elseif ($answer -eq 'n') {
                 $name = [string](Read-Line 'Name of the new company (letters, digits, . - _), e.g. acme')
                 if ($name) { New-Company $name }
@@ -685,7 +1023,7 @@ function Invoke-Menu {
                 $folder = [string](Read-Line 'Folder on the USB drive or the share, e.g. /media/you/USB/wmanager')
                 if ($folder) { Copy-ToUsb $folder }
             } elseif ($answer) {
-                Write-Host '  Choose a number from the list, n, u or q.' -ForegroundColor Yellow
+                Write-Host '  Choose a number from the list, s, n, u or q.' -ForegroundColor Yellow
             }
         } catch {
             Write-Host "ERROR: $(Format-WmErrorText $_ -English)" -ForegroundColor Red
@@ -707,6 +1045,8 @@ try {
         New-Company $Second
     } elseif ($First -eq 'usb') {
         Copy-ToUsb $Second
+    } elseif ($First -eq 'status') {
+        Show-AllStatus
     } elseif ($First -eq 'help') {
         Show-Usage
     } else {
@@ -717,6 +1057,10 @@ try {
             Publish-Company $company
         } elseif ($Second -eq 'config') {
             Invoke-Wizard $company
+        } elseif ($Second -eq 'status') {
+            Show-ComputerStatus $company
+        } elseif ($Second -eq 'monitoring') {
+            Set-Monitoring $company
         } else {
             $named = @{}
             if ($Url) { $named['Url'] = $Url }
