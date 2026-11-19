@@ -113,3 +113,28 @@ Describe 'Find-WmConfig' {
         { Find-WmConfig -Folder $script:dir } | Should -Throw '*several companies*'
     }
 }
+
+Describe 'Add-WmRunRecord' {
+    It 'puts a JSON line with the version, the job, the warnings and the errors into the Loki batch only' {
+        $script:WmLogBuffer.Clear()
+        $saved = $script:WmVersion, $script:WmWarnings, $script:WmErrors
+        try {
+            $script:WmVersion = 'v0.3.0'; $script:WmWarnings = 1; $script:WmErrors = 2
+            Mock Write-Host { }
+            Add-WmRunRecord -Job 'update'
+            Should -Invoke Write-Host -Times 0
+            $script:WmLogBuffer.Count | Should -Be 1
+            $line = $script:WmLogBuffer[0].Line
+            $line | Should -Match '^\{"wmanager_run":'
+            $run = $line | ConvertFrom-Json
+            $run.wmanager_run | Should -Be 'v0.3.0'
+            $run.job | Should -Be 'update'
+            $run.warnings | Should -Be 1
+            $run.errors | Should -Be 2
+            $script:WmLogBuffer[0].Level | Should -Be 'info'
+        } finally {
+            $script:WmVersion, $script:WmWarnings, $script:WmErrors = $saved
+            $script:WmLogBuffer.Clear()
+        }
+    }
+}

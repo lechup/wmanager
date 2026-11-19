@@ -135,7 +135,8 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         $null = Add-Company 'not a company'   # not a company name: left out
         $r = Invoke-Tool list
         $r.Code | Should -Be 0
-        $lines = @($r.Text -split '\r?\n' | Where-Object { $_ })
+        $r.Text | Should -Match "WARNING: not a company in .* is left out"
+        $lines = @($r.Text -split '\r?\n' | Where-Object { $_ -and $_ -notmatch '^WARNING' })
         $lines.Count | Should -Be 3
         $lines[0] | Should -Match '^acme\s+2 computers, not signed yet, no signing key$'
         $lines[1] | Should -Match '^beta\s+no management source$'
@@ -184,7 +185,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
     It 'leads through the menu: a company, a computer into groups, then the offer to sign' {
         $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
         $null = Add-Company 'beta' -Config '@{}'
-        $r = Invoke-Typed @('acme', '2', 'OFFICE-09', '1 front-desk', 'n', '4', '2', 'vlc', 'n', 'x', 'b', 'q')
+        $r = Invoke-Typed @('acme', '3', 'OFFICE-09', '1 front-desk', 'n', '5', '2', 'vlc', 'n', 'x', 'b', 'q')
         $r.Code | Should -Be 0
         $text = [IO.File]::ReadAllText((Join-Path $source 'groups.psd1'))
         $text | Should -Match "'OFFICE-09' = @\('accounting', 'front-desk'\)"
@@ -197,7 +198,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
     It 'makes a new script and a new job for a group, opens them in the editor and checks the source' {
         $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
         $env:EDITOR = "sh $script:editor"
-        $r = Invoke-Typed @('acme', '5', '1', 'install-printer', 'n', '6', 'front-desk', 'weekly', 'check-backup', 'n', 'b', 'q')
+        $r = Invoke-Typed @('acme', '6', '1', 'install-printer', 'n', '7', 'front-desk', 'weekly', 'check-backup', 'n', 'b', 'q')
         $r.Code | Should -Be 0
         $script = @(Get-ChildItem -LiteralPath (Join-Path $source 'groups/accounting/scripts') -Filter '*install-printer.ps1')
         $script.Count | Should -Be 1
@@ -214,7 +215,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         $broken = Join-Path $TestDrive 'broken-editor.sh'
         Set-Content -LiteralPath $broken -Value 'printf ''if ($x) {\r\n'' >> "$1"'
         $env:EDITOR = "sh $broken"
-        $r = Invoke-Typed @('acme', '5', '1', 'broken', 'n', 'n', 'b', 'q')
+        $r = Invoke-Typed @('acme', '6', '1', 'broken', 'n', 'n', 'b', 'q')
         $r.Code | Should -Be 0
         $r.Text | Should -Match 'Open it again to fix it\?'
         ([regex]::Matches($r.Text, 'Opening it in')).Count | Should -Be 1
@@ -222,7 +223,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
 
     It 'asks again for a group number that is not on the list' {
         $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
-        $r = Invoke-Typed @('acme', '2', 'OFFICE-09', '7', '1', 'n', 'b', 'q')
+        $r = Invoke-Typed @('acme', '3', 'OFFICE-09', '7', '1', 'n', 'b', 'q')
         $r.Code | Should -Be 0
         $r.Text | Should -Match 'Not on the list: 7'
         [IO.File]::ReadAllText((Join-Path $source 'groups.psd1')) | Should -Match "'OFFICE-09' = @\('accounting'\)"
@@ -313,6 +314,174 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
     It 'ends at the end of the input' {
         $null = Add-Company 'acme' -Source
         (Invoke-Typed @('1')).Code | Should -Be 0
+    }
+
+    Context 'status' {
+        BeforeAll {
+            # A stand-in for the Healthchecks API and Loki on this computer, with what real computers send: Loki lines
+            # with Write-WmLog's prefix, run records (Add-WmRunRecord), and pages as Loki gives them (newest first,
+            # up to "limit", up to and including "end"). Every request goes to requests.txt.
+            $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $probe.Start(); $script:port = $probe.LocalEndpoint.Port; $probe.Stop()
+            $script:requests = Join-Path $TestDrive 'requests.txt'
+            $script:server = Start-ThreadJob -ArgumentList $script:port, $script:requests -ScriptBlock {
+                param($port, $log)
+                $l = New-Object System.Net.HttpListener
+                $l.Prefixes.Add("http://127.0.0.1:$port/")
+                $l.Start()
+                $now = [datetimeoffset]::UtcNow
+                $line = { param($t, $level, $text) @{ ns = [decimal]($t.ToUnixTimeMilliseconds() * 1000000); text = ('{0} [{1}] {2}' -f $t.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss'), $level, $text) } }
+                $record = { param($t, $version, $w, $e) @{ ns = [decimal]($t.ToUnixTimeMilliseconds() * 1000000 + 1); text = ('{{"wmanager_run":"{0}","job":"update","warnings":{1},"errors":{2}}}' -f $version, $w, $e) } }
+                $entries = @{
+                    # A computer that sends run records
+                    'office-01' = @((& $line $now.AddMinutes(-65) 'INFO' 'wmanager v0.3.0 update on OFFICE-01'),
+                                    (& $line $now.AddHours(-1) 'INFO' 'End: warnings 0, errors 0.'),
+                                    (& $record $now.AddHours(-1) 'v0.3.0' 0 0))
+                    # One on v0.2.0, from before run records
+                    'office-02' = @((& $line $now.AddDays(-3).AddMinutes(-5) 'INFO' 'wmanager v0.2.0 update on OFFICE-02'),
+                                    (& $line $now.AddDays(-3) 'INFO' 'End: warnings 1, errors 2.'))
+                    # One whose switch to v0.4.0 failed: the new version logged its start, the old one finished the run
+                    'office-05' = @((& $line $now.AddMinutes(-20) 'INFO' 'wmanager v0.3.0 update on OFFICE-05'),
+                                    (& $line $now.AddMinutes(-19) 'INFO' 'wmanager v0.4.0 update on OFFICE-05'),
+                                    (& $line $now.AddMinutes(-2) 'INFO' 'End: warnings 0, errors 1.'),
+                                    (& $record $now.AddMinutes(-2) 'v0.3.0' 0 1))
+                }
+                $checks = @{ checks = @(
+                    @{ slug = 'wm-office-01'; status = 'up'; last_ping = $now.AddHours(-2).ToString('o') },
+                    @{ slug = 'wm-office-02'; status = 'down'; last_ping = $now.AddDays(-3).ToString('o') },
+                    @{ slug = 'wm-reception'; status = 'up'; last_ping = $now.AddMinutes(-30).ToString('o') },
+                    @{ slug = 'office-01'; status = 'up'; last_ping = $now.AddHours(-2).ToString('o') },
+                    @{ slug = 'backup-server'; status = 'down'; last_ping = $null }
+                ) } | ConvertTo-Json -Depth 5
+                $errors = @{ status = 'success'; data = @{ resultType = 'vector'; result = @(
+                    @{ metric = @{ host = 'office-02' }; value = @(1, '4') }) } } | ConvertTo-Json -Depth 8
+                $basic = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('123:loki-read'))
+                while ($l.IsListening) {
+                    $c = $l.GetContext()
+                    $path = $c.Request.Url.AbsolutePath
+                    $query = $c.Request.QueryString
+                    Add-Content -LiteralPath $log -Value ($path + ' ' + [uri]::UnescapeDataString($c.Request.Url.Query))
+                    $code = 200; $body = '{}'
+                    if ($path -eq '/stop') { $l.Stop(); break }
+                    elseif ($path -eq '/api/v3/checks/') {
+                        if ($c.Request.Headers['X-Api-Key'] -eq 'hc-read') { $body = $checks } else { $code = 401; $body = '{"error":"wrong api key"}' }
+                    } elseif ($path -like '/loki/api/v1/*') {
+                        if ($c.Request.Headers['Authorization'] -ne $basic) { $code = 401; $body = 'no' }
+                        elseif ($path -eq '/loki/api/v1/query_range') {
+                            $end = [decimal]$query['end']; $limit = [int]$query['limit']
+                            $page = @(foreach ($h in $entries.Keys) { foreach ($e in $entries[$h]) { if ($e.ns -le $end) { @{ host = $h; ns = $e.ns; text = $e.text } } } }) |
+                                Sort-Object { $_.ns } -Descending | Select-Object -First $limit
+                            $streams = @($page | Group-Object { $_.host } | ForEach-Object {
+                                @{ stream = @{ host = $_.Name; service_name = 'wmanager' }; values = @($_.Group | ForEach-Object { , @([string]$_.ns, $_.text) }) } })
+                            $body = @{ status = 'success'; data = @{ resultType = 'streams'; result = $streams } } | ConvertTo-Json -Depth 8
+                        } else { $body = $errors }
+                    } elseif ($path -ne '/ready') { $code = 404 }
+                    $bytes = [Text.Encoding]::UTF8.GetBytes($body)
+                    $c.Response.StatusCode = $code
+                    $c.Response.ContentType = 'application/json'
+                    $c.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+                    $c.Response.Close()
+                }
+            }
+            $script:base = "http://127.0.0.1:$($script:port)"
+            for ($i = 0; $i -lt 100; $i++) {
+                try { Invoke-WebRequest -Uri "$($script:base)/ready" -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Milliseconds 100 }
+            }
+            function New-Reporting {
+                param([string]$Prefix = 'wm-')
+                $config = [IO.File]::ReadAllText((Join-Path $script:root 'provision.config.example.psd1'))
+                foreach ($s in @(@('LokiUrl', "$($script:base)/loki/api/v1/push/"), @('LokiUser', '123'), @('LokiToken', 'loki-write'),
+                                 @('HealthchecksBaseUrl', "$($script:base)/ping"), @('HealthchecksPingKey', 'ping-key'),
+                                 @('HealthchecksSlugPrefix', $Prefix))) {
+                    $config = $config -replace "(?m)^(\s*$($s[0])\s*=\s*)'[^']*'", "`${1}'$($s[1])'"
+                }
+                return $config
+            }
+            # acme: the computers of the stand-in, OFFICE-05 in a group that runs v0.4.0, OFFICE-07 never reported
+            function Add-StatusCompany {
+                param([string]$Prefix = 'wm-')
+                $dir = Add-Company 'acme' -Source -Config (New-Reporting $Prefix)
+                $null = Invoke-Tool acme add-computer OFFICE-05 pilot
+                $null = Invoke-Tool acme add-computer OFFICE-07 accounting
+                $null = Invoke-Tool acme set-version v0.3.0 -Url 'https://example.test/wmanager-v0.3.0.zip' -Zip (New-Release 'v0.3.0')
+                $null = Invoke-Tool acme set-version v0.4.0 pilot -Url 'https://example.test/wmanager-v0.4.0.zip' -Zip (New-Release 'v0.4.0')
+                return $dir
+            }
+        }
+
+        AfterAll {
+            try { Invoke-WebRequest -Uri "$($script:base)/stop" -TimeoutSec 5 | Out-Null } catch { }
+            $script:server | Remove-Job -Force
+            Remove-Item Env:\WMANAGER_LOKI_PAGE -ErrorAction SilentlyContinue
+        }
+
+        It 'shows each computer: its check, its last update, its errors and the version it runs against the source''s' {
+            $dir = Add-StatusCompany
+            $r = Invoke-Tool acme status
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'no read-only keys for acme yet: pwsh tools/wm.ps1 acme monitoring'
+
+            $r = Invoke-Typed @('hc-read', 'loki-read') @('acme', 'monitoring')
+            $r.Code | Should -Be 0
+            $keys = Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'monitoring.psd1')
+            $keys.HealthchecksApiKey | Should -Be 'hc-read'
+            $keys.LokiReadToken | Should -Be 'loki-read'
+            (& stat -c '%a' (Join-Path $dir 'monitoring.psd1')) | Should -Be '600'
+
+            # Three lines a page: the oldest computer's lines come only on later pages
+            $env:WMANAGER_LOKI_PAGE = '3'
+            $r = Invoke-Tool acme status
+            Remove-Item Env:\WMANAGER_LOKI_PAGE
+            $r.Code | Should -Be 0
+            $lines = @($r.Text -split '\r?\n')
+            ($lines | Where-Object { $_ -match '^OFFICE-01\s' }) | Should -Match '^OFFICE-01\s+up \(2h\)\s+\S+ \S+ \(1h\)\s+ok\s+v0\.3\.0\s*$'
+            ($lines | Where-Object { $_ -match '^OFFICE-02\s' }) | Should -Match '^OFFICE-02\s+down \(3d\)\s+\S+ \S+ \(3d\)\s+2 errors, 4 errors/24h\s+v0\.2\.0 -> v0\.3\.0\s*$'
+            ($lines | Where-Object { $_ -match '^OFFICE-05\s' }) | Should -Match '^OFFICE-05\s+-\s+\S+ \S+ \(2m\)\s+1 error\s+v0\.3\.0 -> v0\.4\.0\s*$'
+            ($lines | Where-Object { $_ -match '^OFFICE-07\s' }) | Should -Match '^OFFICE-07\s+-\s+-\s+-\s+-\s*$'
+            ($lines | Where-Object { $_ -match '^RECEPTION\s' }) | Should -Match '^RECEPTION\s+up \(30m\)\s+-\s+-\s+-\s*$'
+            $r.Text | Should -Not -Match 'BACKUP-SERVER'
+            $r.Text | Should -Match '5 computers, 1 down, 2 with errors, 2 not on their version yet, 1 silent for 14 days'
+            $sent = @(Get-Content -LiteralPath $script:requests | Where-Object { $_ -like '/loki/api/v1/query_range *' })
+            $sent.Count | Should -BeGreaterThan 2
+            $sent[0] | Should -Match 'service_name="wmanager"'
+        }
+
+        It 'counts a check of the project as a computer only when it is one, without a slug prefix' {
+            $dir = Add-StatusCompany -Prefix ''
+            Set-Content -LiteralPath (Join-Path $dir 'monitoring.psd1') -Value "@{ HealthchecksApiKey = 'hc-read'; HealthchecksApiUrl = ''; LokiReadToken = 'loki-read' }"
+            $r = Invoke-Tool acme status
+            $r.Code | Should -Be 0
+            @($r.Text -split '\r?\n' | Where-Object { $_ -match '^OFFICE-01\s' }) | Should -Match 'up \(2h\)'
+            $r.Text | Should -Not -Match 'BACKUP-SERVER|RECEPTION|WM-'
+            $r.Text | Should -Match '4 other checks of the Healthchecks project left out'
+        }
+
+        It 'marks what a service that refused the key would know, instead of calling the computers silent' {
+            $dir = Add-StatusCompany
+            Set-Content -LiteralPath (Join-Path $dir 'monitoring.psd1') -Value "@{ HealthchecksApiKey = 'wrong'; HealthchecksApiUrl = ''; LokiReadToken = 'loki-read' }"
+            $null = Add-Company 'beta' -Config '@{}'
+            $r = Invoke-Tool acme status
+            $r.Text | Should -Match 'WARNING: Healthchecks: '
+            ($r.Text -split '\r?\n' | Where-Object { $_ -match '^OFFICE-07\s' }) | Should -Match '^OFFICE-07\s+\?\s+-\s+-\s+-\s*$'
+            $r.Text | Should -Not -Match 'silent'
+            $r = Invoke-Tool status
+            $r.Code | Should -Be 0
+            $r.Text | Should -Match '(?m)^acme\s+4 computers, 2 with errors, 2 not on their version yet \(Healthchecks: '
+            $r.Text | Should -Match '(?m)^beta\s+no read-only keys for beta yet'
+        }
+
+        It 'repairs a monitoring.psd1 it can''t read, and refuses plain http:// to other computers' {
+            $dir = Add-StatusCompany
+            Set-Content -LiteralPath (Join-Path $dir 'monitoring.psd1') -Value "@{ broken"
+            $r = Invoke-Typed @('hc-read', 'loki-read') @('acme', 'monitoring')
+            $r.Code | Should -Be 0
+            $r.Text | Should -Match "can't be read"
+            (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'monitoring.psd1')).LokiReadToken | Should -Be 'loki-read'
+            $config = (New-Reporting) -replace [regex]::Escape($script:base), 'http://logs.example.test'
+            Set-Content -LiteralPath (Join-Path $dir 'config/provision.config.psd1') -Value $config
+            $r = Invoke-Tool acme status
+            $r.Text | Should -Match 'LokiUrl must be an https:// address'
+        }
     }
 
     Context 'usb' {

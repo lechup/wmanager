@@ -156,6 +156,7 @@ try {
 } finally {
     if ($script:WmErrors -gt 0) { $failed = $true }
     Write-WmLog -Key 'update.summary' -Arguments @($script:WmWarnings, $script:WmErrors)
+    Add-WmRunRecord -Job $job
     Remove-WmOldLogs -Days ([int](Get-WmSetting $config 'LogRetentionDays' 90))
     Send-WmLokiLog -Config $config
     if ($fullRun) {
