@@ -1039,7 +1039,7 @@ function Add-PackageStep {
     param($Company)
     $target = @(Read-Groups $Company 'For a group, or common for every computer' -Common)
     if ($target.Count -ne 1) { return $false }
-    $line = [string](Read-Line 'Package: a line of choco-reqs.txt, e.g. 7zip, vlc@3.0.21 or googlechrome !noupdate')
+    $line = [string](Read-Line 'One package, as a line of choco-reqs.txt (e.g. vlc@3.0.21 or googlechrome !noupdate)')
     if (-not $line) { return $false }
     return (Invoke-Groups $Company 'add-package' @($target[0], $line))
 }
@@ -1100,32 +1100,45 @@ function Edit-UntilChecked {
     }
 }
 
-# One of a list, by its number or its text; asked again for a number that isn't on it. $null: Enter, nothing chosen.
+# One of a list, by its number or its text (any letter case: the item as the list writes it); asked again for an
+# answer that isn't on it. $null: Enter, nothing chosen.
 function Read-Choice {
     param([string[]]$Items, [string]$Prompt)
     for ($i = 0; $i -lt $Items.Count; $i++) { Write-Host ('  {0,2}) {1}' -f ($i + 1), $Items[$i]) }
     while ($true) {
         $answer = [string](Read-Line $Prompt)
         if (-not $answer) { return $null }
-        if ($Items -ccontains $answer) { return $answer }
+        $named = @($Items | Where-Object { $_ -ieq $answer })
+        if ($named.Count -gt 0) { return $named[0] }
         $n = 0
         if ([int]::TryParse($answer, [ref]$n) -and $n -ge 1 -and $n -le $Items.Count) { return $Items[$n - 1] }
-        Write-Host ('  Not on the list: {0}. A number from 1 to {1}, or Enter for none.' -f $answer, $Items.Count) -ForegroundColor Yellow
+        Write-Host ('  Not on the list: {0}. A number from 1 to {1} or a name, or Enter for none.' -f $answer, $Items.Count) -ForegroundColor Yellow
     }
 }
 
-# The packages of a list, the common one or a group's: their names, as remove-package takes them
+function Assert-Source {
+    param($Company)
+    if (-not [IO.Directory]::Exists($Company.Source)) { throw "$($Company.Name) has no source yet: pwsh tools/wm.ps1 new $($Company.Name)" }
+}
+
+# The packages of a list, the common one or a group's: their names, as remove-package takes them. Read line by line,
+# so a list with a mistake (a duplicate, a bad line) still shows what it has and can be mended.
 function Get-ListPackages {
     param($Company, [string]$Target)
+    if ($Target -ne 'common' -and -not (Test-WmGroupName $Target)) { throw "invalid group name '$Target'" }
     $rel = if ($Target -eq 'common') { 'choco-reqs.txt' } else { "groups/$Target/choco-reqs.txt" }
     $path = Join-Path $Company.Source $rel
     if (-not [IO.File]::Exists($path)) { return @() }
-    $items = ConvertFrom-WmRequirements -Text ([IO.File]::ReadAllText($path))   # one array (it returns ,$items)
-    return @(foreach ($item in $items) { [string]$item.Name })
+    $names = foreach ($raw in ([IO.File]::ReadAllText($path).TrimStart([char]0xFEFF) -split '\r?\n')) {
+        $line = ($raw -replace '(^|\s)#.*$', '').Trim()
+        if ($line -match '^([A-Za-z0-9][A-Za-z0-9._-]*)') { $Matches[1] }
+    }
+    return @($names | Select-Object -Unique)
 }
 
 function Remove-PackageStep {
     param($Company)
+    Assert-Source $Company
     $target = @(Read-Groups $Company 'From the list of a group, or common (every computer)' -Common)
     if ($target.Count -ne 1) { return $false }
     $names = @(Get-ListPackages $Company $target[0])
@@ -1135,48 +1148,50 @@ function Remove-PackageStep {
     return (Invoke-Groups $Company 'remove-package' @($target[0], $name))
 }
 
-# The scripts and jobs of the source's groups, by group: Rel (the path in the source), Path, Kind (script or job)
+# The scripts and jobs the computers get, from the files a signature publishes (letter case as the computers read
+# it: any case for the folders and .ps1): Rel (the path in the source), Path, Kind (script or job)
 function Get-GroupFiles {
     param($Company)
-    $groups = Join-Path $Company.Source 'groups'
-    if (-not [IO.Directory]::Exists($groups)) { return @() }
-    $found = foreach ($g in @(Get-ChildItem -LiteralPath $groups -Directory | Sort-Object Name)) {
-        $dirs = New-Object System.Collections.Generic.List[object]   # pairs: a @(@(a, b)) would flatten
-        $dirs.Add(@('scripts', 'script'))
-        foreach ($every in @('hourly', 'daily', 'weekly')) { $dirs.Add(@("jobs/$every", "$every job")) }
-        foreach ($d in $dirs) {
-            $dir = Join-Path $g.FullName $d[0]
-            if (-not [IO.Directory]::Exists($dir)) { continue }
-            foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter '*.ps1' | Sort-Object Name)) {
-                [pscustomobject]@{ Rel = "groups/$($g.Name)/$($d[0])/$($f.Name)"; Path = $f.FullName; Kind = $d[1] }
-            }
-        }
-    }
-    return @($found)
+    return @(foreach ($rel in @(Get-SignedFiles $Company.Source)) {
+        if ($rel -imatch '^groups/[^/]+/scripts/[^/]+\.ps1$') { $kind = 'script' }
+        elseif ($rel -imatch '^groups/[^/]+/jobs/(hourly|daily|weekly)/[^/]+\.ps1$') { $kind = 'job' }
+        else { continue }
+        [pscustomobject]@{ Rel = $rel; Path = Join-Path $Company.Source $rel; Kind = $kind }
+    })
 }
 
 # Edit or remove a script or job of a group
 function Edit-GroupFileStep {
     param($Company)
+    Assert-Source $Company
     $files = @(Get-GroupFiles $Company)
     if ($files.Count -eq 0) { Write-Host '  The groups have no scripts or jobs yet (7 and 8 make new ones).'; return $false }
     $rel = Read-Choice @($files | ForEach-Object Rel) 'Which one (number; Enter = none)'
     if (-not $rel) { return $false }
     $file = $files | Where-Object { $_.Rel -ceq $rel } | Select-Object -First 1
-    $what = [string](Read-Line 'e = edit it, r = remove it (Enter = neither)')
+    while ($true) {
+        $what = [string](Read-Line 'e = edit it, r = remove it (Enter = neither)')
+        if (-not $what) { return $false }
+        if (@('e', 'r') -contains $what) { break }
+        Write-Host '  e, r or Enter.' -ForegroundColor Yellow
+    }
     if ($what -eq 'e') {
+        if ($file.Kind -eq 'script') {
+            Write-Host '  A changed script runs again on every computer of its group, once (even for a comment): mind'
+            Write-Host '  what running it twice does.'
+        }
         Edit-UntilChecked $Company $file.Path
         return $true
     }
-    if ($what -ne 'r') { return $false }
-    if ($file.Kind -eq 'script') { Write-Host '  The computers keep what it did; it just won''t run again (a new or changed script runs).' }
-    else { Write-Host "  The computers stop running it at their next update." }
+    if ($file.Kind -eq 'script') { Write-Host '  The computers keep what it did; it just won''t run again.' }
+    else { Write-Host '  The computers stop running it at their next update.' }
     if (-not (Read-WmYesNo "Remove $rel?" $false)) { return $false }
     Remove-Item -LiteralPath $file.Path
     Write-Host "  Removed $rel."
+    # What the group is left with (e.g. a group in groups.psd1 without files any more)
+    $null = Invoke-Groups $Company 'check'
     return $true
 }
-
 
 function Enable-LibraryStep {
     param($Company)
@@ -1199,6 +1214,9 @@ function Set-VersionStep {
         $version = Get-LatestTag
         Write-Host "  The latest release: $version"
     }
+    # Every computer (or the group's) installs it at its next update: ask, the default being no
+    $who = if ($group) { "the computers of group $group" } else { 'every computer' }
+    if (-not (Read-WmYesNo "  $who switches to wmanager $version at its next update. Set it?" $false)) { return $false }
     return (Invoke-Groups $Company 'set-version' (@($version) + $groupArg))
 }
 

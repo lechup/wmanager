@@ -281,24 +281,41 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         ([regex]::Matches($r.Text, 'Opening it in')).Count | Should -Be 1
     }
 
-    It 'removes a package from a list, chosen by number or name' {
+    It 'removes a package from a list, chosen by number or name in any letter case' {
         $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
-        $r = Invoke-Typed @('acme', '6', '1', '99', 'libreoffice-fresh', 'n', 'b', 'q')
+        $r = Invoke-Typed @('acme', '6', '1', '99', 'VLC', 'n', '6', '1', '1', 'n', 'b', 'q')
         $r.Code | Should -Be 0
-        $r.Text | Should -Match 'Not on the list: 99'
+        $r.Text | Should -Match 'Not on the list: 99\. A number from 1 to \d+ or a name'
         $r.Text | Should -Match 'never uninstalled'
-        Get-Content -LiteralPath (Join-Path $source 'choco-reqs.txt') | Should -Not -Contain 'libreoffice-fresh'
+        $list = Get-Content -LiteralPath (Join-Path $source 'choco-reqs.txt')
+        $list | Should -Not -Contain 'vlc'
+        $list | Should -Not -Contain 'googlechrome !noupdate'   # the first one, by its number
+        $list | Should -Contain 'libreoffice-fresh'
+        $null = Add-Company 'beta' -Config '@{}'
+        (Invoke-Typed @('beta', '6', 'b', 'q')).Text | Should -Match 'beta has no source yet'
+    }
+
+    It 'switches the wmanager version of the computers only when you confirm it' {
+        $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
+        $r = Invoke-Typed @('acme', '11', 'v0.3.0', '', '', 'b', 'q')
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'every computer switches to wmanager v0\.3\.0 at its next update\. Set it\? \[y/N\]'
+        Test-Path -LiteralPath (Join-Path $source 'version.psd1') | Should -BeFalse
+        $r.Text | Should -Not -Match 'Sign and publish now\?'
     }
 
     It 'edits a script of a group in the editor, and removes a job after asking' {
         $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
         $env:EDITOR = "sh $script:editor"
-        $r = Invoke-Typed @('acme', '9', '1', 'e', 'n', '9', 'groups/all/jobs/daily/system-report.ps1', 'r', 'n', '9', '2', 'r', 'y', 'n', 'b', 'q')
+        $r = Invoke-Typed @('acme', '9', '1', 'x', 'e', 'n', '9', 'groups/all/jobs/daily/system-report.ps1', 'r', 'n', '9', '2', 'r', 'y', 'n', 'b', 'q')
         $r.Code | Should -Be 0
         $r.Text | Should -Match '(?m)^\s+1\) groups/accounting/scripts/10-power-plan\.ps1\s*$'
         $r.Text | Should -Match '(?m)^\s+2\) groups/all/jobs/daily/system-report\.ps1\s*$'
         [IO.File]::ReadAllText((Join-Path $source 'groups/accounting/scripts/10-power-plan.ps1')) | Should -Match 'Write-Output "edited"'
+        $r.Text | Should -Match 'e, r or Enter\.'
+        $r.Text | Should -Match 'A changed script runs again on every computer of its group'
         $r.Text | Should -Match 'stop running it'
+        $r.Text | Should -Match 'Removed groups/all/jobs/daily/system-report\.ps1\.(\r?\n.*)*Checked \d+ files'
         $r.Text | Should -Match 'Removed groups/all/jobs/daily/system-report\.ps1'
         Test-Path -LiteralPath (Join-Path $source 'groups/all/jobs/daily/system-report.ps1') | Should -BeFalse
         ([regex]::Matches($r.Text, 'Sign and publish now\?')).Count | Should -Be 2   # after the edit and the removal
