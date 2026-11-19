@@ -17,7 +17,9 @@
 #   pwsh tools/wm.ps1 <company>                the menu of one company
 #   pwsh tools/wm.ps1 <company> status         its computers: Healthchecks, the last update, errors, wmanager version
 #   pwsh tools/wm.ps1 <company> monitoring     the read-only keys status needs (kept in <company>/monitoring.psd1)
-#   pwsh tools/wm.ps1 <company> publish        check and sign its source (tools/publish.sh)
+#   pwsh tools/wm.ps1 <company> changes        what changed in its source since the last signature
+#   pwsh tools/wm.ps1 <company> publish        those changes, then check and sign them (tools/publish.sh); -Yes signs
+#                                              without asking (also with nothing changed), for scripts
 #   pwsh tools/wm.ps1 <company> config         the configuration wizard (init.ps1) for its provision.config.psd1
 #   pwsh tools/wm.ps1 <company> <command> ...  a tools/groups.ps1 command on its source, e.g.
 #                                              add-computer OFFICE-07 accounting, enable power all, set-version v0.2.0
@@ -29,7 +31,8 @@ param(
     [Parameter(Position = 1)][string]$Second,
     [Parameter(Position = 2, ValueFromRemainingArguments = $true)][string[]]$Rest = @(),
     [string]$Url,
-    [string]$Zip
+    [string]$Zip,
+    [switch]$Yes
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -172,7 +175,8 @@ function Get-GroupNames {
 }
 
 # The files tools/publish.sh signs, relative, with '/': in a Git repository what git would push (tracked files and new
-# ones that aren't ignored), otherwise every file; never hidden ones (.git, .gitattributes) or manifest.psd1
+# ones that aren't ignored), otherwise every file; never hidden ones (.git, .gitattributes) or manifest.psd1. Letter
+# case counts, as on a web server: Foo.txt and foo.txt are two files (publish.sh refuses such a pair).
 function Get-SignedFiles {
     param([string]$Source)
     $list = $null
@@ -180,29 +184,121 @@ function Get-SignedFiles {
         $inside = & git -C $Source rev-parse --is-inside-work-tree 2>$null
         if ($LASTEXITCODE -eq 0 -and $inside -eq 'true') {
             $list = @(& git -C $Source ls-files --cached --others --exclude-standard -- . 2>$null |
-                Where-Object { [IO.File]::Exists((Join-Path $Source $_)) })
+                Where-Object { Test-Path -LiteralPath (Join-Path $Source $_) })
         }
     }
     if ($null -eq $list) {
         $list = @(Get-ChildItem -LiteralPath $Source -Recurse -File -Force |
             ForEach-Object { [IO.Path]::GetRelativePath($Source, $_.FullName).Replace('\', '/') })
     }
-    return @($list | Where-Object { $_ -ne 'manifest.psd1' -and "/$_" -notmatch '/\.' } | Sort-Object -Unique)
+    return @($list | Where-Object { $_ -ne 'manifest.psd1' -and "/$_" -notmatch '/\.' } | Sort-Object -Unique -CaseSensitive)
 }
 
-# Has anything in the source changed since the last signature? Its files against the hashes in manifest.psd1.
+# SHA256 of a file, kept while its size and time stay the same: the menus redraw the state of every company
+$script:HashCache = @{}
+function Get-CachedHash {
+    param([string]$Path)
+    $item = Get-Item -LiteralPath $Path
+    $key = '{0}|{1}|{2}' -f $Path, $item.Length, $item.LastWriteTimeUtc.Ticks
+    if (-not $script:HashCache.ContainsKey($key)) { $script:HashCache[$key] = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+    return $script:HashCache[$key]
+}
+
+# The certificate that signed manifest.psd1 (its Authenticode block): its SHA1 thumbprint, $null without a signature
+function Get-ManifestSigner {
+    param([string]$Path)
+    $text = [IO.File]::ReadAllText($Path)
+    $m = [regex]::Match($text, '(?s)# SIG # Begin signature block\r?\n(.*?)# SIG # End signature block')
+    if (-not $m.Success) { return $null }
+    $b64 = (($m.Groups[1].Value -split '\r?\n') | ForEach-Object { $_ -replace '^# ', '' }) -join ''
+    $cms = New-Object System.Security.Cryptography.Pkcs.SignedCms
+    $cms.Decode([Convert]::FromBase64String($b64))
+    return $cms.SignerInfos[0].Certificate.Thumbprint
+}
+
+# What changed in the source since the last signature: its files against the hashes in manifest.psd1, and its
+# signer against the company's key. Added, Changed, Removed (relative paths); First: never signed; Unreadable: the
+# reason a manifest.psd1 can't be read; OtherKey: the thumbprint of the certificate that signed it, when keys/ holds
+# another one; Serial and Created of the manifest.
+function Get-SourceChanges {
+    param($Company)
+    if (-not [IO.Directory]::Exists($Company.Source)) { throw "$($Company.Name) has no source yet: pwsh tools/wm.ps1 new $($Company.Name)" }
+    $result = [pscustomobject]@{
+        First = $false; Unreadable = ''; OtherKey = ''; Serial = ''; Created = ''; Added = @(); Changed = @(); Removed = @()
+    }
+    $files = @(Get-SignedFiles $Company.Source)
+    $path = Join-Path $Company.Source 'manifest.psd1'
+    if (-not [IO.File]::Exists($path)) {
+        $result.First = $true
+        $result.Added = $files
+        return $result
+    }
+    $manifest = $null
+    try { $manifest = Import-PowerShellDataFile -LiteralPath $path } catch { $result.Unreadable = $_.Exception.Message }
+    if (-not $result.Unreadable -and -not ($manifest.Files -is [hashtable])) { $result.Unreadable = 'it has no Files table' }
+    if ($result.Unreadable) { return $result }
+    $result.Serial = [string]$manifest.Serial
+    $result.Created = [string]$manifest.Created
+    # The paths as the manifest writes them, letter case included (a PowerShell hashtable would ignore it)
+    $signed = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
+    foreach ($k in $manifest.Files.Keys) { $signed[[string]$k] = [string]$manifest.Files[$k] }
+    $here = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($f in $files) { [void]$here.Add($f) }
+    $result.Added = @($files | Where-Object { -not $signed.ContainsKey($_) })
+    $result.Changed = @($files | Where-Object { $signed.ContainsKey($_) -and $signed[$_] -ne (Get-CachedHash (Join-Path $Company.Source $_)) })
+    $result.Removed = @($signed.Keys | Where-Object { -not $here.Contains($_) } | Sort-Object -CaseSensitive)
+    # Signed by another key than the company's (it was replaced): computers set up with the new certificate reject it
+    $cert = Join-Path $Company.Keys 'wmanager-signing.cer'
+    if ([IO.File]::Exists($cert)) {
+        try {
+            $signer = Get-ManifestSigner $path
+            $own = [Security.Cryptography.X509Certificates.X509Certificate2]::new($cert).Thumbprint
+            if ($signer -and $signer -ne $own) { $result.OtherKey = $signer }
+        } catch { }
+    }
+    return $result
+}
+
+function Test-SourceChanged {
+    param($Changes)
+    return ($Changes.First -or $Changes.Unreadable -or $Changes.OtherKey -or
+            ($Changes.Added.Count + $Changes.Changed.Count + $Changes.Removed.Count) -gt 0)
+}
+
+# Has anything in the source changed since the last signature?
 function Test-UnsignedChanges {
     param($Company)
-    try { $signed = (Import-PowerShellDataFile -LiteralPath (Join-Path $Company.Source 'manifest.psd1')).Files }
-    catch { return $true }
-    if (-not ($signed -is [hashtable])) { return $true }
-    $files = @(Get-SignedFiles $Company.Source)
-    if ($files.Count -ne $signed.Count) { return $true }
-    foreach ($rel in $files) {
-        $want = $signed[$rel]
-        if (-not $want -or $want -ne (Get-FileHash -LiteralPath (Join-Path $Company.Source $rel) -Algorithm SHA256).Hash) { return $true }
+    return (Test-SourceChanged (Get-SourceChanges $Company))
+}
+
+# What the next signature would publish: + added, ~ changed, - removed
+function Show-SourceChanges {
+    param($Company, $Changes)
+    if ($null -eq $Changes) { $Changes = Get-SourceChanges $Company }
+    if ($Changes.First) {
+        # publish.sh writes source-id.txt first, and signs it too
+        $count = $Changes.Added.Count
+        if ($Changes.Added -notcontains 'source-id.txt') { $count++ }
+        Write-Host "  Never signed: the first signature publishes $(Format-Count $count 'file')."
+        return
     }
-    return $false
+    if ($Changes.Unreadable) {
+        Write-Host "  manifest.psd1 can't be read ($($Changes.Unreadable)); the next signature writes it anew." -ForegroundColor Yellow
+        return
+    }
+    $when = ''
+    if ($Changes.Created) { $when = ", $($Changes.Created)" }
+    if ($Changes.OtherKey) {
+        Write-Host "  ! Signed with another key (certificate $($Changes.OtherKey)) than the one in keys/: sign again with it." -ForegroundColor Yellow
+    }
+    if (($Changes.Added.Count + $Changes.Changed.Count + $Changes.Removed.Count) -eq 0) {
+        if (-not $Changes.OtherKey) { Write-Host "  Nothing changed since the last signature (manifest $($Changes.Serial)$when)." }
+        return
+    }
+    Write-Host "  Since the last signature (manifest $($Changes.Serial)$when):"
+    foreach ($f in $Changes.Added) { Write-Host "    + $f" -ForegroundColor Green }
+    foreach ($f in $Changes.Changed) { Write-Host "    ~ $f" -ForegroundColor Yellow }
+    foreach ($f in $Changes.Removed) { Write-Host "    - $f" -ForegroundColor Red }
 }
 
 # What a company has and what it still lacks, in a few words
@@ -230,8 +326,10 @@ function Get-CompanyState {
                 $parts.Add('version.psd1 unreadable')
             }
         }
-        if (-not [IO.File]::Exists((Join-Path $Company.Source 'manifest.psd1'))) { $parts.Add('not signed yet') }
-        elseif (Test-UnsignedChanges $Company) { $parts.Add('changes not signed yet') }
+        $changes = Get-SourceChanges $Company
+        if ($changes.First) { $parts.Add('not signed yet') }
+        elseif ($changes.OtherKey) { $parts.Add('signed with another key') }
+        elseif (Test-SourceChanged $changes) { $parts.Add('changes not signed yet') }
         if (-not $hasKey) { $parts.Add('no signing key') }
     }
     if (-not [IO.File]::Exists($Company.Config)) { $parts.Add('no configuration yet') }
@@ -280,10 +378,18 @@ function Invoke-Groups {
 }
 
 # Checks and signs the source with the company's key (tools/publish.sh, which says what to do next: push or copy)
+# First it shows what the signature publishes and asks (-Confirmed: the caller already did): nothing changed means
+# no signature unless you want one (e.g. after a new certificate).
 function Publish-Company {
-    param($Company)
+    param($Company, [switch]$Confirmed)
     if (-not [IO.Directory]::Exists($Company.Source)) { throw "$($Company.Name) has no source yet: pwsh tools/wm.ps1 new $($Company.Name)" }
     if (-not (Test-HasKey $Company)) { throw "$($Company.Name) has no signing key in $($Company.Keys): pwsh tools/wm.ps1 new $($Company.Name)" }
+    if (-not $Confirmed) {
+        $changes = Get-SourceChanges $Company
+        Show-SourceChanges $Company $changes
+        $go = if (Test-SourceChanged $changes) { Read-WmYesNo 'Sign and publish this?' $true } else { Read-WmYesNo 'Sign it again anyway?' $false }
+        if (-not $go) { Write-Host '  Not signed.'; return }
+    }
     $code = Invoke-Native 'bash' @((Join-Path $script:Tools 'publish.sh'), $Company.Source, $Company.Keys)
     if ($code -ne 0) { throw 'not signed (the reason is above)' }
 }
@@ -360,7 +466,7 @@ function New-Company {
     if ([IO.File]::Exists((Join-Path $c.Source 'manifest.psd1'))) {
         Write-Host '  Already signed.'
     } else {
-        try { Publish-Company $c }
+        try { Publish-Company $c -Confirmed }
         catch { throw "$(Format-WmErrorText $_ -English); to carry on: pwsh tools/wm.ps1 new $Name" }
     }
 
@@ -1029,7 +1135,7 @@ function Invoke-CompanyMenu {
         Write-Host '  7) new job for a group: hourly, daily or weekly (from a template, in your editor)'
         Write-Host '  8) enable a ready script or job from the library'
         Write-Host '  9) set the wmanager version the computers run'
-        Write-Host ' 10) check the source'
+        Write-Host ' 10) check the source, and what changed since the last signature'
         Write-Host ' 11) sign and publish'
         Write-Host ' 12) configuration wizard (provision.config.psd1)'
         Write-Host ' 13) read-only keys for the status (Healthchecks, Grafana Cloud)'
@@ -1052,15 +1158,23 @@ function Invoke-CompanyMenu {
                 '7' { $changed = New-GroupFileStep $Company 'job' }
                 '8' { $changed = Enable-LibraryStep $Company }
                 '9' { $changed = Set-VersionStep $Company }
-                '10' { $null = Invoke-Groups $Company 'check' }
+                '10' {
+                    $null = Invoke-Groups $Company 'check'
+                    Show-SourceChanges $Company
+                }
                 '11' { Publish-Company $Company }
                 '12' { Invoke-Wizard $Company }
                 '13' { Set-Monitoring $Company }
                 default { if ($answer) { Write-Host '  Choose a number from the list, or b.' -ForegroundColor Yellow } }
             }
-            if ($changed -and (Test-UnsignedChanges $Company) -and
-                (Read-WmYesNo 'Sign and publish now? The computers see the change only after that.' $true)) {
-                Publish-Company $Company
+            if ($changed) {
+                $changes = Get-SourceChanges $Company
+                if (Test-SourceChanged $changes) {
+                    Show-SourceChanges $Company $changes
+                    if (Read-WmYesNo 'Sign and publish now? The computers see the change only after that.' $true) {
+                        Publish-Company $Company -Confirmed
+                    }
+                }
             }
         } catch {
             Write-Host "ERROR: $(Format-WmErrorText $_ -English)" -ForegroundColor Red
@@ -1130,7 +1244,9 @@ try {
         if (-not $Second) {
             Invoke-CompanyMenu $company
         } elseif ($Second -eq 'publish') {
-            Publish-Company $company
+            Publish-Company $company -Confirmed:$Yes
+        } elseif ($Second -eq 'changes') {
+            Show-SourceChanges $company
         } elseif ($Second -eq 'config') {
             Invoke-Wizard $company
         } elseif ($Second -eq 'status') {

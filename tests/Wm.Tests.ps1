@@ -157,6 +157,65 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         (Invoke-Tool list).Text | Should -Match 'changes not signed yet'
     }
 
+    It 'shows what changed since the last signature: added, changed and removed files' {
+        $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
+        $r = Invoke-Tool acme changes
+        $r.Code | Should -Be 0
+        $files = @(Get-ChildItem -LiteralPath $source -Recurse -File).Count + 1   # with the source-id.txt it creates
+        $r.Text | Should -Match "Never signed: the first signature publishes $files files"
+        (Invoke-Tool nope changes).Text | Should -Match "no company 'nope'"
+        $null = Add-Company 'beta' -Config '@{}'
+        (Invoke-Tool beta changes).Text | Should -Match 'beta has no source yet'
+        Write-Manifest $source
+        (Invoke-Tool acme changes).Text | Should -Match 'Nothing changed since the last signature \(manifest 1\)'
+        Add-Content -LiteralPath (Join-Path $source 'choco-reqs.txt') -Value 'vlc'
+        Set-Content -LiteralPath (Join-Path $source 'groups/all/new.txt') -Value 'new'
+        $gone = @(Get-ChildItem -LiteralPath (Join-Path $source 'groups/accounting') -Recurse -File)[0]
+        $goneRel = [IO.Path]::GetRelativePath($source, $gone.FullName).Replace('\', '/')
+        Remove-Item -LiteralPath $gone.FullName
+        $r = Invoke-Tool acme changes
+        $r.Text | Should -Match '(?m)^\s+\+ groups/all/new\.txt\s*$'
+        $r.Text | Should -Match '(?m)^\s+~ choco-reqs\.txt\s*$'
+        $r.Text | Should -Match ("(?m)^\s+- " + [regex]::Escape($goneRel) + '\s*$')
+        @([regex]::Matches($r.Text, '(?m)^\s+[+~-] ')).Count | Should -Be 3
+
+        # A new name that differs only in letter case is a new file for a web server
+        Write-Manifest $source
+        Rename-Item -LiteralPath (Join-Path $source 'groups.psd1') -NewName 'Groups.psd1'
+        $r = Invoke-Tool acme changes
+        $r.Text | Should -Match '(?m)^\s+\+ Groups\.psd1\s*$'
+        $r.Text | Should -Match '(?m)^\s+- groups\.psd1\s*$'
+        Rename-Item -LiteralPath (Join-Path $source 'Groups.psd1') -NewName 'groups.psd1'
+
+        # A manifest that can't be read is not "never signed"
+        Set-Content -LiteralPath (Join-Path $source 'manifest.psd1') -Value '@{ <<<<<<< HEAD'
+        (Invoke-Tool acme changes).Text | Should -Match "manifest\.psd1 can't be read"
+        (Invoke-Tool list).Text | Should -Match '(?m)^acme\s+.*changes not signed yet'
+    }
+
+    It 'shows the changes before signing and signs only when you say so' {
+        $dir = Add-Company 'acme' -Source -Config '@{}'
+        Add-FakeKey $dir   # the signature is never reached here
+        Write-Manifest (Join-Path $dir 'source')
+        $manifest = [IO.File]::ReadAllText((Join-Path $dir 'source/manifest.psd1'))
+        $r = Invoke-Typed @('') @('acme', 'publish')
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'Nothing changed since the last signature'
+        $r.Text | Should -Match 'Sign it again anyway\? \[y/N\]'
+        $r.Text | Should -Match 'Not signed\.'
+        Add-Content -LiteralPath (Join-Path $dir 'source/choco-reqs.txt') -Value 'vlc'
+        $r = Invoke-Typed @('n') @('acme', 'publish')
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match '~ choco-reqs\.txt'
+        $r.Text | Should -Match 'Sign and publish this\? \[Y/n\]'
+        $r.Text | Should -Match 'Not signed\.'
+        [IO.File]::ReadAllText((Join-Path $dir 'source/manifest.psd1')) | Should -Be $manifest
+        # -Yes: no question (a script signs this way); the fake key can't sign, so it stops at publish.sh
+        $r = Invoke-Typed @() @('acme', 'publish', '-Yes')
+        $r.Text | Should -Not -Match 'Sign and publish this\?'
+        $r.Text | Should -Match 'not signed \(the reason is above\)'
+    }
+
     It 'passes a command on to tools/groups.ps1 for the source of the company, with -Url and -Zip' {
         $source = Join-Path (Add-Company 'acme' -Source) 'source'
         $r = Invoke-Tool acme add-computer OFFICE-07 accounting
@@ -191,6 +250,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         $text | Should -Match "'OFFICE-09' = @\('accounting', 'front-desk'\)"
         Get-Content -LiteralPath (Join-Path $source 'groups/accounting/choco-reqs.txt') | Should -Contain 'vlc'
         ([regex]::Matches($r.Text, 'Sign and publish now\?')).Count | Should -Be 2
+        $r.Text | Should -Match 'Never signed: the first signature publishes'
         $r.Text | Should -Match 'Choose a number from the list, or b'
         $r.Text | Should -Match '(?m)^Choose: q'
     }
@@ -578,5 +638,11 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         $r = Invoke-Typed @() @('new', 'acme')
         $r.Code | Should -Be 0
         ([regex]::Matches($r.Text, 'Already')).Count | Should -Be 4
+
+        # Another key in keys/ (the old one replaced): the source is still signed with the old one
+        Remove-Item -LiteralPath (Join-Path $dir 'keys') -Recurse
+        Add-TestKey $dir
+        (Invoke-Tool acme changes).Text | Should -Match 'Signed with another key'
+        (Invoke-Tool list).Text | Should -Match '(?m)^acme\s+.*signed with another key'
     }
 }
