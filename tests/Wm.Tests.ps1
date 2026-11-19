@@ -584,6 +584,114 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         }
     }
 
+    Context 'publish target and sync' {
+        BeforeAll {
+            $script:gitEnv = @{}
+            foreach ($k in @('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'GIT_TERMINAL_PROMPT', 'GH_CONFIG_DIR', 'GH_TOKEN', 'GITHUB_TOKEN')) {
+                $script:gitEnv[$k] = [Environment]::GetEnvironmentVariable($k)
+            }
+            $env:GIT_AUTHOR_NAME = 'wm test'; $env:GIT_COMMITTER_NAME = 'wm test'
+            $env:GIT_AUTHOR_EMAIL = 'wm@example.test'; $env:GIT_COMMITTER_EMAIL = 'wm@example.test'
+            $env:GIT_TERMINAL_PROMPT = '0'
+            # gh, where installed, is never signed in here: the remote is asked for
+            $env:GH_CONFIG_DIR = Join-Path $TestDrive 'gh'
+            Remove-Item Env:\GH_TOKEN, Env:\GITHUB_TOKEN -ErrorAction SilentlyContinue
+
+            # The computers' side: a web server giving the files of $web (the folder sync copies to)
+            $script:web = Join-Path $TestDrive 'web'
+            New-Item -ItemType Directory -Force -Path $script:web | Out-Null
+            $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
+            $script:webBase = "http://127.0.0.1:$port"
+            $script:webServer = Start-ThreadJob -ArgumentList $port, $script:web -ScriptBlock {
+                param($port, $root)
+                $l = New-Object System.Net.HttpListener
+                $l.Prefixes.Add("http://127.0.0.1:$port/")
+                $l.Start()
+                while ($l.IsListening) {
+                    $c = $l.GetContext()
+                    $path = $c.Request.Url.AbsolutePath
+                    if ($path -eq '/stop') { $c.Response.Close(); $l.Stop(); break }
+                    $file = Join-Path $root $path.TrimStart('/')
+                    if ($path -ne '/ready' -and -not [IO.File]::Exists($file)) { $c.Response.StatusCode = 404 }
+                    elseif ($path -ne '/ready') { $b = [IO.File]::ReadAllBytes($file); $c.Response.OutputStream.Write($b, 0, $b.Length) }
+                    $c.Response.Close()
+                }
+            }
+            for ($i = 0; $i -lt 100; $i++) {
+                try { Invoke-WebRequest -Uri "$($script:webBase)/ready" -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Milliseconds 100 }
+            }
+        }
+
+        AfterAll {
+            try { Invoke-WebRequest -Uri "$($script:webBase)/stop" -TimeoutSec 5 | Out-Null } catch { }
+            $script:webServer | Remove-Job -Force
+            foreach ($k in $script:gitEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $script:gitEnv[$k]) }
+        }
+
+        It 'copies the signed source to a folder, manifest last, and checks that the computers'' address gives it' {
+            $dir = Add-Company 'acme' -Source -Config "@{ Management = @{ Source = '$($script:webBase)/acme'; SourceId = 'test-source-0001' } }"
+            Write-Manifest (Join-Path $dir 'source')
+            $r = Invoke-Typed @('f', (Join-Path $script:web 'acme'), 'y') @('acme', 'target')
+            $r.Code | Should -Be 0
+            (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'publish.psd1')).Target | Should -Be (Join-Path $script:web 'acme')
+            (& stat -c '%a' (Join-Path $dir 'publish.psd1')) | Should -Be '600'
+            $r.Text | Should -Match 'Copied \d+ files to .*manifest\.psd1 last'
+            $r.Text | Should -Match 'The computers can read manifest 1 now'
+            Test-Path -LiteralPath (Join-Path $script:web 'acme/groups/accounting/scripts/10-power-plan.ps1') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $script:web 'acme/.gitattributes') | Should -BeFalse
+
+            # Changes that aren't signed stay here
+            Add-Content -LiteralPath (Join-Path $dir 'source/choco-reqs.txt') -Value 'not-signed-yet'
+            $r = Invoke-Tool acme sync
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match "changes that aren't signed"
+            Get-Content -LiteralPath (Join-Path $script:web 'acme/choco-reqs.txt') | Should -Not -Contain 'not-signed-yet'
+        }
+
+        It 'offers to send what was signed before when nothing changed, and says when the address gives another manifest' {
+            $dir = Add-Company 'acme' -Source -Config "@{ Management = @{ Source = '$($script:webBase)/other'; SourceId = 'test-source-0001' } }"
+            Add-FakeKey $dir
+            Write-Manifest (Join-Path $dir 'source')
+            Set-Content -LiteralPath (Join-Path $dir 'publish.psd1') -Value "@{ Target = '$(Join-Path $script:web 'acme2')' }"
+            New-Item -ItemType Directory -Force -Path (Join-Path $script:web 'other') | Out-Null
+            Set-Content -LiteralPath (Join-Path $script:web 'other/manifest.psd1') -Value "@{ SourceId = 'x'; Serial = 0; Files = @{} }"
+            $r = Invoke-Typed @('', 'y', 'n') @('acme', 'publish')
+            $r.Code | Should -Be 0
+            $r.Text | Should -Match 'Sign it again anyway\? \[y/N\]'
+            $r.Text | Should -Match 'Send it where the computers read it \(.*acme2\)\? \[y/N\]'
+            Test-Path -LiteralPath (Join-Path $script:web 'acme2/manifest.psd1') | Should -BeTrue
+            $r.Text | Should -Match 'still gives manifest 0'
+        }
+
+        It 'makes the source a Git repository, pushes it to its remote, then commits and pushes what was signed' -Skip:(-not (Get-Command git -ErrorAction SilentlyContinue)) {
+            $dir = Add-Company 'acme' -Source -Config '@{}'
+            Write-Manifest (Join-Path $dir 'source')
+            $remote = Join-Path $TestDrive 'acme-remote.git'
+            & git init -q --bare $remote
+            $r = Invoke-Typed @('g', 'y', $remote, 'y') @('acme', 'target')
+            $r.Code | Should -Be 0
+            $r.Text | Should -Match 'Made it a Git repository'
+            (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'publish.psd1')).Target | Should -Be 'git'
+            (& git -C $remote log main --format=%s) | Should -Contain 'Management source of acme'
+
+            Add-Content -LiteralPath (Join-Path $dir 'source/choco-reqs.txt') -Value 'signed-now'
+            Write-Manifest (Join-Path $dir 'source')
+            $r = Invoke-Tool acme sync
+            $r.Code | Should -Be 0
+            $r.Text | Should -Match 'Committed: Manifest 1: 2 files'
+            $r.Text | Should -Match 'no Management\.Source yet'
+            (& git -C $remote log main --format=%s) | Should -Contain 'Manifest 1: 2 files'
+            (& git -C $remote show main:choco-reqs.txt) | Should -Contain 'signed-now'
+
+            # A GitHub remote: the address the computers read it from
+            $beta = Add-Company 'beta' -Source -Config '@{}'
+            $r = Invoke-Typed @('g', 'y', 'https://github.com/acme-it/wmanager-beta.git', 'n') @('beta', 'target')
+            $r.Text | Should -Match 'The computers read it from https://raw\.githubusercontent\.com/acme-it/wmanager-beta/main'
+            $r.Text | Should -Match 'pwsh tools/wm\.ps1 beta config'
+        }
+    }
+
     Context 'usb' {
         BeforeEach {
             $script:usb = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
@@ -662,7 +770,8 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         # Mended, it carries on: signed, then the wizard with the source's identifier offered
         Remove-Item -LiteralPath (Join-Path $dir 'source') -Recurse
         # wizard: update time, days, Loki, Healthchecks, source, certificate, source identifier (all Enter but the source)
-        $r = Invoke-Typed @('y', '', '', '', '', '\\srv\acme', '', '') @('new', 'acme')
+        # where it goes: later; the wizard: update time, days, Loki, Healthchecks, source, certificate, identifier
+        $r = Invoke-Typed @('n', 'y', '', '', '', '', '\\srv\acme', '', '') @('new', 'acme')
         $r.Code | Should -Be 0
         $r.Text | Should -Match '1/4 Signing key: .*\r?\n\s+Already there'
         $r.Text | Should -Match 'Copied from examples/management'

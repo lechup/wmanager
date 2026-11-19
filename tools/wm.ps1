@@ -18,8 +18,10 @@
 #   pwsh tools/wm.ps1 <company> status         its computers: Healthchecks, the last update, errors, wmanager version
 #   pwsh tools/wm.ps1 <company> monitoring     the read-only keys status needs (kept in <company>/monitoring.psd1)
 #   pwsh tools/wm.ps1 <company> changes        what changed in its source since the last signature
-#   pwsh tools/wm.ps1 <company> publish        those changes, then check and sign them (tools/publish.sh); -Yes signs
-#                                              without asking (also with nothing changed), for scripts
+#   pwsh tools/wm.ps1 <company> publish        those changes, then check and sign them (tools/publish.sh) and send
+#                                              them where the computers read it; -Yes: without asking, for scripts
+#   pwsh tools/wm.ps1 <company> sync           send the signed source where the computers read it, and check they can
+#   pwsh tools/wm.ps1 <company> target         where that is: a Git repository (gh can create it) or a folder
 #   pwsh tools/wm.ps1 <company> config         the configuration wizard (init.ps1) for its provision.config.psd1
 #   pwsh tools/wm.ps1 <company> <command> ...  a tools/groups.ps1 command on its source, e.g.
 #                                              add-computer OFFICE-07 accounting, enable power all, set-version v0.2.0
@@ -381,17 +383,31 @@ function Invoke-Groups {
 # First it shows what the signature publishes and asks (-Confirmed: the caller already did): nothing changed means
 # no signature unless you want one (e.g. after a new certificate).
 function Publish-Company {
-    param($Company, [switch]$Confirmed)
+    param($Company, [switch]$Confirmed, [switch]$NoWait)
     if (-not [IO.Directory]::Exists($Company.Source)) { throw "$($Company.Name) has no source yet: pwsh tools/wm.ps1 new $($Company.Name)" }
     if (-not (Test-HasKey $Company)) { throw "$($Company.Name) has no signing key in $($Company.Keys): pwsh tools/wm.ps1 new $($Company.Name)" }
+    $sign = $true
+    $changed = $true
     if (-not $Confirmed) {
         $changes = Get-SourceChanges $Company
         Show-SourceChanges $Company $changes
-        $go = if (Test-SourceChanged $changes) { Read-WmYesNo 'Sign and publish this?' $true } else { Read-WmYesNo 'Sign it again anyway?' $false }
-        if (-not $go) { Write-Host '  Not signed.'; return }
+        $changed = Test-SourceChanged $changes
+        $sign = if ($changed) { Read-WmYesNo 'Sign and publish this?' $true } else { Read-WmYesNo 'Sign it again anyway?' $false }
+        if (-not $sign) { Write-Host '  Not signed.' }
     }
-    $code = Invoke-Native 'bash' @((Join-Path $script:Tools 'publish.sh'), $Company.Source, $Company.Keys)
-    if ($code -ne 0) { throw 'not signed (the reason is above)' }
+    if ($sign) {
+        $code = Invoke-Native 'bash' @((Join-Path $script:Tools 'publish.sh'), $Company.Source, $Company.Keys)
+        if ($code -ne 0) { throw 'not signed (the reason is above)' }
+    } elseif ($changed) {
+        return
+    }
+    # Then where the computers read it: what was just signed, or (nothing changed) what was signed before, again
+    $target = Get-PublishTarget $Company
+    if (-not $target) {
+        if ($sign) { Write-Host "  To send it from here next time: pwsh tools/wm.ps1 $($Company.Name) target" }
+        return
+    }
+    if ($Confirmed -or (Read-WmYesNo "Send it where the computers read it ($target)?" $sign)) { Sync-Company $Company -NoWait:$NoWait }
 }
 
 # The configuration wizard for the company's provision.config.psd1, with its certificate next to it
@@ -474,11 +490,13 @@ function New-Company {
     if ([IO.File]::Exists($c.Config)) {
         Write-Host "  Already there; to change it: pwsh tools/wm.ps1 $Name config"
     } else {
-        Write-Host '  The computers read the source from where you put it, either:'
-        Write-Host "  - a private Git repository: cd $($c.Source); git init; git add -A; git commit -m 'Management source';"
-        Write-Host '    then add the remote and push;'
-        Write-Host '  - or a folder on a web server or a share: copy the folder there, manifest.psd1 last.'
-        Write-Host '  The wizard asks for that address, then for the update time, Loki and Healthchecks (all optional).'
+        Write-Host '  The computers read the source from a private Git repository or from a folder (a web server, a share).'
+        if (-not (Get-PublishTarget $c)) {
+            if (Read-WmYesNo '  Set up where it goes now?' $true) { Set-PublishTarget $c }
+            else { Write-Host "  Later: pwsh tools/wm.ps1 $Name target" }
+        }
+        Write-Host '  The wizard asks for the address the computers read it from, then for the update time, Loki and'
+        Write-Host '  Healthchecks (all optional).'
         if (Read-WmYesNo '  Run the wizard now?' $true) { Invoke-Wizard $c }
         else { Write-Host "  Later: pwsh tools/wm.ps1 $Name config" }
     }
@@ -1003,6 +1021,242 @@ function Show-AllStatus {
 }
 
 # ---------------------------------------------------------------------------
+# Where the computers read the source: sending the signed source there, and checking they can see it
+# ---------------------------------------------------------------------------
+
+# <company>/publish.psd1: where "sync" sends the signed source. 'git' = the source is a Git repository, sync commits
+# and pushes it; anything else is a folder: a path on this computer (e.g. a mounted share) or user@host:/path (rsync).
+function Get-PublishTargetPath {
+    param($Company)
+    return (Join-Path $Company.Dir 'publish.psd1')
+}
+
+function Get-PublishTarget {
+    param($Company)
+    $path = Get-PublishTargetPath $Company
+    if ([IO.File]::Exists($path)) {
+        $target = [string](Import-PowerShellDataFile -LiteralPath $path).Target
+        if ($target) { return $target }
+    }
+    return $null
+}
+
+function Test-RemoteFolder {
+    param([string]$Target)
+    return ($Target -match '^[^/\s:]+:' -and $Target -notmatch '^[A-Za-z]:')
+}
+
+function Invoke-Git {
+    param([string]$Dir, [string[]]$Arguments)
+    $out = & git -C $Dir @Arguments 2>&1
+    return [pscustomobject]@{ Ok = ($LASTEXITCODE -eq 0); Text = (@($out | ForEach-Object { "$_" }) -join "`n").Trim() }
+}
+
+function Test-GitRepository {
+    param([string]$Dir)
+    if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+    $r = Invoke-Git $Dir @('rev-parse', '--is-inside-work-tree')
+    return ($r.Ok -and $r.Text -eq 'true')
+}
+
+# The address raw.githubusercontent.com serves a GitHub repository's files at, for Management.Source; $null for
+# another host
+function Get-RawGitHubUrl {
+    param([string]$Remote, [string]$Branch)
+    if ($Remote -match '^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+)/([^/]+?)(?:\.git)?/?$') {
+        return "https://raw.githubusercontent.com/$($Matches[1])/$($Matches[2])/$Branch"
+    }
+    return $null
+}
+
+# Asks where the computers read the source from and gets it ready: a Git repository (made here if needed, with a
+# private GitHub repository by gh, or a remote you give) or a folder. Keeps the answer in <company>/publish.psd1.
+function Set-PublishTarget {
+    param($Company)
+    Assert-Source $Company
+    Write-Step "Where the computers of $($Company.Name) read the source from"
+    $now = Get-PublishTarget $Company
+    if ($now) { Write-Host "  Now: $now" }
+    Write-Host '  g) a Git repository (private), pushed to its remote: GitHub, GitLab, a server of your own'
+    Write-Host '  f) a folder: a share mounted here (e.g. /mnt/server/wmanager/acme) or user@host:/path (rsync over ssh)'
+    while ($true) {
+        $answer = [string](Read-Line 'Choose (Enter = leave it as it is)')
+        if (-not $answer) { return }
+        if (@('g', 'f') -contains $answer) { break }
+        Write-Host '  g, f or Enter.' -ForegroundColor Yellow
+    }
+    $src = $Company.Source
+    if ($answer -eq 'f') {
+        $folder = [string](Read-Line 'The folder (a path here, or user@host:/path)')
+        if (-not $folder) { return }
+        if (-not (Test-RemoteFolder $folder)) { $folder = ConvertTo-FullPath $folder }
+        Write-PrivateFile (Get-PublishTargetPath $Company) (@(
+            '# Where pwsh tools/wm.ps1 sync sends the signed source (written by "wm.ps1 <company> target").'
+            '@{'
+            "    Target = $(ConvertTo-WmPsdString $folder)"
+            '}'
+            '') -join "`n")
+        Write-Host "  Saved: sync copies the signed source to $folder, manifest.psd1 last."
+        Write-Host '  The computers read that folder by its own address in Management.Source (e.g. \\server\share\wmanager\acme).'
+        $changes = Get-SourceChanges $Company
+        if (-not (Test-SourceChanged $changes) -and (Read-WmYesNo '  Copy the signed source there now?' $true)) { Sync-Company $Company -NoWait }
+        return
+    }
+
+    if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) { throw 'git not found (sudo apt install git)' }
+    if (-not (Test-GitRepository $src)) {
+        if (-not (Read-WmYesNo "  $src is not a Git repository. Make it one (git init) and commit the source?" $true)) { return }
+        foreach ($step in @(@('init', '-q', '-b', 'main'), @('add', '-A'), @('commit', '-q', '-m', "Management source of $($Company.Name)"))) {
+            $r = Invoke-Git $src $step
+            if (-not $r.Ok) { throw "git $($step[0]) failed: $($r.Text)" }
+        }
+        Write-Host '  Made it a Git repository, with a first commit.'
+    }
+    $branch = (Invoke-Git $src @('rev-parse', '--abbrev-ref', 'HEAD')).Text
+    $remote = (Invoke-Git $src @('remote', 'get-url', 'origin'))
+    if ($remote.Ok) {
+        Write-Host "  Its remote: $($remote.Text)"
+        $url = $remote.Text
+    } else {
+        $url = $null
+        $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue
+        if ($gh -and (& gh auth status 2>&1 | Out-String) -match 'Logged in') {
+            $name = "wmanager-$($Company.Name)"
+            if (Read-WmYesNo "  Create a private GitHub repository $name with gh and push the source?" $true) {
+                $code = Invoke-Native 'gh' @('repo', 'create', $name, '--private', '--source', $src, '--remote', 'origin', '--push')
+                if ($code -ne 0) { throw 'gh repo create failed (the reason is above)' }
+                $url = (Invoke-Git $src @('remote', 'get-url', 'origin')).Text
+            }
+        }
+        if (-not $url) {
+            $url = [string](Read-Line '  Address of its (private) remote repository, e.g. git@github.com:you/wmanager-acme.git (Enter = later)')
+            if (-not $url) { Write-Host '  Later: git -C' $src 'remote add origin <address>, then pwsh tools/wm.ps1' $Company.Name 'target'; return }
+            $r = Invoke-Git $src @('remote', 'add', 'origin', $url)
+            if (-not $r.Ok) { throw "git remote add failed: $($r.Text)" }
+            if (Read-WmYesNo '  Push the source there now?' $true) {
+                if ((Invoke-Native 'git' @('-C', $src, 'push', '-u', 'origin', $branch)) -ne 0) { throw 'git push failed (the reason is above)' }
+            }
+        }
+    }
+    Write-PrivateFile (Get-PublishTargetPath $Company) (@(
+        '# Where pwsh tools/wm.ps1 sync sends the signed source (written by "wm.ps1 <company> target").'
+        '@{'
+        "    Target = 'git'"
+        '}'
+        '') -join "`n")
+    Write-Host '  Saved: sync commits the signed source and pushes it.'
+    $raw = Get-RawGitHubUrl $url $branch
+    if ($raw) {
+        Write-Host "  The computers read it from $raw"
+        Write-Host '  with a read-only token in Management.AuthHeader (token github_pat_...: a fine-grained token of this'
+        Write-Host '  repository with Contents: Read-only).'
+        $source = Get-ConfigSource $Company
+        if ($source.Source -ne $raw) { Write-Host "  Put that address in the configuration: pwsh tools/wm.ps1 $($Company.Name) config" }
+    } else {
+        Write-Host '  The computers read it from its raw https:// address on that server, in Management.Source.'
+    }
+}
+
+# Management.Source and AuthHeader of the company's configuration
+function Get-ConfigSource {
+    param($Company)
+    $m = $null
+    if ([IO.File]::Exists($Company.Config)) { $m = (Import-PowerShellDataFile -LiteralPath $Company.Config).Management }
+    if (-not ($m -is [hashtable])) { $m = @{} }
+    return [pscustomobject]@{ Source = ([string]$m.Source).TrimEnd('/'); AuthHeader = [string]$m.AuthHeader }
+}
+
+# Sends the signed source where the computers read it (publish.psd1), then checks they can see it. Only a source
+# without changes since its signature: computers reject files that don't match the manifest.
+function Sync-Company {
+    param($Company, [switch]$NoWait)
+    Assert-Source $Company
+    $target = Get-PublishTarget $Company
+    if (-not $target) { throw "no place to send the source to yet: pwsh tools/wm.ps1 $($Company.Name) target" }
+    $changes = Get-SourceChanges $Company
+    if ($changes.First) { throw "the source isn't signed yet: pwsh tools/wm.ps1 $($Company.Name) publish" }
+    if (Test-SourceChanged $changes) {
+        throw "the source has changes that aren't signed (pwsh tools/wm.ps1 $($Company.Name) changes); the computers would reject them: sign them first"
+    }
+    $src = $Company.Source
+    if ($target -eq 'git') {
+        if (-not (Test-GitRepository $src)) { throw "$src is not a Git repository any more: pwsh tools/wm.ps1 $($Company.Name) target" }
+        $r = Invoke-Git $src @('add', '-A')
+        if (-not $r.Ok) { throw "git add failed: $($r.Text)" }
+        $staged = @((Invoke-Git $src @('diff', '--cached', '--name-status')).Text -split "`n" | Where-Object { $_ })
+        if ($staged.Count -gt 0) {
+            $subject = "Manifest $($changes.Serial): $(Format-Count $staged.Count 'file')"
+            $body = (@($staged | Select-Object -First 40) -join "`n")
+            $r = Invoke-Git $src @('commit', '-q', '-m', $subject, '-m', $body)
+            if (-not $r.Ok) { throw "git commit failed: $($r.Text)" }
+            Write-Host "  Committed: $subject"
+        }
+        $branch = (Invoke-Git $src @('rev-parse', '--abbrev-ref', 'HEAD')).Text
+        $upstream = Invoke-Git $src @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
+        $push = if ($upstream.Ok) { @('-C', $src, 'push') } else { @('-C', $src, 'push', '-u', 'origin', $branch) }
+        if ((Invoke-Native 'git' $push) -ne 0) { throw 'git push failed (the reason is above); sync again when it works' }
+        Write-Host "  Pushed."
+    } else {
+        $files = @(Get-SignedFiles $src)
+        if (Test-RemoteFolder $target) {
+            if (-not (Get-Command rsync -CommandType Application -ErrorAction SilentlyContinue)) { throw 'rsync not found (sudo apt install rsync)' }
+            $list = Join-Path ([IO.Path]::GetTempPath()) ('wmanager-sync-' + [guid]::NewGuid().ToString('N'))
+            try {
+                [IO.File]::WriteAllLines($list, [string[]]$files)
+                if ((Invoke-Native 'rsync' @('-rt', "--files-from=$list", "$src/", "$target/")) -ne 0) { throw 'rsync failed (the reason is above)' }
+            } finally {
+                Remove-Item -LiteralPath $list -Force -ErrorAction SilentlyContinue
+            }
+            # The manifest last: a computer reading meanwhile still finds the files of the manifest it gets
+            if ((Invoke-Native 'rsync' @('-t', (Join-Path $src 'manifest.psd1'), "$target/manifest.psd1")) -ne 0) { throw 'rsync failed (the reason is above)' }
+        } else {
+            foreach ($rel in $files) {
+                $to = Join-Path $target $rel
+                New-Item -ItemType Directory -Force -Path (Split-Path $to -Parent) | Out-Null
+                Copy-Item -LiteralPath (Join-Path $src $rel) -Destination $to -Force
+            }
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            Copy-Item -LiteralPath (Join-Path $src 'manifest.psd1') -Destination (Join-Path $target 'manifest.psd1') -Force
+        }
+        Write-Host "  Copied $(Format-Count ($files.Count + 1) 'file') to $target, manifest.psd1 last (files removed from the source stay there; the computers ignore them)."
+    }
+    Test-Published $Company $changes.Serial -NoWait:$NoWait
+}
+
+# Does the address the computers read (Management.Source) serve the manifest just signed?
+function Test-Published {
+    param($Company, [string]$Serial, [switch]$NoWait)
+    $s = Get-ConfigSource $Company
+    if (-not $s.Source) { Write-Warn "the configuration has no Management.Source yet, so no computer reads this source: pwsh tools/wm.ps1 $($Company.Name) config"; return }
+    if (-not (Test-ServiceUrl $s.Source)) { Write-Host "  The computers read $($s.Source): it can't be checked from here."; return }
+    $headers = @{}
+    if ($s.AuthHeader) { $headers['Authorization'] = $s.AuthHeader }
+    $deadline = (Get-Date).AddMinutes(5)
+    $asked = $false
+    while ($true) {
+        $seen = $null
+        $file = Join-Path ([IO.Path]::GetTempPath()) ('wmanager-check-' + [guid]::NewGuid().ToString('N') + '.psd1')
+        try {
+            Invoke-WebRequest -Uri "$($s.Source)/manifest.psd1" -OutFile $file -Headers $headers -TimeoutSec 30 | Out-Null
+            $seen = [string](Import-PowerShellDataFile -LiteralPath $file).Serial
+        } catch {
+            Write-Warn "the computers' address $($s.Source) didn't give the manifest: $($_.Exception.Message) (check Management.Source and AuthHeader)"
+            return
+        } finally {
+            Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        }
+        if ($seen -eq $Serial) { Write-Host "  The computers can read manifest $Serial now ($($s.Source))." -ForegroundColor Green; return }
+        if ($NoWait -or (Get-Date) -gt $deadline) { Write-Warn "$($s.Source) still gives manifest $seen, not $Serial; check again later: pwsh tools/wm.ps1 $($Company.Name) sync"; return }
+        if (-not $asked) {
+            Write-Host "  $($s.Source) still gives manifest $seen (a host like GitHub keeps files up to 5 minutes)."
+            if (-not (Read-WmYesNo '  Wait until it gives the new one (up to 5 minutes)?' $true)) { return }
+            $asked = $true
+        }
+        Start-Sleep -Seconds 15
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Menus
 # ---------------------------------------------------------------------------
 
@@ -1240,9 +1494,10 @@ function Invoke-CompanyMenu {
         Write-Host ' 10) enable a ready script or job from the library'
         Write-Host ' 11) set the wmanager version the computers run'
         Write-Host ' 12) check the source, and what changed since the last signature'
-        Write-Host ' 13) sign and publish'
+        Write-Host ' 13) sign, and send it where the computers read it'
         Write-Host ' 14) configuration wizard (provision.config.psd1)'
         Write-Host ' 15) read-only keys for the status (Healthchecks, Grafana Cloud)'
+        Write-Host ' 16) where the computers read the source from (Git repository or folder)'
         Write-Host '  b) back'
         $answer = Read-Line 'Choose'
         if ($null -eq $answer -or $answer -eq 'b' -or $answer -eq 'q') { return }
@@ -1271,6 +1526,7 @@ function Invoke-CompanyMenu {
                 '13' { Publish-Company $Company }
                 '14' { Invoke-Wizard $Company }
                 '15' { Set-Monitoring $Company }
+                '16' { Set-PublishTarget $Company }
                 default { if ($answer) { Write-Host '  Choose a number from the list, or b.' -ForegroundColor Yellow } }
             }
             if ($changed) {
@@ -1350,7 +1606,11 @@ try {
         if (-not $Second) {
             Invoke-CompanyMenu $company
         } elseif ($Second -eq 'publish') {
-            Publish-Company $company -Confirmed:$Yes
+            Publish-Company $company -Confirmed:$Yes -NoWait:$Yes
+        } elseif ($Second -eq 'sync') {
+            Sync-Company $company -NoWait:$Yes
+        } elseif ($Second -eq 'target') {
+            Set-PublishTarget $company
         } elseif ($Second -eq 'changes') {
             Show-SourceChanges $company
         } elseif ($Second -eq 'config') {
