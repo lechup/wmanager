@@ -258,7 +258,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
     It 'makes a new script and a new job for a group, opens them in the editor and checks the source' {
         $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
         $env:EDITOR = "sh $script:editor"
-        $r = Invoke-Typed @('acme', '6', '1', 'install-printer', 'n', '7', 'front-desk', 'weekly', 'check-backup', 'n', 'b', 'q')
+        $r = Invoke-Typed @('acme', '7', '1', 'install-printer', 'n', '8', 'front-desk', 'weekly', 'check-backup', 'n', 'b', 'q')
         $r.Code | Should -Be 0
         $script = @(Get-ChildItem -LiteralPath (Join-Path $source 'groups/accounting/scripts') -Filter '*install-printer.ps1')
         $script.Count | Should -Be 1
@@ -275,10 +275,33 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         $broken = Join-Path $TestDrive 'broken-editor.sh'
         Set-Content -LiteralPath $broken -Value 'printf ''if ($x) {\r\n'' >> "$1"'
         $env:EDITOR = "sh $broken"
-        $r = Invoke-Typed @('acme', '6', '1', 'broken', 'n', 'n', 'b', 'q')
+        $r = Invoke-Typed @('acme', '7', '1', 'broken', 'n', 'n', 'b', 'q')
         $r.Code | Should -Be 0
         $r.Text | Should -Match 'Open it again to fix it\?'
         ([regex]::Matches($r.Text, 'Opening it in')).Count | Should -Be 1
+    }
+
+    It 'removes a package from a list, chosen by number or name' {
+        $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
+        $r = Invoke-Typed @('acme', '6', '1', '99', 'libreoffice-fresh', 'n', 'b', 'q')
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'Not on the list: 99'
+        $r.Text | Should -Match 'never uninstalled'
+        Get-Content -LiteralPath (Join-Path $source 'choco-reqs.txt') | Should -Not -Contain 'libreoffice-fresh'
+    }
+
+    It 'edits a script of a group in the editor, and removes a job after asking' {
+        $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
+        $env:EDITOR = "sh $script:editor"
+        $r = Invoke-Typed @('acme', '9', '1', 'e', 'n', '9', 'groups/all/jobs/daily/system-report.ps1', 'r', 'n', '9', '2', 'r', 'y', 'n', 'b', 'q')
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match '(?m)^\s+1\) groups/accounting/scripts/10-power-plan\.ps1\s*$'
+        $r.Text | Should -Match '(?m)^\s+2\) groups/all/jobs/daily/system-report\.ps1\s*$'
+        [IO.File]::ReadAllText((Join-Path $source 'groups/accounting/scripts/10-power-plan.ps1')) | Should -Match 'Write-Output "edited"'
+        $r.Text | Should -Match 'stop running it'
+        $r.Text | Should -Match 'Removed groups/all/jobs/daily/system-report\.ps1'
+        Test-Path -LiteralPath (Join-Path $source 'groups/all/jobs/daily/system-report.ps1') | Should -BeFalse
+        ([regex]::Matches($r.Text, 'Sign and publish now\?')).Count | Should -Be 2   # after the edit and the removal
     }
 
     It 'asks again for a group number that is not on the list' {

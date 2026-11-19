@@ -498,8 +498,9 @@ pwsh tools/wm.ps1 globex config                              # the wizard for it
 pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and every company's configuration
 ```
 
-- **The menu of a company** shows the groups, adds and removes computers, adds packages, makes a new script or job
-  for a group, switches on library items, sets the wmanager version, checks, signs and runs the wizard; after a change
+- **The menu of a company** shows the groups, adds and removes computers, adds and removes packages, makes a new
+  script or job for a group, edits or removes one (the editor, then the check; removal asks first), switches on
+  library items, sets the wmanager version, checks, signs and runs the wizard; after a change
   it shows what the signature would publish (`+` added, `~` changed, `-` removed files since the last signature,
   from the hashes in `manifest.psd1`, letter case included) and offers to sign it. `publish` shows the same first and
   asks; with nothing changed it signs only if you say so, and `publish -Yes` signs without asking (for scripts). A
