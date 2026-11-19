@@ -1119,8 +1119,13 @@ function Set-PublishTarget {
         $url = $remote.Text
     } else {
         $url = $null
-        $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue
-        if ($gh -and (& gh auth status 2>&1 | Out-String) -match 'Logged in') {
+        # gh signed in: its exit code (its text says "not logged into" when it isn't)
+        $gh = $false
+        if (Get-Command gh -CommandType Application -ErrorAction SilentlyContinue) {
+            $null = & gh auth status 2>&1
+            $gh = $LASTEXITCODE -eq 0
+        }
+        if ($gh) {
             $name = "wmanager-$($Company.Name)"
             if (Read-WmYesNo "  Create a private GitHub repository $name with gh and push the source?" $true) {
                 $code = Invoke-Native 'gh' @('repo', 'create', $name, '--private', '--source', $src, '--remote', 'origin', '--push')

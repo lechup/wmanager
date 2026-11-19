@@ -593,9 +593,19 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $env:GIT_AUTHOR_NAME = 'wm test'; $env:GIT_COMMITTER_NAME = 'wm test'
             $env:GIT_AUTHOR_EMAIL = 'wm@example.test'; $env:GIT_COMMITTER_EMAIL = 'wm@example.test'
             $env:GIT_TERMINAL_PROMPT = '0'
-            # gh, where installed, is never signed in here: the remote is asked for
+            # gh is never signed in here, so the remote is asked for: a stand-in gh that says what gh says then
+            # ("not logged into", which a case-blind "logged in" would take for yes)
             $env:GH_CONFIG_DIR = Join-Path $TestDrive 'gh'
             Remove-Item Env:\GH_TOKEN, Env:\GITHUB_TOKEN -ErrorAction SilentlyContinue
+            $script:savedPath = $env:PATH
+            $fakeBin = Join-Path $TestDrive 'fake-bin'
+            New-Item -ItemType Directory -Force -Path $fakeBin | Out-Null
+            Set-Content -LiteralPath (Join-Path $fakeBin 'gh') -Value @(
+                '#!/bin/sh'
+                'echo "You are not logged into any GitHub hosts. To log in, run: gh auth login" >&2'
+                'exit 1')
+            & chmod +x (Join-Path $fakeBin 'gh')
+            $env:PATH = $fakeBin + [IO.Path]::PathSeparator + $env:PATH
 
             # The computers' side: a web server giving the files of $web (the folder sync copies to)
             $script:web = Join-Path $TestDrive 'web'
@@ -627,6 +637,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             try { Invoke-WebRequest -Uri "$($script:webBase)/stop" -TimeoutSec 5 | Out-Null } catch { }
             $script:webServer | Remove-Job -Force
             foreach ($k in $script:gitEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $script:gitEnv[$k]) }
+            $env:PATH = $script:savedPath
         }
 
         It 'copies the signed source to a folder, manifest last, and checks that the computers'' address gives it' {
@@ -670,7 +681,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $remote = Join-Path $TestDrive 'acme-remote.git'
             & git init -q --bare $remote
             $r = Invoke-Typed @('g', 'y', $remote, 'y') @('acme', 'target')
-            $r.Code | Should -Be 0
+            $r.Code | Should -Be 0 -Because $r.Text
             $r.Text | Should -Match 'Made it a Git repository'
             (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'publish.psd1')).Target | Should -Be 'git'
             (& git -C $remote log main --format=%s) | Should -Contain 'Management source of acme'
