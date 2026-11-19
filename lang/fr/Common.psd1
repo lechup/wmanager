@@ -43,4 +43,10 @@
     'common.answer_yes_no'        = 'Répondez o ou n.'
     'common.unknown_language'     = 'Langue inconnue ''{0}'' ; utilisation de {1}. Langues disponibles : {2}.'
     'common.timed_out'            = 'aucun résultat après {0} s ; attente interrompue'
+
+    'common.company_question'       = 'Ce dossier contient les configurations de plusieurs entreprises. Pour laquelle est cet ordinateur ?'
+    'common.company_prompt'         = 'Entreprise (numéro ou nom)'
+    'common.company_unknown'        = 'Tapez un numéro de 1 à {0}, ou le nom de l''entreprise.'
+    'common.company_config'         = 'Configuration de {0} : {1}'
+    'common.company_no_console'     = '{0} contient les configurations de plusieurs entreprises et personne n''est à la console pour en choisir une ; indiquez-la avec -ConfigPath.'
 }

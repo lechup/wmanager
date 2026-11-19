@@ -43,4 +43,10 @@
     'common.answer_yes_no'        = 'Antwoord met j of n.'
     'common.unknown_language'     = 'Onbekende taal ''{0}''; {1} wordt gebruikt. Beschikbaar: {2}.'
     'common.timed_out'            = 'geen resultaat na {0} s; wachten gestopt'
+
+    'common.company_question'       = 'Deze map bevat de configuraties van meerdere bedrijven. Voor welk bedrijf is deze computer?'
+    'common.company_prompt'         = 'Bedrijf (nummer of naam)'
+    'common.company_unknown'        = 'Typ een nummer van 1 tot {0}, of de naam van het bedrijf.'
+    'common.company_config'         = 'Configuratie van {0}: {1}'
+    'common.company_no_console'     = '{0} bevat de configuraties van meerdere bedrijven en er is niemand aan de console om er een te kiezen; geef die op met -ConfigPath.'
 }

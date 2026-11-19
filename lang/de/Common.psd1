@@ -43,4 +43,10 @@
     'common.answer_yes_no'        = 'Antworten Sie mit j oder n.'
     'common.unknown_language'     = 'Unbekannte Sprache ''{0}''; verwendet wird {1}. Verfügbar: {2}.'
     'common.timed_out'            = 'kein Ergebnis nach {0} s; Warten abgebrochen'
+
+    'common.company_question'       = 'Dieser Ordner enthält die Konfigurationen mehrerer Firmen. Für welche ist dieser Computer?'
+    'common.company_prompt'         = 'Firma (Nummer oder Name)'
+    'common.company_unknown'        = 'Geben Sie eine Zahl von 1 bis {0} oder den Namen der Firma ein.'
+    'common.company_config'         = 'Konfiguration von {0}: {1}'
+    'common.company_no_console'     = '{0} enthält die Konfigurationen mehrerer Firmen, und an der Konsole ist niemand, der eine auswählt; geben Sie sie mit -ConfigPath an.'
 }

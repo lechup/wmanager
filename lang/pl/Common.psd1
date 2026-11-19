@@ -43,4 +43,10 @@
     'common.answer_yes_no'        = 'Odpowiedz t albo n.'
     'common.unknown_language'     = 'Nieznany język ''{0}''; używam {1}. Dostępne: {2}.'
     'common.timed_out'            = 'brak wyniku po {0} s; przerwano oczekiwanie'
+
+    'common.company_question'       = 'Ten folder zawiera konfiguracje kilku firm. Dla której jest ten komputer?'
+    'common.company_prompt'         = 'Firma (numer albo nazwa)'
+    'common.company_unknown'        = 'Wpisz numer od 1 do {0} albo nazwę firmy.'
+    'common.company_config'         = 'Konfiguracja firmy {0}: {1}'
+    'common.company_no_console'     = '{0} zawiera konfiguracje kilku firm, a przy konsoli nie ma nikogo, kto wybierze jedną; podaj ją w -ConfigPath.'
 }

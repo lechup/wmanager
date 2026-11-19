@@ -11,4 +11,6 @@
     'install.config_fetched'        = 'Konfiguration heruntergeladen.'
     'install.config_example'        = 'Keine Konfigurationsdatei: Die Einrichtung verwendet das Beispiel.'
     'install.stopped'               = 'Installation abgebrochen.'
+    'install.config_question_folder' = 'Oder ein Ordner; enthält er die Konfigurationen mehrerer Firmen (configs\<Firma>\), wählen Sie eine aus.'
+    'install.config_folder_empty'   = 'Keine provision.config.psd1 in {0}, auch nicht in Ordnern von Firmen (configs\<Firma>\ oder <Firma>\).'
 }

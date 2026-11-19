@@ -43,4 +43,10 @@
     'common.answer_yes_no'        = 'Rispondi s o n.'
     'common.unknown_language'     = 'Lingua sconosciuta ''{0}''; uso {1}. Disponibili: {2}.'
     'common.timed_out'            = 'nessun risultato dopo {0} s; attesa interrotta'
+
+    'common.company_question'       = 'Questa cartella contiene le configurazioni di più aziende. Per quale è questo computer?'
+    'common.company_prompt'         = 'Azienda (numero o nome)'
+    'common.company_unknown'        = 'Scrivi un numero da 1 a {0}, o il nome dell''azienda.'
+    'common.company_config'         = 'Configurazione di {0}: {1}'
+    'common.company_no_console'     = '{0} contiene le configurazioni di più aziende e non c''è nessuno alla console per sceglierne una; indicala con -ConfigPath.'
 }

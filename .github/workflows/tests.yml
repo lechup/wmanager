@@ -2,8 +2,8 @@
 # - sign: builds and signs test management sources on Linux with tools/publish.sh (osslsigncode, throwaway key)
 # - windows: Windows PowerShell 5.1: parses every script, runs the Pester tests, then the integration tests
 #   (the osslsigncode signature on Windows, the checks of a new version, group scripts, jobs, the hourly task).
-# - wizard-linux: the tests of the configuration wizard, the languages and the group tool in PowerShell 7 on Linux (init.ps1
-#   and lib/Lang.ps1 run there too)
+# - wizard-linux: the tests of the configuration wizard, the languages, the group tool and the companies helper
+#   (tools/wm.ps1) in PowerShell 7 on Linux (init.ps1 and lib/Lang.ps1 run there too)
 # It is Windows Server, not Windows 11 Home/Pro: debloat, privacy, notifications and Restore-Backup.ps1 still
 # need a Windows 11 virtual machine (see README, "Tests").
 name: tests
@@ -77,6 +77,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # tools/wm.ps1 signs a new company's source; its test is skipped where osslsigncode can't sign PowerShell files
+      - name: Install osslsigncode
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends osslsigncode
+
       # The Ubuntu runner has PowerShell 7 (pwsh); the wizard must not depend on Windows
       - name: Wizard tests
         shell: pwsh
@@ -85,7 +89,7 @@ jobs:
           Install-Module Pester -MinimumVersion 5.5.0 -Force -Scope CurrentUser -SkipPublisherCheck
           Import-Module Pester -MinimumVersion 5.5.0
           $config = New-PesterConfiguration
-          $config.Run.Path = @('tests/Init.Tests.ps1', 'tests/Lang.Tests.ps1', 'tests/Groups.Tests.ps1')
+          $config.Run.Path = @('tests/Init.Tests.ps1', 'tests/Lang.Tests.ps1', 'tests/Groups.Tests.ps1', 'tests/Wm.Tests.ps1')
           $config.Run.Exit = $true
           $config.Output.Verbosity = 'Detailed'
           Invoke-Pester -Configuration $config

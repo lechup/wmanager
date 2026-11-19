@@ -37,6 +37,12 @@ From a USB drive or a network share:
 
 You can also pass the name up front: `run.cmd -ComputerName OFFICE-03`.
 
+**Several companies** on one USB drive: put each company's configuration in `configs\<company>\` next to `run.cmd`
+(`configs\acme\provision.config.psd1`, with its certificate when it has a management source) instead of
+`provision.config.psd1`. `run.cmd` then asks which company the computer is for; `run.cmd -ConfigPath <file>` picks one
+without asking. On Linux, `pwsh tools/wm.ps1` keeps the companies and prepares the drive for you; see
+[Several companies](#several-companies).
+
 Straight from the internet, without a USB drive: prepare `provision.config.psd1` with the wizard (steps 2-3) and put it
 on a share or at an https:// address (e.g. a private repository; with a management source, the certificate next to
 it). Then, on the computer, in PowerShell started as administrator:
@@ -46,8 +52,9 @@ irm https://github.com/lechup/wmanager/releases/latest/download/install.ps1 | ie
 ```
 
 It downloads the latest release, checks the ZIP against the release's SHA-256 sums (a complete, intact download),
-asks where the configuration is (a path, also one pasted in quotes, or an https:// address with an optional
-`Authorization` header; Enter = the example configuration) and runs provisioning the way `run.cmd` does, in Windows
+asks where the configuration is (a path, also one pasted in quotes, a folder with the configurations of several
+companies, which then asks which one, or an https:// address with an optional `Authorization` header; Enter = the
+example configuration) and runs provisioning the way `run.cmd` does, in Windows
 PowerShell 5.1. It uses the download links, not the GitHub API (60 requests an hour per address). With parameters:
 
 ```powershell
@@ -74,7 +81,8 @@ changing anything.
 | `choco-reqs.txt` | Package list (when there is no management source) |
 | `lang\<code>\*.psd1` | Messages in each language (see [Languages](#languages)) |
 | `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, wmanager's own updates, scheduled tasks, the configuration wizard |
-| `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts, jobs and the wmanager version, switch on library items; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `build-release.sh` (see [Releases](#releases)) |
+| `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts, jobs and the wmanager version, switch on library items; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `wm.ps1`, a menu over all of them for several companies (see [Several companies](#several-companies)); `build-release.sh` (see [Releases](#releases)) |
+| `configs\<company>\` | Optional, on the USB drive: the configuration of each company; `run.cmd` asks which one (see [Several companies](#several-companies)) |
 | `library/` | Ready group scripts and jobs to switch on with `tools/groups.ps1 enable` (see [Library](#library-of-ready-scripts-and-jobs)) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, the daily system report from the library) |
 | `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
@@ -461,40 +469,70 @@ version the computer has, and the next scheduled update tries again. The log sho
 
 wmanager has no server of its own, so looking after several companies takes no extra setup: each company is one
 management source, one signing key and one `provision.config.psd1`. The same copy of wmanager and the same tools
-serve all of them; `tools/groups.ps1` and `tools/publish.sh` take the source folder (and the key folder) as arguments.
+serve all of them.
+
+`tools/wm.ps1` (PowerShell 7 on Linux) keeps them in one place and leads you through it: which company, then what to
+do, and what comes next. It runs the other tools on the folders of the chosen company. A company's name is the name of
+its folders: 2 to 40 letters, digits, `.`, `-`, `_`, with at least one letter.
 
 ```
-~/wmanager/sources/company1/       management source of company 1 (its own private repository or server folder)
-~/wmanager/sources/company2/
-~/wmanager/keys/company1/          key.pem, cert.pem, wmanager-signing.cer
-~/wmanager/keys/company2/
-~/wmanager/configs/company1/       provision.config.psd1 and its wmanager-signing.cer
-~/wmanager/configs/company2/
+~/wmanager-companies/        another place: the WMANAGER_COMPANIES environment variable
+  acme/
+    source/                  management source (its own private repository, or a folder copied to its server)
+    keys/                    key.pem, cert.pem, wmanager-signing.cer (tools/new-signing-cert.sh)
+    config/                  provision.config.psd1 and its wmanager-signing.cer (the wizard)
+  globex/
+    ...
 ```
 
 ```bash
-mkdir -p ~/wmanager/sources ~/wmanager/configs/company2
-tools/new-signing-cert.sh ~/wmanager/keys/company2
-cp -r examples/management ~/wmanager/sources/company2      # a fresh source, without anyone's source-id.txt
-pwsh tools/groups.ps1 ~/wmanager/sources/company2 add-computer OFFICE-07 accounting
-tools/publish.sh ~/wmanager/sources/company2 ~/wmanager/keys/company2   # then push or copy it to its server
-pwsh ./init.ps1 -ConfigPath ~/wmanager/configs/company2/provision.config.psd1
+pwsh tools/wm.ps1                                            # menu: choose a company, then what to do
+pwsh tools/wm.ps1 list                                       # the companies and what each still lacks
+pwsh tools/wm.ps1 new globex                                 # key, source, first signature, the wizard
+pwsh tools/wm.ps1 globex add-computer OFFICE-07 accounting   # any tools/groups.ps1 command, on its source
+pwsh tools/wm.ps1 globex publish                             # check and sign; then push it or copy it to its server
+pwsh tools/wm.ps1 globex config                              # the wizard for its provision.config.psd1
+pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and every company's configuration
 ```
+
+- **The menu of a company** shows the groups, adds and removes computers, adds packages, makes a new script or job
+  for a group, switches on library items, sets the wmanager version, checks, signs and runs the wizard; after a change
+  it offers to sign it. A new script or job starts from the template of `tools/groups.ps1` and opens in your editor
+  (`$VISUAL` or `$EDITOR`, else nano or vi); when you close it, the source is checked, and a mistake opens the file
+  again. The list of companies says what each one still lacks: a key, a signature of the latest changes, a
+  configuration.
+- **`new`** goes step by step: a key of its own, the source from `examples/management/` (never a copy of another
+  company's source, whose `source-id.txt` must stay its own), the first signature, which creates `source-id.txt`, and
+  the wizard, which already offers that identifier. Each step checks whether it is done, so running `new` again
+  carries on where it stopped (a mistyped passphrase, a wizard left for later). A company without a management source
+  needs only its configuration: `mkdir -p ~/wmanager-companies/globex`, then `pwsh tools/wm.ps1 globex config`. Its
+  programs come from `ReqsSources`, where a relative name means the list next to `run.cmd`, the same for every
+  company: give such a company a list of its own at an https:// address or on a share, or a management source.
+- **`usb <folder>`** puts wmanager there (the latest release, checked against its SHA-256 sums like `install.ps1`
+  does, when the folder has none yet) and the configuration of every company in `configs/<company>/`, with its
+  certificate. `run.cmd` from there asks which company the computer is for (with a single company, it doesn't ask).
+  `install.ps1` asks the same when you give it the folder (e.g. `\\server\share\wmanager`). wmanager v0.2.0 and older
+  don't ask yet: with those, run `run.cmd -ConfigPath E:\wmanager\configs\acme\provision.config.psd1`.
+- **A company you already have** moves in by its folders: create `~/wmanager-companies/acme` and move (or link) its
+  source to `source`, its key folder to `keys` and its configuration folder to `config`.
+
+What the layout keeps apart:
 
 - **A key per company.** One key could sign every source (each manifest carries its own `SourceId`, so company 2's
   computers reject company 1's source), but each computer trusts its key completely (see
   [How a computer checks the source](#how-a-computer-checks-the-source)). With a key per company, a company that
   leaves, or gets another administrator, takes its own key and source and has no way into the others.
-- **A new source starts from `examples/management/`**, not from a copy of another company's source: `source-id.txt`
-  must be different in each one (the first `publish.sh` creates it). If you do copy a source, delete `source-id.txt`
-  and `manifest.psd1` from the copy before its first `publish.sh`.
-- **A config per company:** its `Management` (address, `SourceId`, login, certificate) and its own monitoring. Run the
-  wizard once for each company with `-ConfigPath` (it puts the certificate next to the config it writes); at
-  provisioning, give a computer its company's config (on the USB drive, or the path or address `install.ps1` asks for).
+- **A config per company:** its `Management` (address, `SourceId`, login, certificate) and its own monitoring. A
+  computer gets only the configuration of its company; the others stay on the drive.
 - **Monitoring:** Loki entries have no company label, only the computer name (`host`). To keep companies apart in
   Grafana, give each one its own Grafana Cloud stack (its own `LokiUrl`, `LokiUser`, `LokiToken`), or keep computer
   names unique across companies. In Healthchecks.io the ping key belongs to a project, so a project per company keeps
   their checks and alerts apart.
+
+Without `tools/wm.ps1` it works the same by hand: `tools/groups.ps1` and `tools/publish.sh` take the source folder (and
+the key folder) as arguments, `tools/new-signing-cert.sh` the key folder, and `init.ps1 -ConfigPath` the configuration
+file. If you copy a source instead of starting from `examples/management/`, delete `source-id.txt` and `manifest.psd1`
+from the copy before its first `publish.sh`.
 
 ## Scheduled update
 
@@ -600,7 +638,9 @@ The integration tests (`tests\Managed.Integration.Tests.ps1`) change the compute
    jobs run when due, their JSON lines reach the Loki batch with the `task` label; the example system report runs;
    the hourly task is registered; the wizard accepts the manifest signed with the source certificate and names
    another signer.
-3. Linux, PowerShell 7: the configuration wizard's tests, since `init.ps1` also runs there.
+3. Linux, PowerShell 7: the tests of the configuration wizard (`init.ps1` also runs there), the languages,
+   `tools/groups.ps1` and `tools/wm.ps1` (a new company signed with osslsigncode, when the runner's version can sign
+   PowerShell files).
 
 CI runs on Windows Server, not Windows 11 Home/Pro, so it doesn't replace the checks below.
 

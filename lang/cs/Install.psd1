@@ -11,4 +11,6 @@
     'install.config_fetched'        = 'Konfigurace stažena.'
     'install.config_example'        = 'Bez konfiguračního souboru: zřizování použije ukázkovou konfiguraci.'
     'install.stopped'               = 'Instalace přerušena.'
+    'install.config_question_folder' = 'Nebo složka; obsahuje-li konfigurace několika firem (configs\<firma>\), jednu vyberete.'
+    'install.config_folder_empty'   = 'Žádný provision.config.psd1 v {0} ani ve složkách firem (configs\<firma>\ nebo <firma>\).'
 }

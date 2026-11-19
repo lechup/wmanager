@@ -43,4 +43,10 @@
     'common.answer_yes_no'        = 'Odpovězte a nebo n.'
     'common.unknown_language'     = 'Neznámý jazyk ''{0}''; používá se {1}. K dispozici: {2}.'
     'common.timed_out'            = 'žádný výsledek po {0} s; čekání ukončeno'
+
+    'common.company_question'       = 'Tato složka obsahuje konfigurace několika firem. Pro kterou je tento počítač?'
+    'common.company_prompt'         = 'Firma (číslo nebo název)'
+    'common.company_unknown'        = 'Zadejte číslo od 1 do {0} nebo název firmy.'
+    'common.company_config'         = 'Konfigurace firmy {0}: {1}'
+    'common.company_no_console'     = '{0} obsahuje konfigurace několika firem a u konzole není nikdo, kdo by jednu vybral; zadejte ji parametrem -ConfigPath.'
 }

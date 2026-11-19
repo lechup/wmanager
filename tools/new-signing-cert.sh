@@ -22,12 +22,20 @@ chmod 700 "$dir"
 umask 077
 
 echo "Enter the passphrase that will protect the key (you will be asked twice)."
-openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -subj "/CN=wmanager signing" \
-    -addext "basicConstraints=critical,CA:FALSE" \
-    -addext "keyUsage=critical,digitalSignature" \
-    -addext "extendedKeyUsage=codeSigning" \
-    -keyout "$dir/key.pem" -out "$dir/cert.pem"
-openssl x509 -in "$dir/cert.pem" -outform DER -out "$dir/wmanager-signing.cer"
+# key.pem didn't exist before (checked above): a run that stops (passphrases that don't match, Ctrl+C) removes what
+# it wrote, so the next run can start again instead of refusing an empty key.pem
+cleanup() { rm -f "$dir/key.pem" "$dir/cert.pem" "$dir/wmanager-signing.cer"; }
+trap 'cleanup; exit 130' INT TERM
+if ! openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -subj "/CN=wmanager signing" \
+        -addext "basicConstraints=critical,CA:FALSE" \
+        -addext "keyUsage=critical,digitalSignature" \
+        -addext "extendedKeyUsage=codeSigning" \
+        -keyout "$dir/key.pem" -out "$dir/cert.pem" ||
+   ! openssl x509 -in "$dir/cert.pem" -outform DER -out "$dir/wmanager-signing.cer"; then
+    cleanup
+    die "no key was created (the reason is above); run this again"
+fi
+trap - INT TERM
 chmod 644 "$dir/cert.pem" "$dir/wmanager-signing.cer"
 
 thumb=$(openssl x509 -in "$dir/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)

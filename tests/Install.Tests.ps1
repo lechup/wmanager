@@ -102,3 +102,30 @@ Describe 'Copy-WmConfiguration' {
         { Copy-WmConfiguration -Location 'http://example/provision.config.psd1' -Folder $script:dst } | Should -Throw '*https*'
     }
 }
+
+Describe 'Resolve-WmConfigLocation' {
+    BeforeEach {
+        $script:dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:dir | Out-Null
+        Mock Write-Host { }
+    }
+
+    It 'leaves a file and an address as they are' {
+        Resolve-WmConfigLocation 'https://example/provision.config.psd1' | Should -Be 'https://example/provision.config.psd1'
+        $file = Join-Path $script:dir 'provision.config.psd1'
+        Resolve-WmConfigLocation $file | Should -Be $file
+    }
+
+    It 'finds the configuration in a folder, or the chosen company''s' {
+        $acme = Join-Path $script:dir 'configs\acme\provision.config.psd1'
+        $beta = Join-Path $script:dir 'configs\beta\provision.config.psd1'
+        foreach ($f in @($acme, $beta)) { New-Item -ItemType File -Force -Path $f -Value '@{}' | Out-Null }
+        Mock Test-WmInteractive { $true }
+        Mock Read-Host { 'beta' }
+        Resolve-WmConfigLocation $script:dir | Should -Be $beta
+    }
+
+    It 'stops on a folder without a configuration' {
+        { Resolve-WmConfigLocation $script:dir } | Should -Throw '*No provision.config.psd1*'
+    }
+}
