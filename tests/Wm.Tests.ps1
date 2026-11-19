@@ -7,6 +7,10 @@
 
 BeforeDiscovery {
     $script:notPwsh7 = $PSVersionTable.PSVersion.Major -lt 7
+    $script:noOpenssl = $script:notPwsh7 -or (Get-Command bash, openssl -ErrorAction SilentlyContinue).Count -ne 2
+    # openssl asks for a passphrase on the terminal itself; where there is one, a test would wait for the person
+    $script:hasTty = $false
+    if (-not $script:notPwsh7) { try { [IO.File]::OpenRead('/dev/tty').Dispose(); $script:hasTty = $true } catch { } }
     # Can this computer sign a .psd1 the way tools/publish.sh does?
     $script:cantSign = $true
     if (-not $script:notPwsh7 -and (Get-Command bash, openssl, osslsigncode -ErrorAction SilentlyContinue).Count -eq 3) {
@@ -27,6 +31,7 @@ BeforeAll {
     $script:root = Split-Path $PSScriptRoot -Parent
     $script:tool = Join-Path (Join-Path $script:root 'tools') 'wm.ps1'
     $script:savedCompanies = $env:WMANAGER_COMPANIES
+    $script:savedEditor = $env:EDITOR
 
     # Runs the tool in this process; its messages go through Write-Host (stream 6)
     function Invoke-Tool {
@@ -64,12 +69,27 @@ BeforeAll {
         & openssl x509 -in (Join-Path $keys 'cert.pem') -outform DER -out (Join-Path $keys 'wmanager-signing.cer')
     }
 
-    # manifest.psd1 with the hashes of the source's files, as tools/publish.sh writes it (the signature isn't read here)
+    # The files of a key, for what only looks at them (no signing)
+    function Add-FakeKey {
+        param([string]$Dir, [string]$Cer = 'certificate')
+        $keys = Join-Path $Dir 'keys'
+        New-Item -ItemType Directory -Force -Path $keys | Out-Null
+        Set-Content -LiteralPath (Join-Path $keys 'key.pem') -Value 'key'
+        Set-Content -LiteralPath (Join-Path $keys 'cert.pem') -Value 'cert'
+        Set-Content -LiteralPath (Join-Path $keys 'wmanager-signing.cer') -Value $Cer
+    }
+
+    # An "editor" for the menu: adds a line to the file it opens ($EDITOR, inherited by the tool's own pwsh)
+    $script:editor = Join-Path $TestDrive 'editor.sh'
+    Set-Content -LiteralPath $script:editor -Value 'printf ''Write-Output "edited"\r\n'' >> "$1"'
+
+    # manifest.psd1 with the hashes of the source's files, as tools/publish.sh writes it (the signature isn't read
+    # here); -Exclude: what git ignores
     function Write-Manifest {
-        param([string]$Source)
+        param([string]$Source, [string]$Exclude = '^$')
         $lines = foreach ($f in Get-ChildItem -LiteralPath $Source -Recurse -File) {
             $rel = [IO.Path]::GetRelativePath($Source, $f.FullName).Replace('\', '/')
-            if ($rel -ne 'manifest.psd1') { "        '$rel' = '$((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash)'" }
+            if ($rel -ne 'manifest.psd1' -and $rel -notmatch $Exclude) { "        '$rel' = '$((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash)'" }
         }
         Set-Content -LiteralPath (Join-Path $Source 'manifest.psd1') -Value (@("@{ SourceId = 'test-source-0001'; Serial = 1; Files = @{") + $lines + @('} }'))
     }
@@ -99,6 +119,7 @@ BeforeAll {
 
 AfterAll {
     $env:WMANAGER_COMPANIES = $script:savedCompanies
+    $env:EDITOR = $script:savedEditor
 }
 
 Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
@@ -173,6 +194,122 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         $r.Text | Should -Match '(?m)^Choose: q'
     }
 
+    It 'makes a new script and a new job for a group, opens them in the editor and checks the source' {
+        $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
+        $env:EDITOR = "sh $script:editor"
+        $r = Invoke-Typed @('acme', '5', '1', 'install-printer', 'n', '6', 'front-desk', 'weekly', 'check-backup', 'n', 'b', 'q')
+        $r.Code | Should -Be 0
+        $script = @(Get-ChildItem -LiteralPath (Join-Path $source 'groups/accounting/scripts') -Filter '*install-printer.ps1')
+        $script.Count | Should -Be 1
+        $script[0].Name | Should -Match '^[0-9]+-install-printer\.ps1$'
+        [IO.File]::ReadAllText($script[0].FullName) | Should -Match 'Write-Output "edited"'
+        $job = Join-Path $source 'groups/front-desk/jobs/weekly/check-backup.ps1'
+        [IO.File]::ReadAllText($job) | Should -Match 'Write-Output "edited"'
+        $r.Text | Should -Match 'Opening it in sh '
+        ([regex]::Matches($r.Text, 'Sign and publish now\?')).Count | Should -Be 2
+    }
+
+    It 'opens a new script again while the source has a mistake in it' {
+        $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
+        $broken = Join-Path $TestDrive 'broken-editor.sh'
+        Set-Content -LiteralPath $broken -Value 'printf ''if ($x) {\r\n'' >> "$1"'
+        $env:EDITOR = "sh $broken"
+        $r = Invoke-Typed @('acme', '5', '1', 'broken', 'n', 'n', 'b', 'q')
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'Open it again to fix it\?'
+        ([regex]::Matches($r.Text, 'Opening it in')).Count | Should -Be 1
+    }
+
+    It 'asks again for a group number that is not on the list' {
+        $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
+        $r = Invoke-Typed @('acme', '2', 'OFFICE-09', '7', '1', 'n', 'b', 'q')
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'Not on the list: 7'
+        [IO.File]::ReadAllText((Join-Path $source 'groups.psd1')) | Should -Match "'OFFICE-09' = @\('accounting'\)"
+        [IO.File]::ReadAllText((Join-Path $source 'groups.psd1')) | Should -Not -Match "'7'"
+    }
+
+    It 'counts only what git would push as signed, like tools/publish.sh' -Skip:(-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        $source = Join-Path (Add-Company 'acme' -Source -Config '@{}') 'source'
+        Add-FakeKey (Join-Path $env:WMANAGER_COMPANIES 'acme')
+        & git -C $source init -q
+        Set-Content -LiteralPath (Join-Path $source '.gitignore') -Value '*.bak'
+        Set-Content -LiteralPath (Join-Path $source 'groups.psd1.bak') -Value 'old'
+        Write-Manifest $source -Exclude '\.bak$'
+        (Invoke-Tool list).Text | Should -Match '(?m)^acme\s+2 computers\s*$'
+        Set-Content -LiteralPath (Join-Path $source 'new.txt') -Value 'not ignored'
+        (Invoke-Tool list).Text | Should -Match 'changes not signed yet'
+    }
+
+    It 'keeps company names apart from list numbers, menu letters and each other''s letter case' {
+        foreach ($bad in @('12', 'n', 'q')) {
+            $r = Invoke-Tool new $bad
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'invalid company name'
+        }
+        $null = Add-Company 'acme' -Config '@{}'
+        $r = Invoke-Tool new ACME
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'there is a company acme already'
+        $null = Add-Company 'Acme' -Config '@{}'   # made by hand
+        $r = Invoke-Tool usb (Join-Path $TestDrive 'usb-case')
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'differ only in letter case'
+    }
+
+    It 'takes the companies folder from WMANAGER_COMPANIES with ~ as the home folder' {
+        $savedHome = $env:HOME
+        try {
+            $env:HOME = Join-Path $TestDrive 'home'
+            $null = New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME 'co/acme')
+            $env:WMANAGER_COMPANIES = '~/co'
+            $r = Invoke-Typed @() @('list')
+            $r.Text | Should -Match '(?m)^acme\s'
+        } finally {
+            $env:HOME = $savedHome
+        }
+    }
+
+    It 'gives the wizard the certificate of the key and the identifier of the source' -Skip:$noOpenssl {
+        $config = [IO.File]::ReadAllText((Join-Path $script:root 'provision.config.example.psd1'))
+        $config = $config -replace "(?m)^(\s*Source\s*=\s*)''", "`$1'\\srv\acme'" -replace "(?m)^(\s*SourceId\s*=\s*)''", "`$1'old-source-0001'"
+        $dir = Add-Company 'acme' -Source -Config $config
+        Add-TestKey $dir
+        Add-TestKey (Join-Path $TestDrive 'other')   # the certificate of an older key
+        Copy-Item -LiteralPath (Join-Path $TestDrive 'other/keys/wmanager-signing.cer') -Destination (Join-Path $dir 'config/wmanager-signing.cer')
+        Set-Content -LiteralPath (Join-Path $dir 'source/source-id.txt') -Value 'new-source-0002'
+        # keep the file, Enter at every question (update time, days, Loki, Healthchecks, source, certificate, identifier)
+        $r = Invoke-Typed @('y', '', '', '', '', '', '', '') @('acme', 'config')
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'config/wmanager-signing\.cer was another certificate'
+        (Get-FileHash -LiteralPath (Join-Path $dir 'config/wmanager-signing.cer')).Hash |
+            Should -Be (Get-FileHash -LiteralPath (Join-Path $dir 'keys/wmanager-signing.cer')).Hash
+        $r.Text | Should -Match 'old-source-0001'   # the wizard says the saved identifier is another one
+        (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'config/provision.config.psd1')).Management.SourceId | Should -Be 'new-source-0002'
+    }
+
+    It 'leaves alone a key.pem without its certificates' {
+        $dir = Add-Company 'acme'
+        New-Item -ItemType Directory -Force -Path (Join-Path $dir 'keys') | Out-Null
+        Set-Content -LiteralPath (Join-Path $dir 'keys/key.pem') -Value 'a key without its certificates'
+        $r = Invoke-Typed @() @('new', 'acme')
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'has a key\.pem but no certificates'
+        [IO.File]::ReadAllText((Join-Path $dir 'keys/key.pem')).Trim() | Should -Be 'a key without its certificates'
+    }
+
+    It 'starts the key again after a creation that stopped at the passphrase' -Skip:($noOpenssl -or $hasTty) {
+        # An empty key.pem is what such a creation left before. Without a terminal openssl can't ask either, so this
+        # run stops too, and leaves nothing behind
+        $dir = Add-Company 'acme'
+        New-Item -ItemType Directory -Force -Path (Join-Path $dir 'keys') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $dir 'keys/key.pem'), '')
+        $r = Invoke-Typed @() @('new', 'acme')
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'no key was created'
+        @(Get-ChildItem -LiteralPath (Join-Path $dir 'keys')).Count | Should -Be 0
+    }
+
     It 'ends at the end of the input' {
         $null = Add-Company 'acme' -Source
         (Invoke-Typed @('1')).Code | Should -Be 0
@@ -217,6 +354,20 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $r.Text | Should -Match 'has its own provision\.config\.psd1'
             $r.Text | Should -Match 'acme: no wmanager-signing\.cer next to its configuration'
             $r.Text | Should -Match 'run\.cmd -ConfigPath'
+        }
+
+        It 'says when the drive keeps the configuration of a company that has none now, and refuses a certificate path' {
+            $null = Add-Company 'acme' -Config '@{}'
+            $null = Add-Company 'gamma'
+            New-Item -ItemType File -Force -Path (Join-Path $script:usb 'configs/gamma/provision.config.psd1') -Value '@{}' | Out-Null
+            $r = Invoke-Tool usb $script:usb
+            $r.Code | Should -Be 0
+            $r.Text | Should -Match 'still has configs/gamma from before'
+            $r.Text | Should -Not -Match "gamma has no configuration yet, so it isn't on the drive"
+            $null = Add-Company 'beta' -Config "@{ Management = @{ Source = '\\srv\beta'; SourceId = 'test-source-0001'; Certificate = '../../run.cmd' } }"
+            $r = Invoke-Tool usb $script:usb
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'not a plain file name'
         }
 
         It 'stops when no company has a configuration' {

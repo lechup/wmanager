@@ -18,8 +18,8 @@
     language, then English. Yes/no questions also take y and n.
 
 .PARAMETER DefaultSourceId
-    The identifier of the management source to offer when the source can't be read yet and the file has none
-    (tools/wm.ps1 passes the one of a new company's source).
+    The identifier of the management source (its source-id.txt) to offer when the source can't be read, instead of
+    the one saved in the file; tools/wm.ps1 passes the one of the company's source.
 
 .EXAMPLE
     .\init.cmd
@@ -238,11 +238,12 @@ if ($source -and $source -ne '-') {
     } }
     $unchecked = $manifestId -eq '-'
     if ($unchecked) { $manifestId = '' }
-    # The identifier of the manifest just fetched; the saved one only when the source couldn't be read.
-    # The same source with another identifier than saved means it was replaced: say so.
+    # The identifier of the manifest just fetched, else the one of -DefaultSourceId (the source folder itself), and
+    # the saved one only without both. The same source with another identifier than saved means it was replaced: say so.
     $savedId = [string]$management.SourceId
-    $idDefault = if ($manifestId) { $manifestId } elseif ($savedId) { $savedId } else { $DefaultSourceId }
-    if ($manifestId -and $savedId -and $manifestId -ne $savedId -and $source -eq [string]$management.Source) {
+    $freshId = if ($manifestId) { $manifestId } else { $DefaultSourceId }
+    $idDefault = if ($freshId) { $freshId } else { $savedId }
+    if ($freshId -and $savedId -and $freshId -ne $savedId -and $source -eq [string]$management.Source) {
         Write-Problem (Get-WmText 'init.source_id_changed' @($savedId))
     }
     $sourceId = Read-Answer (Get-WmText 'init.source_id') $idDefault { Test-WmSourceId $args[0] } (Get-WmText 'init.source_id_hint')

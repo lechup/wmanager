@@ -684,7 +684,7 @@ function Find-WmConfig {
     return $chosen.Path
 }
 
-# Which company: its number on the list or its name, asked again until the answer is one of them.
+# Which company: its name or its number on the list, asked again until the answer is one of them.
 function Read-WmCompany {
     param([Parameter(Mandatory = $true)][object[]]$Companies, [Parameter(Mandatory = $true)][string]$Folder)
     Write-Host ''
@@ -695,10 +695,11 @@ function Read-WmCompany {
         # The end of redirected input: nobody is there to choose
         if ($null -eq $answer) { throw (New-WmError 'common.company_no_console' @($Folder)) }
         $answer = $answer.Trim()
-        $n = 0
-        if ([int]::TryParse($answer, [ref]$n) -and $n -ge 1 -and $n -le $Companies.Count) { return $Companies[$n - 1] }
+        # The name first: a folder named with digits must not stand for another company's place on the list
         $named = @($Companies | Where-Object { $_.Name -eq $answer })
         if ($named.Count -eq 1) { return $named[0] }
+        $n = 0
+        if ([int]::TryParse($answer, [ref]$n) -and $n -ge 1 -and $n -le $Companies.Count) { return $Companies[$n - 1] }
         Write-Host ('  ' + (Get-WmText 'common.company_unknown' @($Companies.Count))) -ForegroundColor Yellow
     }
 }

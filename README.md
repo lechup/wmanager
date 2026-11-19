@@ -471,8 +471,9 @@ wmanager has no server of its own, so looking after several companies takes no e
 management source, one signing key and one `provision.config.psd1`. The same copy of wmanager and the same tools
 serve all of them.
 
-`tools/wm.ps1` (PowerShell 7 on Linux or macOS) keeps them in one place and leads you through it: which company, then
-what to do, and what comes next. It runs the other tools on the folders of the chosen company.
+`tools/wm.ps1` (PowerShell 7 on Linux) keeps them in one place and leads you through it: which company, then what to
+do, and what comes next. It runs the other tools on the folders of the chosen company. A company's name is the name of
+its folders: 2 to 40 letters, digits, `.`, `-`, `_`, with at least one letter.
 
 ```
 ~/wmanager-companies/        another place: the WMANAGER_COMPANIES environment variable
@@ -494,14 +495,19 @@ pwsh tools/wm.ps1 globex config                              # the wizard for it
 pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and every company's configuration
 ```
 
-- **The menu of a company** shows the groups, adds and removes computers, adds packages, switches on library items,
-  sets the wmanager version, checks, signs and runs the wizard; after a change it offers to sign it. The list of
-  companies says what each one still lacks: a key, a signature of the latest changes, a configuration.
+- **The menu of a company** shows the groups, adds and removes computers, adds packages, makes a new script or job
+  for a group, switches on library items, sets the wmanager version, checks, signs and runs the wizard; after a change
+  it offers to sign it. A new script or job starts from the template of `tools/groups.ps1` and opens in your editor
+  (`$VISUAL` or `$EDITOR`, else nano or vi); when you close it, the source is checked, and a mistake opens the file
+  again. The list of companies says what each one still lacks: a key, a signature of the latest changes, a
+  configuration.
 - **`new`** goes step by step: a key of its own, the source from `examples/management/` (never a copy of another
   company's source, whose `source-id.txt` must stay its own), the first signature, which creates `source-id.txt`, and
   the wizard, which already offers that identifier. Each step checks whether it is done, so running `new` again
   carries on where it stopped (a mistyped passphrase, a wizard left for later). A company without a management source
-  needs only its configuration: `mkdir -p ~/wmanager-companies/globex`, then `pwsh tools/wm.ps1 globex config`.
+  needs only its configuration: `mkdir -p ~/wmanager-companies/globex`, then `pwsh tools/wm.ps1 globex config`. Its
+  programs come from `ReqsSources`, where a relative name means the list next to `run.cmd`, the same for every
+  company: give such a company a list of its own at an https:// address or on a share, or a management source.
 - **`usb <folder>`** puts wmanager there (the latest release, checked against its SHA-256 sums like `install.ps1`
   does, when the folder has none yet) and the configuration of every company in `configs/<company>/`, with its
   certificate. `run.cmd` from there asks which company the computer is for (with a single company, it doesn't ask).

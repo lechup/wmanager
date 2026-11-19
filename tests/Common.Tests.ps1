@@ -78,6 +78,19 @@ Describe 'Find-WmConfig' {
         Find-WmConfig -Folder $script:dir | Should -Be $acme
     }
 
+    It 'takes a name made of digits as that company, not as a place on the list' {
+        $null = New-Config 'configs\2\provision.config.psd1'
+        $acme = New-Config 'configs\acme\provision.config.psd1'
+        $null = New-Config 'configs\beta\provision.config.psd1'
+        Mock Test-WmInteractive { $true }
+        Mock Read-Host { '3' }
+        Find-WmConfig -Folder $script:dir | Should -Be (Join-Path $script:dir 'configs\beta\provision.config.psd1')
+        Mock Read-Host { '2' }
+        Find-WmConfig -Folder $script:dir | Should -Be (Join-Path $script:dir 'configs\2\provision.config.psd1')
+        Mock Read-Host { 'acme' }
+        Find-WmConfig -Folder $script:dir | Should -Be $acme
+    }
+
     It 'takes the only company without a question, and a folder of configurations without configs\ too' {
         $only = New-Config 'acme\provision.config.psd1'
         Mock Read-Host { throw 'asked' }
