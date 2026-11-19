@@ -36,6 +36,7 @@ $ProgressPreference = 'SilentlyContinue'
 $repo = Split-Path $PSScriptRoot -Parent
 . (Join-Path (Join-Path $repo 'lib') 'Lang.ps1')
 . (Join-Path (Join-Path $repo 'lib') 'Groups.ps1')   # the version each computer should run, as the computers work it out
+. (Join-Path (Join-Path $repo 'lib') 'Init.ps1')     # ConvertTo-WmPsdString for monitoring.psd1
 Initialize-WmLanguage -Lang 'en' -Root $repo
 
 $script:Self = $PSCommandPath
@@ -244,6 +245,10 @@ function Show-Companies {
         return
     }
     foreach ($c in $companies) { Write-Host ('{0,-20} {1}' -f $c.Name, (Get-CompanyState $c)) }
+    # Folders whose names can't be a company's (a command, a number...) are left out: say so
+    foreach ($d in @(Get-ChildItem -LiteralPath $script:Root -Directory | Where-Object { -not (Test-CompanyName $_.Name) })) {
+        Write-Warn "$($d.Name) in $($script:Root) is left out: a company's name has 2 to 40 letters, digits, '.', '-', '_', with a letter, and isn't list, new, usb, status or help"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -319,7 +324,7 @@ function Invoke-Wizard {
 function New-Company {
     param([string]$Name)
     if (-not (Test-CompanyName $Name)) {
-        throw "invalid company name '$Name': 2 to 40 letters, digits, '.', '-', '_', with a letter (not list, new, usb or help)"
+        throw "invalid company name '$Name': 2 to 40 letters, digits, '.', '-', '_', with a letter (not list, new, usb, status or help)"
     }
     # Folders that differ only in letter case would be one folder on the USB drive (configs\<company>)
     $other = @(Get-Companies | Where-Object { $_.Name -ieq $Name -and $_.Name -cne $Name })
@@ -510,17 +515,16 @@ function Copy-ToUsb {
 # ---------------------------------------------------------------------------
 
 $script:StatusDays = 14   # how far back Loki is read (Grafana Cloud's free plan keeps 14 days)
+# Lines per Loki request (Grafana Cloud's limit); more are read page by page. WMANAGER_LOKI_PAGE: for the tests.
+$script:LokiPage = if ($env:WMANAGER_LOKI_PAGE) { [int]$env:WMANAGER_LOKI_PAGE } else { 5000 }
+$script:LokiPages = 20
+# The prefix Write-WmLog (lib/Common.ps1) puts before each line it sends to Loki
+$script:LogPrefix = '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[[A-Z]+\] '
 
 # https only, except on this computer (the tests' stand-in servers)
 function Test-ServiceUrl {
     param([string]$Url)
     return ($Url -match '^https://[^/]' -or $Url -match '^http://(127\.0\.0\.1|localhost)(:\d+)?(/|$)')
-}
-
-# A single-quoted PowerShell string
-function ConvertTo-PsdLiteral {
-    param([AllowEmptyString()][string]$Value)
-    return "'" + $Value.Replace("'", "''") + "'"
 }
 
 # A secret typed at the terminal without showing it (piped input: as it comes)
@@ -529,6 +533,22 @@ function Read-Secret {
     if ([Console]::IsInputRedirected) { return [string](Read-Line $Prompt) }
     $secure = Read-Host $Prompt -AsSecureString
     return ([Net.NetworkCredential]::new('', $secure).Password).Trim()
+}
+
+# A file only you can read: created so (no moment with the umask's mode), and checked
+function Write-PrivateFile {
+    param([string]$Path, [string]$Text)
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Text)
+    if ($IsWindows) { [IO.File]::WriteAllBytes($Path, $bytes); return }
+    $mode = [IO.UnixFileMode]'UserRead, UserWrite'
+    $opts = New-Object IO.FileStreamOptions
+    $opts.Mode = [IO.FileMode]::Create
+    $opts.Access = [IO.FileAccess]::Write
+    $opts.UnixCreateMode = $mode
+    $fs = New-Object IO.FileStream($Path, $opts)
+    try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
+    [IO.File]::SetUnixFileMode($Path, $mode)   # a file that was there keeps its mode otherwise
+    if ([IO.File]::GetUnixFileMode($Path) -ne $mode) { throw "can't make $Path readable by you only" }
 }
 
 # <company>/monitoring.psd1: the read-only keys of its Healthchecks project and Grafana Cloud stack. Never on the
@@ -545,48 +565,54 @@ function Read-Monitoring {
     return (Import-PowerShellDataFile -LiteralPath $path)
 }
 
-# Where the company's computers send their logs and pings: from its provision.config.psd1
+function Test-HasMonitoringKeys {
+    param($Monitoring)
+    return ($null -ne $Monitoring -and ($Monitoring.HealthchecksApiKey -or $Monitoring.LokiReadToken))
+}
+
+# Where the company's computers send their logs and pings: from its provision.config.psd1. The Healthchecks API is
+# healthchecks.io for hc-ping.com, and the same address without /ping for a server of your own, unless
+# monitoring.psd1 names another (HealthchecksApiUrl).
 function Read-Reporting {
-    param($Company)
+    param($Company, $Monitoring)
     if (-not [IO.File]::Exists($Company.Config)) { throw "$($Company.Name) has no configuration yet: pwsh tools/wm.ps1 $($Company.Name) config" }
     $cfg = Import-PowerShellDataFile -LiteralPath $Company.Config
-    $loki = [string]$cfg.LokiUrl
-    $loki = ($loki -replace '/loki/api/v1/push$', '').TrimEnd('/')
-    $hcBase = if ($cfg.HealthchecksBaseUrl) { [string]$cfg.HealthchecksBaseUrl } else { 'https://hc-ping.com' }
-    # The API of healthchecks.io for hc-ping.com; a server of your own has both under one address (.../ping)
-    $hcApi = if ($hcBase -match '^https://hc-ping\.com/?$') { 'https://healthchecks.io' } else { ($hcBase.TrimEnd('/') -replace '/ping$', '') }
+    $loki = ([string]$cfg.LokiUrl).TrimEnd('/') -replace '/loki/api/v1/push$', ''
+    $hcBase = if ($cfg.HealthchecksBaseUrl) { ([string]$cfg.HealthchecksBaseUrl).TrimEnd('/') } else { 'https://hc-ping.com' }
+    $hcApi = if ($hcBase -match '^https://hc-ping\.com$') { 'https://healthchecks.io' } else { $hcBase -replace '/ping$', '' }
+    if ($Monitoring -and $Monitoring.HealthchecksApiUrl) { $hcApi = ([string]$Monitoring.HealthchecksApiUrl).TrimEnd('/') }
     return [pscustomobject]@{
-        LokiUrl     = $loki
-        LokiUser    = [string]$cfg.LokiUser
-        HasLoki     = [bool]($loki -and $cfg.LokiToken)
-        HasPings    = [bool]$cfg.HealthchecksPingKey
-        HcApiUrl    = $hcApi
-        SlugPrefix  = [string]$cfg.HealthchecksSlugPrefix
+        LokiUrl    = $loki
+        LokiUser   = [string]$cfg.LokiUser
+        HasLoki    = [bool]($loki -and $cfg.LokiToken)
+        HasPings   = [bool]$cfg.HealthchecksPingKey
+        HcApiUrl   = $hcApi
+        SlugPrefix = ([string]$cfg.HealthchecksSlugPrefix).ToLowerInvariant() -replace '[^a-z0-9_-]', '-'
     }
 }
 
 # Asks for the read-only keys and keeps them in <company>/monitoring.psd1 (readable by you only)
 function Set-Monitoring {
     param($Company)
-    $r = Read-Reporting $Company
+    $r = Read-Reporting $Company $null
     if (-not $r.HasPings -and -not $r.HasLoki) {
         throw "the configuration of $($Company.Name) sends nothing to Healthchecks or Loki; set them up first: pwsh tools/wm.ps1 $($Company.Name) config"
     }
-    $old = Read-Monitoring $Company
-    if ($null -eq $old) { $old = @{} }
+    $old = @{}
+    try { $read = Read-Monitoring $Company; if ($read) { $old = $read } }
+    catch { Write-Warn "$(Get-MonitoringPath $Company) can't be read ($($_.Exception.Message)); asking for the keys anew" }
     Write-Step "Read-only access for the status of the computers of $($Company.Name)"
     Write-Host '  The keys stay on this computer, in' (Get-MonitoringPath $Company)
     $hcKey = [string]$old.HealthchecksApiKey
-    $hcUrl = if ($old.HealthchecksApiUrl) { [string]$old.HealthchecksApiUrl } else { $r.HcApiUrl }
     if ($r.HasPings) {
-        Write-Host "  Healthchecks: in the project the computers ping, Settings > API Access > Create API key (read-only)."
+        Write-Host '  Healthchecks: in the project the computers ping, Settings > API Access > Create API key (read-only).'
         $hint = if ($hcKey) { 'Enter = keep the one you have, - = none' } else { 'Enter = none' }
         $a = Read-Secret "  Healthchecks read-only API key ($hint)"
         if ($a -eq '-') { $hcKey = '' } elseif ($a) { $hcKey = $a }
     }
     $lokiToken = [string]$old.LokiReadToken
     if ($r.HasLoki) {
-        Write-Host "  Grafana Cloud: Administration > Access policies > a policy with the logs:read scope, then Add token."
+        Write-Host '  Grafana Cloud: Administration > Access policies > a policy with the logs:read scope, then Add token.'
         Write-Host "  (The user is the configuration's LokiUser, $($r.LokiUser).)"
         $hint = if ($lokiToken) { 'Enter = keep the one you have, - = none' } else { 'Enter = none' }
         $a = Read-Secret "  Grafana Cloud token with logs:read ($hint)"
@@ -596,32 +622,28 @@ function Set-Monitoring {
         '# Read-only access for pwsh tools/wm.ps1 <company> status. Written by it; it stays on this computer, never on the'
         '# drive or the computers (they have write-only keys in provision.config.psd1).'
         '@{'
-        '    # Healthchecks: the read-only API key of the project the computers ping, and the address of its API'
-        "    HealthchecksApiKey = $(ConvertTo-PsdLiteral $hcKey)"
-        "    HealthchecksApiUrl = $(ConvertTo-PsdLiteral $hcUrl)"
+        '    # Healthchecks: the read-only API key of the project the computers ping'
+        "    HealthchecksApiKey = $(ConvertTo-WmPsdString $hcKey)"
+        '    # Its API address, when it is neither healthchecks.io nor the HealthchecksBaseUrl of the configuration without /ping'
+        "    HealthchecksApiUrl = $(ConvertTo-WmPsdString ([string]$old.HealthchecksApiUrl))"
         '    # Grafana Cloud: a token with the logs:read scope (with the LokiUser and LokiUrl of the configuration)'
-        "    LokiReadToken      = $(ConvertTo-PsdLiteral $lokiToken)"
+        "    LokiReadToken      = $(ConvertTo-WmPsdString $lokiToken)"
         '}'
+        ''
     ) -join "`n"
     $path = Get-MonitoringPath $Company
-    [IO.File]::WriteAllText($path, $text + "`n")
-    if (-not $IsWindows) { & chmod 600 $path }
+    Write-PrivateFile $path $text
     Write-Host "  Saved: $path"
 }
 
-# Healthchecks: the check of each computer (slug = the prefix of the configuration + the computer name, as the
-# computers ping it), by computer name in lowercase
+# Healthchecks: every check of the project, by slug, with its state and last ping
 function Get-HealthchecksStatus {
     param($Reporting, $Monitoring)
-    $url = ([string]$Monitoring.HealthchecksApiUrl).TrimEnd('/')
-    if (-not (Test-ServiceUrl $url)) { throw "HealthchecksApiUrl must be an https:// address ('$url')" }
-    $resp = Invoke-RestMethod -Uri "$url/api/v3/checks/" -Headers @{ 'X-Api-Key' = [string]$Monitoring.HealthchecksApiKey } -TimeoutSec 30
+    if (-not (Test-ServiceUrl $Reporting.HcApiUrl)) { throw "the Healthchecks API must be an https:// address ('$($Reporting.HcApiUrl)')" }
+    $resp = Invoke-RestMethod -Uri "$($Reporting.HcApiUrl)/api/v3/checks/" -Headers @{ 'X-Api-Key' = [string]$Monitoring.HealthchecksApiKey } -TimeoutSec 20
     $result = @{}
-    $prefix = $Reporting.SlugPrefix.ToLowerInvariant() -replace '[^a-z0-9_-]', '-'
     foreach ($c in @($resp.checks)) {
-        $slug = [string]$c.slug
-        if (-not $slug -or ($prefix -and -not $slug.StartsWith($prefix))) { continue }
-        $result[$slug.Substring($prefix.Length)] = [pscustomobject]@{ Status = [string]$c.status; LastPing = ConvertTo-Time $c.last_ping }
+        if ($c.slug) { $result[[string]$c.slug] = [pscustomobject]@{ Status = [string]$c.status; LastPing = ConvertTo-Time $c.last_ping } }
     }
     return $result
 }
@@ -640,62 +662,93 @@ function ConvertFrom-LokiTime {
 }
 
 function Invoke-Loki {
-    param($Reporting, $Monitoring, [string]$Path, [hashtable]$Query)
+    param($Reporting, $Monitoring, [string]$Path, [System.Collections.Specialized.OrderedDictionary]$Query)
     if (-not (Test-ServiceUrl $Reporting.LokiUrl)) { throw "LokiUrl must be an https:// address ('$($Reporting.LokiUrl)')" }
     $pair = '{0}:{1}' -f $Reporting.LokiUser, $Monitoring.LokiReadToken
     $headers = @{ Authorization = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair)) }
     $q = @($Query.Keys | ForEach-Object { '{0}={1}' -f $_, [uri]::EscapeDataString([string]$Query[$_]) }) -join '&'
-    return Invoke-RestMethod -Uri "$($Reporting.LokiUrl)$Path`?$q" -Headers $headers -TimeoutSec 60
+    return Invoke-RestMethod -Uri "$($Reporting.LokiUrl)$Path`?$q" -Headers $headers -TimeoutSec 30
 }
 
-# Loki: for each computer (the host label, lowercase) its last run (the start line names the wmanager version, the
-# summary line the warnings and errors) and the errors of the last 24 hours, jobs included. The log lines are
-# always English, so the same patterns read every computer.
+function New-HostRecord {
+    return [pscustomobject]@{ Version = $null; VersionAt = $null; FromRecord = $false; LastRun = $null; Warnings = 0; Errors = 0; Errors24h = 0 }
+}
+
+# Loki: for each computer (the host label, lowercase) its last run and the errors of the last 24 hours, jobs
+# included. The version is the one of the newest run record (Add-WmRunRecord: the version that finished the run);
+# computers older than that record only have the run's start line, which names the version that started it. The
+# lines are always English, after the prefix of Write-WmLog, so fixed patterns read every computer.
 function Get-LokiStatus {
     param($Reporting, $Monitoring)
     $now = [datetimeoffset]::UtcNow
     $ns = { param($t) [string]($t.ToUnixTimeMilliseconds() * 1000000) }
-    $runs = Invoke-Loki $Reporting $Monitoring '/loki/api/v1/query_range' @{
-        query     = '{service_name="wmanager", job=~"update|retry|provision"} |~ `^(wmanager( v\S+)? (update|retry) on |wmanager( v\S+)? provisioning: |End: warnings |Done: \d+ warnings)`'
-        start     = (& $ns $now.AddDays(-$script:StatusDays))
-        end       = (& $ns $now)
-        limit     = 5000
-        direction = 'backward'
-    }
+    $start = & $ns $now.AddDays(-$script:StatusDays)
+    $query = '{service_name="wmanager", job=~"update|retry|provision"} |~ `^\{"wmanager_run"|^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[[A-Z]+\] (wmanager( v\S+)? (update|retry) on |wmanager( v\S+)? provisioning: |End: warnings |Done: \d+ warnings)`'
     $result = @{}
-    foreach ($s in @($runs.data.result)) {
-        $hostName = [string]$s.stream.host
-        if (-not $hostName) { continue }
-        if (-not $result.ContainsKey($hostName)) {
-            $result[$hostName] = [pscustomobject]@{ Version = $null; VersionAt = $null; LastRun = $null; Warnings = 0; Errors = 0; Errors24h = 0 }
-        }
-        $r = $result[$hostName]
-        foreach ($v in @($s.values)) {
-            $at = ConvertFrom-LokiTime $v[0]
-            $line = [string]$v[1]
-            if ($line -match '^wmanager(?: (v\S+))? (?:update|retry) on |^wmanager(?: (v\S+))? provisioning: ') {
-                if ($null -eq $r.VersionAt -or $at -gt $r.VersionAt) {
-                    $r.VersionAt = $at
-                    $r.Version = if ($Matches[1]) { $Matches[1] } elseif ($Matches[2]) { $Matches[2] } else { '?' }
-                }
-            } elseif ($line -match '^End: warnings (\d+), errors (\d+)' -or $line -match '^Done: (\d+) warnings, (\d+) errors') {
-                if ($null -eq $r.LastRun -or $at -gt $r.LastRun) { $r.LastRun = $at; $r.Warnings = [int]$Matches[1]; $r.Errors = [int]$Matches[2] }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    $end = & $ns $now
+    # Newest first, a page at a time: with many computers 14 days hold more lines than one request returns, and the
+    # computer that stopped updating is the one whose lines are oldest
+    for ($page = 0; $page -lt $script:LokiPages; $page++) {
+        $runs = Invoke-Loki $Reporting $Monitoring '/loki/api/v1/query_range' ([ordered]@{
+            query = $query; start = $start; end = $end; limit = $script:LokiPage; direction = 'backward'
+        })
+        $count = 0; $fresh = 0; $oldest = $end
+        foreach ($s in @($runs.data.result)) {
+            $hostName = [string]$s.stream.host
+            foreach ($v in @($s.values)) {
+                $count++
+                if ([decimal]$v[0] -lt [decimal]$oldest) { $oldest = [string]$v[0] }
+                if (-not $hostName -or -not $seen.Add("$hostName $($v[0]) $($v[1])")) { continue }
+                $fresh++
+                if (-not $result.ContainsKey($hostName)) { $result[$hostName] = New-HostRecord }
+                Add-LokiLine $result[$hostName] (ConvertFrom-LokiTime $v[0]) ([string]$v[1])
             }
         }
+        if ($count -lt $script:LokiPage -or $fresh -eq 0) { break }
+        $end = $oldest
     }
-    $errors = Invoke-Loki $Reporting $Monitoring '/loki/api/v1/query' @{
+    $errors = Invoke-Loki $Reporting $Monitoring '/loki/api/v1/query' ([ordered]@{
         query = 'sum by (host) (count_over_time({service_name="wmanager", level="error"}[24h]))'
         time  = (& $ns $now)
-    }
+    })
     foreach ($e in @($errors.data.result)) {
         $hostName = [string]$e.metric.host
         if (-not $hostName) { continue }
-        if (-not $result.ContainsKey($hostName)) {
-            $result[$hostName] = [pscustomobject]@{ Version = $null; VersionAt = $null; LastRun = $null; Warnings = 0; Errors = 0; Errors24h = 0 }
-        }
+        if (-not $result.ContainsKey($hostName)) { $result[$hostName] = New-HostRecord }
         $result[$hostName].Errors24h = [int][double]$e.value[1]
     }
     return $result
+}
+
+# One line of a run into what is known of its computer
+function Add-LokiLine {
+    param($Record, [datetimeoffset]$At, [string]$Line)
+    if ($Line.StartsWith('{"wmanager_run"')) {
+        $run = $Line | ConvertFrom-Json
+        if (-not $Record.FromRecord -or $At -gt $Record.VersionAt) {
+            $Record.FromRecord = $true
+            $Record.VersionAt = $At
+            $Record.Version = if ($run.wmanager_run) { [string]$run.wmanager_run } else { '?' }
+        }
+        if ($null -eq $Record.LastRun -or $At -ge $Record.LastRun) { $Record.LastRun = $At; $Record.Warnings = [int]$run.warnings; $Record.Errors = [int]$run.errors }
+        return
+    }
+    $text = $Line -replace $script:LogPrefix, ''
+    if ($text -match '^wmanager(?: (v\S+))? (?:update|retry) on |^wmanager(?: (v\S+))? provisioning: ') {
+        if (-not $Record.FromRecord -and ($null -eq $Record.VersionAt -or $At -gt $Record.VersionAt)) {
+            $Record.VersionAt = $At
+            $Record.Version = if ($Matches[1]) { $Matches[1] } elseif ($Matches[2]) { $Matches[2] } else { '?' }
+        }
+    } elseif ($text -match '^End: warnings (\d+), errors (\d+)' -or $text -match '^Done: (\d+) warnings, (\d+) errors') {
+        if ($null -eq $Record.LastRun -or $At -gt $Record.LastRun) { $Record.LastRun = $At; $Record.Warnings = [int]$Matches[1]; $Record.Errors = [int]$Matches[2] }
+    }
+}
+
+function Format-Count {
+    param([int]$Count, [string]$Thing)
+    if ($Count -eq 1) { return "1 $Thing" }
+    return "$Count ${Thing}s"
 }
 
 # How long ago, short: (45m), (5h), (3d)
@@ -709,22 +762,22 @@ function Format-Age {
 }
 
 # The computers of a company: the ones groups.psd1 names and the ones Healthchecks or Loki know, with what each
-# reported. Returns the rows; -Quiet doesn't print them (the summary of every company).
+# reported. HcOk/LokiOk: $null = not asked (no key or not set up), $false = the service failed (see Problems).
 function Get-ComputerStatus {
     param($Company)
-    $r = Read-Reporting $Company
     $m = Read-Monitoring $Company
-    if ($null -eq $m -or (-not $m.HealthchecksApiKey -and -not $m.LokiReadToken)) {
+    if (-not (Test-HasMonitoringKeys $m)) {
         throw "no read-only keys for $($Company.Name) yet: pwsh tools/wm.ps1 $($Company.Name) monitoring"
     }
+    $r = Read-Reporting $Company $m
     $problems = New-Object System.Collections.Generic.List[string]
-    $hc = $null
+    $hc = $null; $hcOk = $null
     if ($m.HealthchecksApiKey -and $r.HasPings) {
-        try { $hc = Get-HealthchecksStatus $r $m } catch { $problems.Add("Healthchecks: $($_.Exception.Message)") }
+        try { $hc = Get-HealthchecksStatus $r $m; $hcOk = $true } catch { $hcOk = $false; $problems.Add("Healthchecks: $($_.Exception.Message)") }
     }
-    $loki = $null
+    $loki = $null; $lokiOk = $null
     if ($m.LokiReadToken -and $r.HasLoki) {
-        try { $loki = Get-LokiStatus $r $m } catch { $problems.Add("Loki: $($_.Exception.Message)") }
+        try { $loki = Get-LokiStatus $r $m; $lokiOk = $true } catch { $lokiOk = $false; $problems.Add("Loki: $($_.Exception.Message)") }
     }
 
     # The names: groups.psd1's spelling, otherwise what reported, in capitals (Windows computer names)
@@ -739,12 +792,25 @@ function Get-ComputerStatus {
         $vf = Join-Path $Company.Source 'version.psd1'
         if ([IO.File]::Exists($vf)) { $versions = ConvertFrom-WmVersionData (Import-PowerShellDataFile -LiteralPath $vf) }
     } catch { }
-    foreach ($k in @(@($hc.Keys) + @($loki.Keys))) {
-        if ($k -and -not $names.ContainsKey($k)) { $names[$k] = $k.ToUpperInvariant() }
+    if ($loki) { foreach ($k in $loki.Keys) { if (-not $names.ContainsKey($k)) { $names[$k] = $k.ToUpperInvariant() } } }
+    # Healthchecks: a computer's check is the configuration's prefix + its name, as the computers ping it. Without a
+    # prefix the project's other checks can't be told apart: only the computers known from groups.psd1 or Loki.
+    $checks = @{}
+    $otherChecks = 0
+    if ($hc) {
+        foreach ($slug in $hc.Keys) {
+            if ($r.SlugPrefix -and -not $slug.StartsWith($r.SlugPrefix)) { continue }
+            $name = $slug.Substring($r.SlugPrefix.Length)
+            if (-not $r.SlugPrefix -and -not $names.ContainsKey($name)) { $otherChecks++; continue }
+            $checks[$name] = $hc[$slug]
+            if (-not $names.ContainsKey($name)) { $names[$name] = $name.ToUpperInvariant() }
+        }
     }
+    # "Silent" only when every service that was asked answered: a failed one knows nothing either way
+    $allAnswered = ($hcOk -ne $false) -and ($lokiOk -ne $false) -and ($hcOk -or $lokiOk)
 
     $rows = foreach ($k in ($names.Keys | Sort-Object)) {
-        $h = if ($hc) { $hc[$k] } else { $null }
+        $h = $checks[$k]
         $l = if ($loki) { $loki[$k] } else { $null }
         $want = $null
         if ($versions -and $map) {
@@ -755,13 +821,13 @@ function Get-ComputerStatus {
         $flags = New-Object System.Collections.Generic.List[string]
         if ($h -and $h.Status -eq 'down') { $flags.Add('down') }
         if ($l -and ($l.Errors -gt 0 -or $l.Errors24h -gt 0)) { $flags.Add('errors') }
-        if ($want -and $l -and $l.Version -and $l.Version -ne $want) { $flags.Add('version') }
-        if (-not $h -and -not $l) { $flags.Add('silent') }
-        [pscustomobject]@{
-            Name = $names[$k]; Check = $h; Log = $l; Want = $want; Flags = @($flags)
-        }
+        if ($want -and $l -and $l.Version -and $l.Version -ne '?' -and $l.Version -ne $want) { $flags.Add('version') }
+        if ($allAnswered -and -not $h -and -not $l) { $flags.Add('silent') }
+        [pscustomobject]@{ Name = $names[$k]; Check = $h; Log = $l; Want = $want; Flags = @($flags) }
     }
-    return [pscustomobject]@{ Rows = @($rows); Problems = @($problems); HasPings = [bool]$hc; HasLoki = [bool]$loki }
+    return [pscustomobject]@{
+        Rows = @($rows); Problems = @($problems); HcOk = $hcOk; LokiOk = $lokiOk; OtherChecks = $otherChecks
+    }
 }
 
 function Show-ComputerStatus {
@@ -771,37 +837,46 @@ function Show-ComputerStatus {
     if ($s.Rows.Count -eq 0) { Write-Host "No computers of $($Company.Name) in groups.psd1, Healthchecks or Loki yet."; return }
     $format = '{0,-16} {1,-14} {2,-24} {3,-24} {4}'
     Write-Host ($format -f 'Computer', 'Healthchecks', 'Last update', 'Result', 'wmanager')
+    # '-' nothing reported, '?' the service failed, empty: not asked
+    $none = @{ $true = '-'; $false = '?' }
     foreach ($row in $s.Rows) {
-        $check = '-'
+        $check = ''
         if ($row.Check) { $check = ('{0} {1}' -f $row.Check.Status, (Format-Age $row.Check.LastPing)).Trim() }
-        elseif (-not $s.HasPings) { $check = '' }
-        $last = '-'; $result = '-'; $version = '-'
+        elseif ($null -ne $s.HcOk) { $check = $none[[bool]$s.HcOk] }
+        $last = ''; $result = ''; $version = ''
         if ($row.Log) {
+            $last = '-'; $result = '-'; $version = '-'
             if ($row.Log.LastRun) {
                 $last = '{0} {1}' -f $row.Log.LastRun.ToString('yyyy-MM-dd HH:mm'), (Format-Age $row.Log.LastRun)
-                $result = if ($row.Log.Errors) { "$($row.Log.Errors) errors" } elseif ($row.Log.Warnings) { "$($row.Log.Warnings) warnings" } else { 'ok' }
+                $result = if ($row.Log.Errors) { Format-Count $row.Log.Errors 'error' } elseif ($row.Log.Warnings) { Format-Count $row.Log.Warnings 'warning' } else { 'ok' }
             }
             if ($row.Log.Errors24h) { $result = ('{0}, {1} errors/24h' -f $result, $row.Log.Errors24h).TrimStart('-, ') }
             if ($row.Log.Version) { $version = $row.Log.Version }
-        } elseif (-not $s.HasLoki) { $last = ''; $result = ''; $version = '' }
+        } elseif ($null -ne $s.LokiOk) {
+            $last = $result = $version = $none[[bool]$s.LokiOk]
+        }
         if ($row.Flags -contains 'version') { $version = "$version -> $($row.Want)" }
         $color = if ($row.Flags -contains 'down' -or $row.Flags -contains 'errors') { 'Red' } elseif ($row.Flags.Count -gt 0) { 'Yellow' } else { 'Gray' }
         Write-Host ($format -f $row.Name, $check, $last, $result, $version) -ForegroundColor $color
     }
     Write-Host ''
     Write-Host (Format-StatusSummary $s)
-    Write-Host "Loki: the last $($script:StatusDays) days; (5h) = 5 hours ago, '-' = nothing reported, 'a -> b' = on a, switches to b at its next update."
+    Write-Host "Loki: the last $($script:StatusDays) days. (5h) = 5 hours ago; - = nothing reported; ? = the service didn't answer;"
+    Write-Host 'a -> b = runs a, switches to b at its next update.'
+    if ($s.OtherChecks -gt 0) {
+        Write-Host "$($s.OtherChecks) other checks of the Healthchecks project left out: without HealthchecksSlugPrefix only the computers known from groups.psd1 or Loki count."
+    }
 }
 
 function Format-StatusSummary {
     param($Status)
-    $count = { param($f) @($Status.Rows | Where-Object { $_.Flags -contains $f }).Count }
     $parts = @('{0} computers' -f $Status.Rows.Count)
-    foreach ($f in @(@('down', 'down'), @('errors', 'with errors'), @('version', 'not on their version yet'), @('silent', 'never reported'))) {
-        $n = & $count $f[0]
+    foreach ($f in @(@('down', 'down'), @('errors', 'with errors'), @('version', 'not on their version yet'),
+                     @('silent', "silent for $($script:StatusDays) days"))) {
+        $n = @($Status.Rows | Where-Object { $_.Flags -contains $f[0] }).Count
         if ($n -gt 0) { $parts += "$n $($f[1])" }
     }
-    if ($parts.Count -eq 1) { $parts += 'all fine' }
+    if ($parts.Count -eq 1 -and $Status.Problems.Count -eq 0) { $parts += 'all fine' }
     return ($parts -join ', ')
 }
 
@@ -827,8 +902,9 @@ function Show-AllStatus {
 
 function Show-StatusStep {
     param($Company)
-    $m = Read-Monitoring $Company
-    if ($null -eq $m -or (-not $m.HealthchecksApiKey -and -not $m.LokiReadToken)) {
+    $m = $null
+    try { $m = Read-Monitoring $Company } catch { }
+    if (-not (Test-HasMonitoringKeys $m)) {
         Write-Host '  The status needs read-only keys of Healthchecks and Grafana Cloud (the computers have write-only ones).'
         if (-not (Read-WmYesNo '  Set them up now?' $true)) { return }
         Set-Monitoring $Company

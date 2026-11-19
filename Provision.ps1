@@ -297,6 +297,7 @@ try {
     Stop-WmJournal
     if ($script:WmErrors -gt 0) { $failed = $true }
     Write-WmLog -Key 'provision.summary' -Arguments @($script:WmWarnings, $script:WmErrors, $script:WmLogFile)
+    Add-WmRunRecord -Job 'provision'
     Remove-WmOldLogs -Days ([int](Get-WmSetting $config 'LogRetentionDays' 90))
     Send-WmLokiLog -Config $config
     # Stopped before the name was settled: no ping. The person at the console sees the result, and a

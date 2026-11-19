@@ -65,6 +65,16 @@ function Get-WmName {
     return 'wmanager'
 }
 
+# The end of a run as one JSON line for Loki only (not on the screen or in the log file), read by tools/wm.ps1 status:
+# the version that finished the run (after a self-update that failed, the old one, though the new one logged its
+# start), and the run's warnings and errors. Sent with the rest of the run by Send-WmLokiLog.
+function Add-WmRunRecord {
+    param([Parameter(Mandatory = $true)][string]$Job)
+    $line = '{"wmanager_run":' + (ConvertTo-WmJsonString ([string]$script:WmVersion)) + ',"job":' + (ConvertTo-WmJsonString $Job) +
+            ',"warnings":' + [int]$script:WmWarnings + ',"errors":' + [int]$script:WmErrors + '}'
+    $script:WmLogBuffer.Add([pscustomobject]@{ Time = Get-Date; Level = 'info'; Line = $line; Task = '' })
+}
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
