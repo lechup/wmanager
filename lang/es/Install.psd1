@@ -11,4 +11,6 @@
     'install.config_fetched'        = 'Configuración descargada.'
     'install.config_example'        = 'No hay archivo de configuración: el aprovisionamiento usará el de ejemplo.'
     'install.stopped'               = 'Instalación detenida.'
+    'install.config_question_folder' = 'O una carpeta; si contiene las configuraciones de varias empresas (configs\<empresa>\), eliges una.'
+    'install.config_folder_empty'   = 'No hay provision.config.psd1 en {0} ni en carpetas de empresas (configs\<empresa>\ o <empresa>\).'
 }

@@ -25,6 +25,8 @@
     Passed to Provision.ps1 (without it provisioning asks).
 .PARAMETER Config
     Where the configuration is, instead of the question: a path or an https:// address. '-' = the example.
+    A folder works too: its provision.config.psd1, or, with the configurations of several companies in it
+    (configs\<company>\provision.config.psd1), the one chosen at the question that follows.
 .PARAMETER AuthHeader
     Authorization header for an https:// configuration (e.g. 'token github_pat_...'), instead of the question.
 .PARAMETER Tag

@@ -17,13 +17,17 @@
     Language of the questions: en, de, fr, es, it, pl, nl, pt, ro, cs. Without it: WMANAGER_LANG, then the display
     language, then English. Yes/no questions also take y and n.
 
+.PARAMETER DefaultSourceId
+    The identifier of the management source to offer when the source can't be read yet and the file has none
+    (tools/wm.ps1 passes the one of a new company's source).
+
 .EXAMPLE
     .\init.cmd
 .EXAMPLE
     pwsh ./init.ps1 -Lang pl
 #>
 [CmdletBinding()]
-param([string]$ConfigPath, [string]$Lang)
+param([string]$ConfigPath, [string]$Lang, [string]$DefaultSourceId)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path (Join-Path $PSScriptRoot 'lib') 'Lang.ps1')
@@ -237,7 +241,7 @@ if ($source -and $source -ne '-') {
     # The identifier of the manifest just fetched; the saved one only when the source couldn't be read.
     # The same source with another identifier than saved means it was replaced: say so.
     $savedId = [string]$management.SourceId
-    $idDefault = if ($manifestId) { $manifestId } else { $savedId }
+    $idDefault = if ($manifestId) { $manifestId } elseif ($savedId) { $savedId } else { $DefaultSourceId }
     if ($manifestId -and $savedId -and $manifestId -ne $savedId -and $source -eq [string]$management.Source) {
         Write-Problem (Get-WmText 'init.source_id_changed' @($savedId))
     }

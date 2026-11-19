@@ -14,7 +14,8 @@
     without a console the question is skipped and the name stays.
 
 .PARAMETER ConfigPath
-    Path to the configuration file. Defaults to provision.config.psd1 next to the script.
+    Path to the configuration file. Defaults to provision.config.psd1 next to the script; without it, when
+    configs\<company>\provision.config.psd1 exist (tools/wm.ps1 usb), the script asks which company.
 
 .PARAMETER SkipRestorePoint
     Don't create a system restore point. Without it, a failed restore point stops provisioning
@@ -157,7 +158,12 @@ if ([int]$os.BuildNumber -lt 22000) {
     exit 2
 }
 
-if (-not $ConfigPath) { $ConfigPath = Join-Path $here 'provision.config.psd1' }
+if (-not $ConfigPath) {
+    # provision.config.psd1 next to this script, or the chosen company's from configs\ (README, "Several companies")
+    try { $ConfigPath = Find-WmConfig -Folder $here }
+    catch { Write-Host (Format-WmErrorText $_) -ForegroundColor Red; exit 2 }
+    if (-not $ConfigPath) { $ConfigPath = Join-Path $here 'provision.config.psd1' }
+}
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
     $example = Join-Path $here 'provision.config.example.psd1'
     Write-Host (Get-WmText 'provision.config_example' @($ConfigPath)) -ForegroundColor Yellow

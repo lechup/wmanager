@@ -11,4 +11,6 @@
     'install.config_fetched'        = 'Configuração transferida.'
     'install.config_example'        = 'Sem ficheiro de configuração: o aprovisionamento vai usar o exemplo.'
     'install.stopped'               = 'Instalação interrompida.'
+    'install.config_question_folder' = 'Ou uma pasta; se contiver as configurações de várias empresas (configs\<empresa>\), escolhe uma.'
+    'install.config_folder_empty'   = 'Nenhum provision.config.psd1 em {0}, nem em pastas de empresas (configs\<empresa>\ ou <empresa>\).'
 }

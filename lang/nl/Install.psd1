@@ -11,4 +11,6 @@
     'install.config_fetched'        = 'Configuratie gedownload.'
     'install.config_example'        = 'Geen configuratiebestand: de inrichting gebruikt het voorbeeld.'
     'install.stopped'               = 'Installatie gestopt.'
+    'install.config_question_folder' = 'Of een map; bevat die de configuraties van meerdere bedrijven (configs\<bedrijf>\), dan kies je er een.'
+    'install.config_folder_empty'   = 'Geen provision.config.psd1 in {0}, ook niet in mappen van bedrijven (configs\<bedrijf>\ of <bedrijf>\).'
 }

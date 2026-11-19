@@ -43,4 +43,10 @@
     'common.answer_yes_no'        = 'Răspundeți cu d sau n.'
     'common.unknown_language'     = 'Limbă necunoscută ''{0}''; se folosește {1}. Disponibile: {2}.'
     'common.timed_out'            = 'niciun rezultat după {0} s; așteptarea a fost oprită'
+
+    'common.company_question'       = 'Acest dosar conține configurațiile mai multor firme. Pentru care este acest calculator?'
+    'common.company_prompt'         = 'Firma (număr sau nume)'
+    'common.company_unknown'        = 'Introduceți un număr de la 1 la {0} sau numele firmei.'
+    'common.company_config'         = 'Configurația firmei {0}: {1}'
+    'common.company_no_console'     = '{0} conține configurațiile mai multor firme și nu este nimeni la consolă care să aleagă una; indicați-o cu -ConfigPath.'
 }

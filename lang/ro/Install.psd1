@@ -11,4 +11,6 @@
     'install.config_fetched'        = 'Configurația a fost descărcată.'
     'install.config_example'        = 'Niciun fișier de configurare: provizionarea va folosi exemplul.'
     'install.stopped'               = 'Instalarea s-a oprit.'
+    'install.config_question_folder' = 'Sau un dosar; dacă conține configurațiile mai multor firme (configs\<firma>\), alegeți una.'
+    'install.config_folder_empty'   = 'Niciun provision.config.psd1 în {0} și nici în dosare de firme (configs\<firma>\ sau <firma>\).'
 }

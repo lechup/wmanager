@@ -1,6 +1,6 @@
 ﻿# Install from the internet, second step (README, "Quick start"). install.ps1 runs it from the unpacked release in
-# Windows PowerShell 5.1, as administrator: it asks where provision.config.psd1 is (a path or an https:// address;
-# Enter = the example), puts it and the certificate of a management source into the release folder and runs
+# Windows PowerShell 5.1, as administrator: it asks where provision.config.psd1 is (a path, a folder with the
+# configurations of several companies, or an https:// address; Enter = the example), puts it and the certificate of a management source into the release folder and runs
 # Provision.ps1 as its own process, the way run.cmd does; the exit code is provisioning's (0-4), or 90 when the
 # configuration step stopped the installation (far from provisioning's codes, so the two can't be mixed up). install.ps1 passes the configuration's address and the
 # Authorization header in WM_INSTALL_CONFIG and WM_INSTALL_AUTH. Without -Folder (the tests dot-source this file)
@@ -29,6 +29,16 @@ function Get-WmSiblingLocation {
     }
     # [IO.Path], not Split-Path/Join-Path: those look the drive up (a USB drive letter or a share may not be mapped)
     return [IO.Path]::Combine([IO.Path]::GetDirectoryName($Location), $Name)
+}
+
+# A folder given as the configuration: its provision.config.psd1, or the one of the company chosen from it
+# (README, "Several companies"; Find-WmConfig in lib\Common.ps1). A file or an address stays as it is.
+function Resolve-WmConfigLocation {
+    param([Parameter(Mandatory = $true)][string]$Location)
+    if ($Location -match '^[A-Za-z][A-Za-z0-9+.-]*://' -or -not [IO.Directory]::Exists($Location)) { return $Location }
+    $found = Find-WmConfig -Folder $Location
+    if (-not $found) { throw (New-WmError 'install.config_folder_empty' @($Location)) }
+    return $found
 }
 
 # Puts provision.config.psd1 (and, with a management source, its certificate) into the folder. The management
@@ -69,11 +79,13 @@ for ($try = 1; ; $try++) {
             Write-Host ''
             Write-Host (Get-WmText 'install.config_question')
             Write-Host (Get-WmText 'install.config_question_more')
+            Write-Host (Get-WmText 'install.config_question_folder')
             Write-Host (Get-WmText 'install.config_question_enter')
             $Config = [string](Read-Host (Get-WmText 'install.config_prompt'))
         }
         $Config = ConvertFrom-WmPastedPath $Config
         if ($Config -and $Config -ne '-') {
+            $Config = Resolve-WmConfigLocation $Config
             if ($Config -match '^https://' -and -not $auth) {
                 $ss = Read-Host (Get-WmText 'install.auth_header') -AsSecureString
                 $auth = ([Net.NetworkCredential]::new('', $ss).Password).Trim()

@@ -647,6 +647,63 @@ function Confirm-WmContinue {
 }
 
 # ---------------------------------------------------------------------------
+# Configurations of several companies (README, "Several companies")
+# ---------------------------------------------------------------------------
+
+# The configurations of several companies in a folder: configs\<company>\provision.config.psd1 (a wmanager folder
+# prepared by tools/wm.ps1 usb), or else <company>\provision.config.psd1 (a folder of configurations). Name and Path
+# of each, by name. [IO.Path], not Join-Path: that looks the drive up (a USB drive letter or a share may not be mapped).
+function Get-WmCompanyConfigs {
+    param([Parameter(Mandatory = $true)][string]$Folder)
+    foreach ($parent in @([IO.Path]::Combine($Folder, 'configs'), $Folder)) {
+        if (-not [IO.Directory]::Exists($parent)) { continue }
+        $found = @(foreach ($dir in [IO.Directory]::GetDirectories($parent)) {
+            $file = [IO.Path]::Combine($dir, 'provision.config.psd1')
+            if ([IO.File]::Exists($file)) { [pscustomobject]@{ Name = [IO.Path]::GetFileName($dir); Path = $file } }
+        })
+        if ($found.Count -gt 0) { return @($found | Sort-Object Name) }
+    }
+    return @()
+}
+
+# The configuration in a folder: its provision.config.psd1, or, when the folder holds the configurations of several
+# companies, the one chosen at the console (a single company's without a question). $null when the folder has none.
+# Throws when there is nobody to choose (no console): provisioning must not guess the company.
+function Find-WmConfig {
+    param([Parameter(Mandatory = $true)][string]$Folder)
+    $single = [IO.Path]::Combine($Folder, 'provision.config.psd1')
+    if ([IO.File]::Exists($single)) { return $single }
+    $companies = @(Get-WmCompanyConfigs $Folder)
+    if ($companies.Count -eq 0) { return $null }
+    $chosen = $companies[0]
+    if ($companies.Count -gt 1) {
+        if (-not (Test-WmInteractive)) { throw (New-WmError 'common.company_no_console' @($Folder)) }
+        $chosen = Read-WmCompany -Companies $companies -Folder $Folder
+    }
+    Write-Host ('  ' + (Get-WmText 'common.company_config' @($chosen.Name, $chosen.Path)))
+    return $chosen.Path
+}
+
+# Which company: its number on the list or its name, asked again until the answer is one of them.
+function Read-WmCompany {
+    param([Parameter(Mandatory = $true)][object[]]$Companies, [Parameter(Mandatory = $true)][string]$Folder)
+    Write-Host ''
+    Write-Host (Get-WmText 'common.company_question')
+    for ($i = 0; $i -lt $Companies.Count; $i++) { Write-Host ('  {0}) {1}' -f ($i + 1), $Companies[$i].Name) }
+    while ($true) {
+        $answer = Read-Host (Get-WmText 'common.company_prompt')
+        # The end of redirected input: nobody is there to choose
+        if ($null -eq $answer) { throw (New-WmError 'common.company_no_console' @($Folder)) }
+        $answer = $answer.Trim()
+        $n = 0
+        if ([int]::TryParse($answer, [ref]$n) -and $n -ge 1 -and $n -le $Companies.Count) { return $Companies[$n - 1] }
+        $named = @($Companies | Where-Object { $_.Name -eq $answer })
+        if ($named.Count -eq 1) { return $named[0] }
+        Write-Host ('  ' + (Get-WmText 'common.company_unknown' @($Companies.Count))) -ForegroundColor Yellow
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Restart
 # ---------------------------------------------------------------------------
 

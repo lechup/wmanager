@@ -11,4 +11,6 @@
     'install.config_fetched'        = 'Configuration téléchargée.'
     'install.config_example'        = 'Aucun fichier de configuration : le provisionnement utilisera l''exemple.'
     'install.stopped'               = 'Installation interrompue.'
+    'install.config_question_folder' = 'Ou un dossier ; s''il contient les configurations de plusieurs entreprises (configs\<entreprise>\), vous en choisissez une.'
+    'install.config_folder_empty'   = 'Aucun provision.config.psd1 dans {0}, ni dans des dossiers d''entreprises (configs\<entreprise>\ ou <entreprise>\).'
 }
