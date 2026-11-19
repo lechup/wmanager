@@ -587,12 +587,15 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
     Context 'publish target and sync' {
         BeforeAll {
             $script:gitEnv = @{}
-            foreach ($k in @('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'GIT_TERMINAL_PROMPT', 'GH_CONFIG_DIR', 'GH_TOKEN', 'GITHUB_TOKEN')) {
+            foreach ($k in @('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'GIT_TERMINAL_PROMPT', 'GH_CONFIG_DIR', 'GH_TOKEN', 'GITHUB_TOKEN', 'WMANAGER_TEST_LOCAL_HTTP', 'WMANAGER_TEST_WAIT')) {
                 $script:gitEnv[$k] = [Environment]::GetEnvironmentVariable($k)
             }
             $env:GIT_AUTHOR_NAME = 'wm test'; $env:GIT_COMMITTER_NAME = 'wm test'
             $env:GIT_AUTHOR_EMAIL = 'wm@example.test'; $env:GIT_COMMITTER_EMAIL = 'wm@example.test'
             $env:GIT_TERMINAL_PROMPT = '0'
+            # The stand-in server is http://127.0.0.1, and a check waits 2 s for a host's cache, not 5 minutes
+            $env:WMANAGER_TEST_LOCAL_HTTP = '1'
+            $env:WMANAGER_TEST_WAIT = '2'
             # gh is never signed in here, so the remote is asked for: a stand-in gh that says what gh says then
             # ("not logged into", which a case-blind "logged in" would take for yes)
             $env:GH_CONFIG_DIR = Join-Path $TestDrive 'gh'
@@ -643,63 +646,124 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         It 'copies the signed source to a folder, manifest last, and checks that the computers'' address gives it' {
             $dir = Add-Company 'acme' -Source -Config "@{ Management = @{ Source = '$($script:webBase)/acme'; SourceId = 'test-source-0001' } }"
             Write-Manifest (Join-Path $dir 'source')
-            $r = Invoke-Typed @('f', (Join-Path $script:web 'acme'), 'y') @('acme', 'target')
-            $r.Code | Should -Be 0
-            (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'publish.psd1')).Target | Should -Be (Join-Path $script:web 'acme')
+            $folder = Join-Path $script:web 'acme'
+            $r = Invoke-Typed @('f', $folder, 'y', 'y') @('acme', 'target')
+            $r.Code | Should -Be 0 -Because $r.Text
+            $r.Text | Should -Match "doesn't exist\. Create it"
+            (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'publish.psd1')).Target | Should -Be $folder
             (& stat -c '%a' (Join-Path $dir 'publish.psd1')) | Should -Be '600'
-            $r.Text | Should -Match 'Copied \d+ files to .*manifest\.psd1 last'
+            $r.Text | Should -Match 'Copied \d+ changed files and manifest\.psd1 \(last\)'
             $r.Text | Should -Match 'The computers can read manifest 1 now'
-            Test-Path -LiteralPath (Join-Path $script:web 'acme/groups/accounting/scripts/10-power-plan.ps1') | Should -BeTrue
-            Test-Path -LiteralPath (Join-Path $script:web 'acme/.gitattributes') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $folder 'groups/accounting/scripts/10-power-plan.ps1') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $folder '.gitattributes') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $folder 'manifest.psd1.new') | Should -BeFalse
+
+            # Again: only what changed (nothing) and the manifest
+            $r = Invoke-Tool acme sync
+            $r.Code | Should -Be 0
+            $r.Text | Should -Match 'Copied 0 changed files and manifest\.psd1'
+
+            # The computers read https:// (and Windows paths) only: an http:// address is a mistake
+            Remove-Item Env:\WMANAGER_TEST_LOCAL_HTTP
+            try { $r = Invoke-Tool acme sync } finally { $env:WMANAGER_TEST_LOCAL_HTTP = '1' }
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'the computers read only https:// addresses'
 
             # Changes that aren't signed stay here
             Add-Content -LiteralPath (Join-Path $dir 'source/choco-reqs.txt') -Value 'not-signed-yet'
             $r = Invoke-Tool acme sync
             $r.Code | Should -Be 1
             $r.Text | Should -Match "changes that aren't signed"
-            Get-Content -LiteralPath (Join-Path $script:web 'acme/choco-reqs.txt') | Should -Not -Contain 'not-signed-yet'
+            Get-Content -LiteralPath (Join-Path $folder 'choco-reqs.txt') | Should -Not -Contain 'not-signed-yet'
         }
 
-        It 'offers to send what was signed before when nothing changed, and says when the address gives another manifest' {
+        It 'refuses a folder that is missing, holds another source or a newer manifest' {
+            $dir = Add-Company 'acme' -Source -Config '@{}'
+            Write-Manifest (Join-Path $dir 'source')
+            $folder = Join-Path $TestDrive 'share-acme'
+            Set-Content -LiteralPath (Join-Path $dir 'publish.psd1') -Value "@{ Target = '$folder' }"
+            (Invoke-Tool acme sync).Text | Should -Match "doesn't exist: is the share mounted\?"
+            New-Item -ItemType Directory -Force -Path $folder | Out-Null
+            Set-Content -LiteralPath (Join-Path $folder 'manifest.psd1') -Value "@{ SourceId = 'another-source'; Serial = 1; Files = @{} }"
+            $r = Invoke-Tool acme sync
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'holds another source \(SourceId another-source'
+            Set-Content -LiteralPath (Join-Path $folder 'manifest.psd1') -Value "@{ SourceId = 'test-source-0001'; Serial = 5; Files = @{} }"
+            $r = Invoke-Tool acme sync
+            $r.Text | Should -Match 'has a newer manifest \(5\) than this source \(1\)'
+            Test-Path -LiteralPath (Join-Path $folder 'groups.psd1') | Should -BeFalse
+            Set-Content -LiteralPath (Join-Path $dir 'publish.psd1') -Value "@{ Target = "
+            (Invoke-Tool acme sync).Text | Should -Match "publish\.psd1 can't be read"
+        }
+
+        It 'offers to send what was signed before when nothing changed, and fails when the address gives another manifest' {
             $dir = Add-Company 'acme' -Source -Config "@{ Management = @{ Source = '$($script:webBase)/other'; SourceId = 'test-source-0001' } }"
             Add-FakeKey $dir
             Write-Manifest (Join-Path $dir 'source')
-            Set-Content -LiteralPath (Join-Path $dir 'publish.psd1') -Value "@{ Target = '$(Join-Path $script:web 'acme2')' }"
+            $folder = Join-Path $script:web 'acme2'
+            New-Item -ItemType Directory -Force -Path $folder | Out-Null
+            Set-Content -LiteralPath (Join-Path $dir 'publish.psd1') -Value "@{ Target = '$folder' }"
             New-Item -ItemType Directory -Force -Path (Join-Path $script:web 'other') | Out-Null
             Set-Content -LiteralPath (Join-Path $script:web 'other/manifest.psd1') -Value "@{ SourceId = 'x'; Serial = 0; Files = @{} }"
             $r = Invoke-Typed @('', 'y', 'n') @('acme', 'publish')
-            $r.Code | Should -Be 0
+            $r.Code | Should -Be 1
             $r.Text | Should -Match 'Sign it again anyway\? \[y/N\]'
             $r.Text | Should -Match 'Send it where the computers read it \(.*acme2\)\? \[y/N\]'
-            Test-Path -LiteralPath (Join-Path $script:web 'acme2/manifest.psd1') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $folder 'manifest.psd1') | Should -BeTrue
             $r.Text | Should -Match 'still gives manifest 0'
         }
 
-        It 'makes the source a Git repository, pushes it to its remote, then commits and pushes what was signed' -Skip:(-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        It 'makes the source a Git repository, sends it only once signed, then commits and pushes each signature' -Skip:(-not (Get-Command git -ErrorAction SilentlyContinue)) {
             $dir = Add-Company 'acme' -Source -Config '@{}'
-            Write-Manifest (Join-Path $dir 'source')
             $remote = Join-Path $TestDrive 'acme-remote.git'
             & git init -q --bare $remote
-            $r = Invoke-Typed @('g', 'y', $remote, 'y') @('acme', 'target')
+            # Not signed yet: set up, nothing sent
+            $r = Invoke-Typed @('g', 'y', $remote) @('acme', 'target')
             $r.Code | Should -Be 0 -Because $r.Text
             $r.Text | Should -Match 'Made it a Git repository'
+            $r.Text | Should -Match 'It goes there once signed'
             (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'publish.psd1')).Target | Should -Be 'git'
-            (& git -C $remote log main --format=%s) | Should -Contain 'Management source of acme'
+            @(& git -C $remote log main --format=%s 2>$null).Count | Should -Be 0
 
+            Write-Manifest (Join-Path $dir 'source')
+            $r = Invoke-Tool acme sync
+            $r.Code | Should -Be 0 -Because $r.Text
+            $r.Text | Should -Match 'Committed: Manifest 1: \d+ files'
+            $r.Text | Should -Match 'no Management\.Source yet'
             Add-Content -LiteralPath (Join-Path $dir 'source/choco-reqs.txt') -Value 'signed-now'
             Write-Manifest (Join-Path $dir 'source')
             $r = Invoke-Tool acme sync
-            $r.Code | Should -Be 0
             $r.Text | Should -Match 'Committed: Manifest 1: 2 files'
-            $r.Text | Should -Match 'no Management\.Source yet'
             (& git -C $remote log main --format=%s) | Should -Contain 'Manifest 1: 2 files'
             (& git -C $remote show main:choco-reqs.txt) | Should -Contain 'signed-now'
 
+            # Git must keep the bytes as signed
+            Remove-Item -LiteralPath (Join-Path $dir 'source/.gitattributes') -Force   # hidden: needs -Force
+            $r = Invoke-Tool acme sync
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match "git would change the line endings of: .*add the line '\* -text'"
+
             # A GitHub remote: the address the computers read it from
-            $beta = Add-Company 'beta' -Source -Config '@{}'
-            $r = Invoke-Typed @('g', 'y', 'https://github.com/acme-it/wmanager-beta.git', 'n') @('beta', 'target')
+            $null = Add-Company 'beta' -Source -Config '@{}'
+            $r = Invoke-Typed @('g', 'y', 'https://github.com/acme-it/wmanager-beta.git') @('beta', 'target')
             $r.Text | Should -Match 'The computers read it from https://raw\.githubusercontent\.com/acme-it/wmanager-beta/main'
             $r.Text | Should -Match 'pwsh tools/wm\.ps1 beta config'
+        }
+
+        It 'gives the source a repository of its own when the companies folder is a Git work tree' -Skip:(-not (Get-Command git -ErrorAction SilentlyContinue)) {
+            $dir = Add-Company 'acme' -Source -Config "@{ LokiToken = 'a secret' }"
+            & git init -q $env:WMANAGER_COMPANIES
+            Write-Manifest (Join-Path $dir 'source')
+            $remote = Join-Path $TestDrive 'acme-own.git'
+            & git init -q --bare $remote
+            $r = Invoke-Typed @('g', 'y', $remote, 'y') @('acme', 'target')
+            $r.Code | Should -Be 0 -Because $r.Text
+            $r.Text | Should -Match 'is inside the Git repository'
+            (& git -C (Join-Path $dir 'source') rev-parse --show-prefix) | Should -BeNullOrEmpty
+            $tree = @(& git -C $remote ls-tree -r --name-only main)
+            $tree | Should -Contain 'groups.psd1'
+            $tree | Should -Not -Contain 'config/provision.config.psd1'
+            @($tree | Where-Object { $_ -like 'acme/*' -or $_ -like 'config/*' -or $_ -like 'keys/*' }).Count | Should -Be 0
         }
     }
 

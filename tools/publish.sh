@@ -156,7 +156,10 @@ $out"
 mv "$tmp/signed.psd1" manifest.psd1
 thumb=$(openssl x509 -in "$keydir/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
 echo "Signed manifest $serial (${#rels[@]} files), source $source_id, certificate $thumb."
-if (( in_git )); then
+# WM_PUBLISH_SENT_BY_CALLER: tools/wm.ps1 sends it next
+if [[ -n ${WM_PUBLISH_SENT_BY_CALLER:-} ]]; then
+    :
+elif (( in_git )); then
     echo "Now commit and push the changes: git add -A && git commit -m '...' && git push"
 else
     echo "Now copy the folder to the source (web server or share), manifest.psd1 last."
