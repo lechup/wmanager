@@ -18,7 +18,8 @@
 #   pwsh tools/wm.ps1 <company> status         its computers: Healthchecks, the last update, errors, wmanager version
 #   pwsh tools/wm.ps1 <company> monitoring     the read-only keys status needs (kept in <company>/monitoring.psd1)
 #   pwsh tools/wm.ps1 <company> changes        what changed in its source since the last signature
-#   pwsh tools/wm.ps1 <company> publish        those changes, then check and sign them (tools/publish.sh)
+#   pwsh tools/wm.ps1 <company> publish        those changes, then check and sign them (tools/publish.sh); -Yes signs
+#                                              without asking (also with nothing changed), for scripts
 #   pwsh tools/wm.ps1 <company> config         the configuration wizard (init.ps1) for its provision.config.psd1
 #   pwsh tools/wm.ps1 <company> <command> ...  a tools/groups.ps1 command on its source, e.g.
 #                                              add-computer OFFICE-07 accounting, enable power all, set-version v0.2.0
@@ -30,7 +31,8 @@ param(
     [Parameter(Position = 1)][string]$Second,
     [Parameter(Position = 2, ValueFromRemainingArguments = $true)][string[]]$Rest = @(),
     [string]$Url,
-    [string]$Zip
+    [string]$Zip,
+    [switch]$Yes
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -173,7 +175,8 @@ function Get-GroupNames {
 }
 
 # The files tools/publish.sh signs, relative, with '/': in a Git repository what git would push (tracked files and new
-# ones that aren't ignored), otherwise every file; never hidden ones (.git, .gitattributes) or manifest.psd1
+# ones that aren't ignored), otherwise every file; never hidden ones (.git, .gitattributes) or manifest.psd1. Letter
+# case counts, as on a web server: Foo.txt and foo.txt are two files (publish.sh refuses such a pair).
 function Get-SignedFiles {
     param([string]$Source)
     $list = $null
@@ -181,48 +184,85 @@ function Get-SignedFiles {
         $inside = & git -C $Source rev-parse --is-inside-work-tree 2>$null
         if ($LASTEXITCODE -eq 0 -and $inside -eq 'true') {
             $list = @(& git -C $Source ls-files --cached --others --exclude-standard -- . 2>$null |
-                Where-Object { [IO.File]::Exists((Join-Path $Source $_)) })
+                Where-Object { Test-Path -LiteralPath (Join-Path $Source $_) })
         }
     }
     if ($null -eq $list) {
         $list = @(Get-ChildItem -LiteralPath $Source -Recurse -File -Force |
             ForEach-Object { [IO.Path]::GetRelativePath($Source, $_.FullName).Replace('\', '/') })
     }
-    return @($list | Where-Object { $_ -ne 'manifest.psd1' -and "/$_" -notmatch '/\.' } | Sort-Object -Unique)
+    return @($list | Where-Object { $_ -ne 'manifest.psd1' -and "/$_" -notmatch '/\.' } | Sort-Object -Unique -CaseSensitive)
 }
 
-# What changed in the source since the last signature: its files against the hashes in manifest.psd1. Added,
-# Changed and Removed (relative paths); First when the source was never signed; Serial and Created of the manifest.
+# SHA256 of a file, kept while its size and time stay the same: the menus redraw the state of every company
+$script:HashCache = @{}
+function Get-CachedHash {
+    param([string]$Path)
+    $item = Get-Item -LiteralPath $Path
+    $key = '{0}|{1}|{2}' -f $Path, $item.Length, $item.LastWriteTimeUtc.Ticks
+    if (-not $script:HashCache.ContainsKey($key)) { $script:HashCache[$key] = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+    return $script:HashCache[$key]
+}
+
+# The certificate that signed manifest.psd1 (its Authenticode block): its SHA1 thumbprint, $null without a signature
+function Get-ManifestSigner {
+    param([string]$Path)
+    $text = [IO.File]::ReadAllText($Path)
+    $m = [regex]::Match($text, '(?s)# SIG # Begin signature block\r?\n(.*?)# SIG # End signature block')
+    if (-not $m.Success) { return $null }
+    $b64 = (($m.Groups[1].Value -split '\r?\n') | ForEach-Object { $_ -replace '^# ', '' }) -join ''
+    $cms = New-Object System.Security.Cryptography.Pkcs.SignedCms
+    $cms.Decode([Convert]::FromBase64String($b64))
+    return $cms.SignerInfos[0].Certificate.Thumbprint
+}
+
+# What changed in the source since the last signature: its files against the hashes in manifest.psd1, and its
+# signer against the company's key. Added, Changed, Removed (relative paths); First: never signed; Unreadable: the
+# reason a manifest.psd1 can't be read; OtherKey: the thumbprint of the certificate that signed it, when keys/ holds
+# another one; Serial and Created of the manifest.
 function Get-SourceChanges {
     param($Company)
-    $result = [pscustomobject]@{ First = $false; Serial = ''; Created = ''; Added = @(); Changed = @(); Removed = @() }
-    $signed = $null
-    try {
-        $manifest = Import-PowerShellDataFile -LiteralPath (Join-Path $Company.Source 'manifest.psd1')
-        $signed = $manifest.Files
-        $result.Serial = [string]$manifest.Serial
-        $result.Created = [string]$manifest.Created
-    } catch { }
+    if (-not [IO.Directory]::Exists($Company.Source)) { throw "$($Company.Name) has no source yet: pwsh tools/wm.ps1 new $($Company.Name)" }
+    $result = [pscustomobject]@{
+        First = $false; Unreadable = ''; OtherKey = ''; Serial = ''; Created = ''; Added = @(); Changed = @(); Removed = @()
+    }
     $files = @(Get-SignedFiles $Company.Source)
-    if (-not ($signed -is [hashtable])) {
+    $path = Join-Path $Company.Source 'manifest.psd1'
+    if (-not [IO.File]::Exists($path)) {
         $result.First = $true
         $result.Added = $files
         return $result
     }
-    $known = @{}   # the manifest's paths as written there (its keys don't tell letter case apart)
-    foreach ($k in $signed.Keys) { $known[[string]$k] = $true }
-    $result.Added = @($files | Where-Object { -not $known.ContainsKey($_) })
-    $result.Changed = @($files | Where-Object {
-        $known.ContainsKey($_) -and $signed[$_] -ne (Get-FileHash -LiteralPath (Join-Path $Company.Source $_) -Algorithm SHA256).Hash })
-    $here = @{}
-    foreach ($f in $files) { $here[$f] = $true }
-    $result.Removed = @($known.Keys | Where-Object { -not $here.ContainsKey($_) } | Sort-Object)
+    $manifest = $null
+    try { $manifest = Import-PowerShellDataFile -LiteralPath $path } catch { $result.Unreadable = $_.Exception.Message }
+    if (-not $result.Unreadable -and -not ($manifest.Files -is [hashtable])) { $result.Unreadable = 'it has no Files table' }
+    if ($result.Unreadable) { return $result }
+    $result.Serial = [string]$manifest.Serial
+    $result.Created = [string]$manifest.Created
+    # The paths as the manifest writes them, letter case included (a PowerShell hashtable would ignore it)
+    $signed = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
+    foreach ($k in $manifest.Files.Keys) { $signed[[string]$k] = [string]$manifest.Files[$k] }
+    $here = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($f in $files) { [void]$here.Add($f) }
+    $result.Added = @($files | Where-Object { -not $signed.ContainsKey($_) })
+    $result.Changed = @($files | Where-Object { $signed.ContainsKey($_) -and $signed[$_] -ne (Get-CachedHash (Join-Path $Company.Source $_)) })
+    $result.Removed = @($signed.Keys | Where-Object { -not $here.Contains($_) } | Sort-Object -CaseSensitive)
+    # Signed by another key than the company's (it was replaced): computers set up with the new certificate reject it
+    $cert = Join-Path $Company.Keys 'wmanager-signing.cer'
+    if ([IO.File]::Exists($cert)) {
+        try {
+            $signer = Get-ManifestSigner $path
+            $own = [Security.Cryptography.X509Certificates.X509Certificate2]::new($cert).Thumbprint
+            if ($signer -and $signer -ne $own) { $result.OtherKey = $signer }
+        } catch { }
+    }
     return $result
 }
 
 function Test-SourceChanged {
     param($Changes)
-    return ($Changes.First -or ($Changes.Added.Count + $Changes.Changed.Count + $Changes.Removed.Count) -gt 0)
+    return ($Changes.First -or $Changes.Unreadable -or $Changes.OtherKey -or
+            ($Changes.Added.Count + $Changes.Changed.Count + $Changes.Removed.Count) -gt 0)
 }
 
 # Has anything in the source changed since the last signature?
@@ -236,13 +276,23 @@ function Show-SourceChanges {
     param($Company, $Changes)
     if ($null -eq $Changes) { $Changes = Get-SourceChanges $Company }
     if ($Changes.First) {
-        Write-Host "  Never signed: the first signature publishes $($Changes.Added.Count) files."
+        # publish.sh writes source-id.txt first, and signs it too
+        $count = $Changes.Added.Count
+        if ($Changes.Added -notcontains 'source-id.txt') { $count++ }
+        Write-Host "  Never signed: the first signature publishes $(Format-Count $count 'file')."
+        return
+    }
+    if ($Changes.Unreadable) {
+        Write-Host "  manifest.psd1 can't be read ($($Changes.Unreadable)); the next signature writes it anew." -ForegroundColor Yellow
         return
     }
     $when = ''
     if ($Changes.Created) { $when = ", $($Changes.Created)" }
-    if (-not (Test-SourceChanged $Changes)) {
-        Write-Host "  Nothing changed since the last signature (manifest $($Changes.Serial)$when)."
+    if ($Changes.OtherKey) {
+        Write-Host "  ! Signed with another key (certificate $($Changes.OtherKey)) than the one in keys/: sign again with it." -ForegroundColor Yellow
+    }
+    if (($Changes.Added.Count + $Changes.Changed.Count + $Changes.Removed.Count) -eq 0) {
+        if (-not $Changes.OtherKey) { Write-Host "  Nothing changed since the last signature (manifest $($Changes.Serial)$when)." }
         return
     }
     Write-Host "  Since the last signature (manifest $($Changes.Serial)$when):"
@@ -276,8 +326,10 @@ function Get-CompanyState {
                 $parts.Add('version.psd1 unreadable')
             }
         }
-        if (-not [IO.File]::Exists((Join-Path $Company.Source 'manifest.psd1'))) { $parts.Add('not signed yet') }
-        elseif (Test-UnsignedChanges $Company) { $parts.Add('changes not signed yet') }
+        $changes = Get-SourceChanges $Company
+        if ($changes.First) { $parts.Add('not signed yet') }
+        elseif ($changes.OtherKey) { $parts.Add('signed with another key') }
+        elseif (Test-SourceChanged $changes) { $parts.Add('changes not signed yet') }
         if (-not $hasKey) { $parts.Add('no signing key') }
     }
     if (-not [IO.File]::Exists($Company.Config)) { $parts.Add('no configuration yet') }
@@ -1108,7 +1160,7 @@ function Invoke-CompanyMenu {
                 '9' { $changed = Set-VersionStep $Company }
                 '10' {
                     $null = Invoke-Groups $Company 'check'
-                    if ([IO.Directory]::Exists($Company.Source)) { Show-SourceChanges $Company }
+                    Show-SourceChanges $Company
                 }
                 '11' { Publish-Company $Company }
                 '12' { Invoke-Wizard $Company }
@@ -1192,7 +1244,7 @@ try {
         if (-not $Second) {
             Invoke-CompanyMenu $company
         } elseif ($Second -eq 'publish') {
-            Publish-Company $company
+            Publish-Company $company -Confirmed:$Yes
         } elseif ($Second -eq 'changes') {
             Show-SourceChanges $company
         } elseif ($Second -eq 'config') {

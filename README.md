@@ -501,8 +501,9 @@ pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and ever
 - **The menu of a company** shows the groups, adds and removes computers, adds packages, makes a new script or job
   for a group, switches on library items, sets the wmanager version, checks, signs and runs the wizard; after a change
   it shows what the signature would publish (`+` added, `~` changed, `-` removed files since the last signature,
-  from the hashes in `manifest.psd1`) and offers to sign it. `publish` shows the same first and asks; with nothing
-  changed it signs only if you say so (e.g. once more after a new certificate). A new script or job starts from the template of `tools/groups.ps1` and opens in your editor
+  from the hashes in `manifest.psd1`, letter case included) and offers to sign it. `publish` shows the same first and
+  asks; with nothing changed it signs only if you say so, and `publish -Yes` signs without asking (for scripts). A
+  source signed with another key than the one in `keys/` (after the key was replaced) counts as a change. A new script or job starts from the template of `tools/groups.ps1` and opens in your editor
   (`$VISUAL` or `$EDITOR`, else nano or vi); when you close it, the source is checked, and a mistake opens the file
   again. The list of companies says what each one still lacks: a key, a signature of the latest changes, a
   configuration.
