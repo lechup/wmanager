@@ -492,14 +492,17 @@ pwsh tools/wm.ps1 status                                     # the computers of 
 pwsh tools/wm.ps1 globex status                              # its computers: Healthchecks, last update, errors
 pwsh tools/wm.ps1 new globex                                 # key, source, first signature, the wizard
 pwsh tools/wm.ps1 globex add-computer OFFICE-07 accounting   # any tools/groups.ps1 command, on its source
-pwsh tools/wm.ps1 globex publish                             # check and sign; then push it or copy it to its server
+pwsh tools/wm.ps1 globex changes                             # what changed since the last signature
+pwsh tools/wm.ps1 globex publish                             # those changes, then check and sign; then push or copy it
 pwsh tools/wm.ps1 globex config                              # the wizard for its provision.config.psd1
 pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and every company's configuration
 ```
 
 - **The menu of a company** shows the groups, adds and removes computers, adds packages, makes a new script or job
   for a group, switches on library items, sets the wmanager version, checks, signs and runs the wizard; after a change
-  it offers to sign it. A new script or job starts from the template of `tools/groups.ps1` and opens in your editor
+  it shows what the signature would publish (`+` added, `~` changed, `-` removed files since the last signature,
+  from the hashes in `manifest.psd1`) and offers to sign it. `publish` shows the same first and asks; with nothing
+  changed it signs only if you say so (e.g. once more after a new certificate). A new script or job starts from the template of `tools/groups.ps1` and opens in your editor
   (`$VISUAL` or `$EDITOR`, else nano or vi); when you close it, the source is checked, and a mistake opens the file
   again. The list of companies says what each one still lacks: a key, a signature of the latest changes, a
   configuration.

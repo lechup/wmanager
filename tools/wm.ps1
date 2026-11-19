@@ -17,7 +17,8 @@
 #   pwsh tools/wm.ps1 <company>                the menu of one company
 #   pwsh tools/wm.ps1 <company> status         its computers: Healthchecks, the last update, errors, wmanager version
 #   pwsh tools/wm.ps1 <company> monitoring     the read-only keys status needs (kept in <company>/monitoring.psd1)
-#   pwsh tools/wm.ps1 <company> publish        check and sign its source (tools/publish.sh)
+#   pwsh tools/wm.ps1 <company> changes        what changed in its source since the last signature
+#   pwsh tools/wm.ps1 <company> publish        those changes, then check and sign them (tools/publish.sh)
 #   pwsh tools/wm.ps1 <company> config         the configuration wizard (init.ps1) for its provision.config.psd1
 #   pwsh tools/wm.ps1 <company> <command> ...  a tools/groups.ps1 command on its source, e.g.
 #                                              add-computer OFFICE-07 accounting, enable power all, set-version v0.2.0
@@ -190,19 +191,64 @@ function Get-SignedFiles {
     return @($list | Where-Object { $_ -ne 'manifest.psd1' -and "/$_" -notmatch '/\.' } | Sort-Object -Unique)
 }
 
-# Has anything in the source changed since the last signature? Its files against the hashes in manifest.psd1.
+# What changed in the source since the last signature: its files against the hashes in manifest.psd1. Added,
+# Changed and Removed (relative paths); First when the source was never signed; Serial and Created of the manifest.
+function Get-SourceChanges {
+    param($Company)
+    $result = [pscustomobject]@{ First = $false; Serial = ''; Created = ''; Added = @(); Changed = @(); Removed = @() }
+    $signed = $null
+    try {
+        $manifest = Import-PowerShellDataFile -LiteralPath (Join-Path $Company.Source 'manifest.psd1')
+        $signed = $manifest.Files
+        $result.Serial = [string]$manifest.Serial
+        $result.Created = [string]$manifest.Created
+    } catch { }
+    $files = @(Get-SignedFiles $Company.Source)
+    if (-not ($signed -is [hashtable])) {
+        $result.First = $true
+        $result.Added = $files
+        return $result
+    }
+    $known = @{}   # the manifest's paths as written there (its keys don't tell letter case apart)
+    foreach ($k in $signed.Keys) { $known[[string]$k] = $true }
+    $result.Added = @($files | Where-Object { -not $known.ContainsKey($_) })
+    $result.Changed = @($files | Where-Object {
+        $known.ContainsKey($_) -and $signed[$_] -ne (Get-FileHash -LiteralPath (Join-Path $Company.Source $_) -Algorithm SHA256).Hash })
+    $here = @{}
+    foreach ($f in $files) { $here[$f] = $true }
+    $result.Removed = @($known.Keys | Where-Object { -not $here.ContainsKey($_) } | Sort-Object)
+    return $result
+}
+
+function Test-SourceChanged {
+    param($Changes)
+    return ($Changes.First -or ($Changes.Added.Count + $Changes.Changed.Count + $Changes.Removed.Count) -gt 0)
+}
+
+# Has anything in the source changed since the last signature?
 function Test-UnsignedChanges {
     param($Company)
-    try { $signed = (Import-PowerShellDataFile -LiteralPath (Join-Path $Company.Source 'manifest.psd1')).Files }
-    catch { return $true }
-    if (-not ($signed -is [hashtable])) { return $true }
-    $files = @(Get-SignedFiles $Company.Source)
-    if ($files.Count -ne $signed.Count) { return $true }
-    foreach ($rel in $files) {
-        $want = $signed[$rel]
-        if (-not $want -or $want -ne (Get-FileHash -LiteralPath (Join-Path $Company.Source $rel) -Algorithm SHA256).Hash) { return $true }
+    return (Test-SourceChanged (Get-SourceChanges $Company))
+}
+
+# What the next signature would publish: + added, ~ changed, - removed
+function Show-SourceChanges {
+    param($Company, $Changes)
+    if ($null -eq $Changes) { $Changes = Get-SourceChanges $Company }
+    if ($Changes.First) {
+        Write-Host "  Never signed: the first signature publishes $($Changes.Added.Count) files."
+        return
     }
-    return $false
+    $when = ''
+    if ($Changes.Created) { $when = ", $($Changes.Created)" }
+    if (-not (Test-SourceChanged $Changes)) {
+        Write-Host "  Nothing changed since the last signature (manifest $($Changes.Serial)$when)."
+        return
+    }
+    Write-Host "  Since the last signature (manifest $($Changes.Serial)$when):"
+    foreach ($f in $Changes.Added) { Write-Host "    + $f" -ForegroundColor Green }
+    foreach ($f in $Changes.Changed) { Write-Host "    ~ $f" -ForegroundColor Yellow }
+    foreach ($f in $Changes.Removed) { Write-Host "    - $f" -ForegroundColor Red }
 }
 
 # What a company has and what it still lacks, in a few words
@@ -280,10 +326,18 @@ function Invoke-Groups {
 }
 
 # Checks and signs the source with the company's key (tools/publish.sh, which says what to do next: push or copy)
+# First it shows what the signature publishes and asks (-Confirmed: the caller already did): nothing changed means
+# no signature unless you want one (e.g. after a new certificate).
 function Publish-Company {
-    param($Company)
+    param($Company, [switch]$Confirmed)
     if (-not [IO.Directory]::Exists($Company.Source)) { throw "$($Company.Name) has no source yet: pwsh tools/wm.ps1 new $($Company.Name)" }
     if (-not (Test-HasKey $Company)) { throw "$($Company.Name) has no signing key in $($Company.Keys): pwsh tools/wm.ps1 new $($Company.Name)" }
+    if (-not $Confirmed) {
+        $changes = Get-SourceChanges $Company
+        Show-SourceChanges $Company $changes
+        $go = if (Test-SourceChanged $changes) { Read-WmYesNo 'Sign and publish this?' $true } else { Read-WmYesNo 'Sign it again anyway?' $false }
+        if (-not $go) { Write-Host '  Not signed.'; return }
+    }
     $code = Invoke-Native 'bash' @((Join-Path $script:Tools 'publish.sh'), $Company.Source, $Company.Keys)
     if ($code -ne 0) { throw 'not signed (the reason is above)' }
 }
@@ -360,7 +414,7 @@ function New-Company {
     if ([IO.File]::Exists((Join-Path $c.Source 'manifest.psd1'))) {
         Write-Host '  Already signed.'
     } else {
-        try { Publish-Company $c }
+        try { Publish-Company $c -Confirmed }
         catch { throw "$(Format-WmErrorText $_ -English); to carry on: pwsh tools/wm.ps1 new $Name" }
     }
 
@@ -1029,7 +1083,7 @@ function Invoke-CompanyMenu {
         Write-Host '  7) new job for a group: hourly, daily or weekly (from a template, in your editor)'
         Write-Host '  8) enable a ready script or job from the library'
         Write-Host '  9) set the wmanager version the computers run'
-        Write-Host ' 10) check the source'
+        Write-Host ' 10) check the source, and what changed since the last signature'
         Write-Host ' 11) sign and publish'
         Write-Host ' 12) configuration wizard (provision.config.psd1)'
         Write-Host ' 13) read-only keys for the status (Healthchecks, Grafana Cloud)'
@@ -1052,15 +1106,23 @@ function Invoke-CompanyMenu {
                 '7' { $changed = New-GroupFileStep $Company 'job' }
                 '8' { $changed = Enable-LibraryStep $Company }
                 '9' { $changed = Set-VersionStep $Company }
-                '10' { $null = Invoke-Groups $Company 'check' }
+                '10' {
+                    $null = Invoke-Groups $Company 'check'
+                    if ([IO.Directory]::Exists($Company.Source)) { Show-SourceChanges $Company }
+                }
                 '11' { Publish-Company $Company }
                 '12' { Invoke-Wizard $Company }
                 '13' { Set-Monitoring $Company }
                 default { if ($answer) { Write-Host '  Choose a number from the list, or b.' -ForegroundColor Yellow } }
             }
-            if ($changed -and (Test-UnsignedChanges $Company) -and
-                (Read-WmYesNo 'Sign and publish now? The computers see the change only after that.' $true)) {
-                Publish-Company $Company
+            if ($changed) {
+                $changes = Get-SourceChanges $Company
+                if (Test-SourceChanged $changes) {
+                    Show-SourceChanges $Company $changes
+                    if (Read-WmYesNo 'Sign and publish now? The computers see the change only after that.' $true) {
+                        Publish-Company $Company -Confirmed
+                    }
+                }
             }
         } catch {
             Write-Host "ERROR: $(Format-WmErrorText $_ -English)" -ForegroundColor Red
@@ -1131,6 +1193,8 @@ try {
             Invoke-CompanyMenu $company
         } elseif ($Second -eq 'publish') {
             Publish-Company $company
+        } elseif ($Second -eq 'changes') {
+            Show-SourceChanges $company
         } elseif ($Second -eq 'config') {
             Invoke-Wizard $company
         } elseif ($Second -eq 'status') {
