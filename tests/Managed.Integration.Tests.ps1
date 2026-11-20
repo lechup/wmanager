@@ -222,7 +222,9 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Reset-WmRun
         Clear-WmBuffer
         (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'rot2'))).Serial | Should -Be (Get-Serial (Join-Path $src 'rot2'))
-        Get-PinnedThumbprint | Should -Be $nextThumb
+        $log = @(Get-WmBuffer | ForEach-Object Line) -join "`n"
+        $log | Should -Not -Match "couldn't be changed"
+        Get-PinnedThumbprint | Should -Be $nextThumb -Because $log
         $script:WmCertCurrent | Should -Be $nextThumb
         @(Get-WmRootThumbprints) | Should -Be @($nextThumb)
         Test-Path -LiteralPath $script:WmNextCertFile | Should -BeFalse

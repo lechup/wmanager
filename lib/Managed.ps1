@@ -194,7 +194,8 @@ function Write-WmCertificateFile {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][byte[]]$Bytes)
     $tmp = "$Path.new"
     [IO.File]::WriteAllBytes($tmp, $Bytes)
-    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($tmp, $Path, $null) }
+    # [NullString]::Value: PowerShell would pass $null to a string parameter as "" (no backup file is meant)
+    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) }
     else { [IO.File]::Move($tmp, $Path) }
 }
 
