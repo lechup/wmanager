@@ -50,10 +50,11 @@ Initialize-WmLanguage -Lang 'en' -Root $repo
 $script:Self = $PSCommandPath
 $script:Tools = $PSScriptRoot
 # A full path: the .NET calls, the cmdlets and the bash tools must all read it the same way
+# Relative to the current location of PowerShell ($PWD, also when this runs inside a session that went elsewhere)
 function ConvertTo-FullPath {
     param([string]$Path)
     if ($Path -match '^~(/|$)') { $Path = $HOME + $Path.Substring(1) }
-    return [IO.Path]::GetFullPath($Path)
+    return [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path))
 }
 
 $script:Root = if ($env:WMANAGER_COMPANIES) { ConvertTo-FullPath $env:WMANAGER_COMPANIES } else { Join-Path $HOME 'wmanager-companies' }
@@ -669,13 +670,14 @@ function Read-Secret {
 }
 
 # A file only you can read: created so (no moment with the umask's mode), and checked
+# -New: only a file that isn't there yet (an IOException otherwise)
 function Write-PrivateFile {
-    param([string]$Path, [string]$Text)
+    param([string]$Path, [string]$Text, [switch]$New)
     $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Text)
     if ($IsWindows) { [IO.File]::WriteAllBytes($Path, $bytes); return }
     $mode = [IO.UnixFileMode]'UserRead, UserWrite'
     $opts = New-Object IO.FileStreamOptions
-    $opts.Mode = [IO.FileMode]::Create
+    $opts.Mode = if ($New) { [IO.FileMode]::CreateNew } else { [IO.FileMode]::Create }
     $opts.Access = [IO.FileAccess]::Write
     $opts.UnixCreateMode = $mode
     $fs = New-Object IO.FileStream($Path, $opts)
@@ -1387,54 +1389,88 @@ function Test-Published {
 
 $script:BackupRoot = Join-Path $HOME 'wmanager-backups'
 
-# The whole folder of a company in <folder>/<company>-<time>.tar.gz, readable by you only: its source (with its Git
-# history), its key (protected by its passphrase), its configuration and the read-only keys (tokens in plain text,
-# as on the USB drive). Not inside the companies folder: the next backup would hold the last one.
+# A path with its links resolved (realpath -m: also for a folder that isn't there yet)
+function Resolve-RealPath {
+    param([string]$Path)
+    $real = & realpath -m -- $Path 2>$null
+    if ($LASTEXITCODE -eq 0 -and $real) { return [string]$real }
+    return $Path
+}
+
+# The whole folder of a company in <folder>/<company>-<UTC time>.tar.gz, readable by you only: its source (with its
+# Git history), its key (protected by its passphrase), its configuration and the read-only keys (tokens in plain
+# text, as on the USB drive). Linked folders (the README says a company may link its folders) go in with what they
+# hold. Not inside the companies folder: the next backup would hold the last one.
 function Backup-Company {
     param($Company, [string]$Folder)
     if (-not (Get-Command tar -CommandType Application -ErrorAction SilentlyContinue)) { throw 'tar not found' }
     $Folder = if ($Folder) { ConvertTo-FullPath $Folder } else { $script:BackupRoot }
-    $root = $script:Root.TrimEnd('/') + '/'
-    if (($Folder.TrimEnd('/') + '/').StartsWith($root)) { throw "a backup can't go into $($script:Root) (the next backup would hold it); choose another folder" }
+    $root = (Resolve-RealPath $script:Root).TrimEnd('/') + '/'
+    if (((Resolve-RealPath $Folder).TrimEnd('/') + '/').StartsWith($root, [StringComparison]::Ordinal)) {
+        throw "a backup can't go into $($script:Root) (the next backup would hold it); choose another folder"
+    }
     if (-not [IO.Directory]::Exists($Folder)) {
         New-Item -ItemType Directory -Force -Path $Folder | Out-Null
         if (-not $IsWindows) { [IO.File]::SetUnixFileMode($Folder, [IO.UnixFileMode]'UserRead, UserWrite, UserExecute') }
     }
-    $archive = Join-Path $Folder ('{0}-{1}.tar.gz' -f $Company.Name, (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    # Made readable by you only first: tar then writes into it and keeps that mode
-    Write-PrivateFile $archive ''
-    $code = Invoke-Native 'tar' @('-czf', $archive, '-C', $script:Root, $Company.Name)
-    if ($code -ne 0) {
-        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
-        throw "the backup of $($Company.Name) failed (tar code $code, the reason is above)"
+    # A name no backup has yet, made readable by you only before tar writes into it (tar keeps that mode)
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss') + 'Z'
+    $archive = $null
+    for ($i = 1; -not $archive; $i++) {
+        if ($i -gt 50) { throw "too many backups of $($Company.Name) at $stamp in $Folder" }
+        $name = if ($i -eq 1) { "$($Company.Name)-$stamp.tar.gz" } else { "$($Company.Name)-$stamp-$i.tar.gz" }
+        $try = Join-Path $Folder $name
+        if ([IO.File]::Exists($try)) { continue }
+        Write-PrivateFile $try '' -New
+        $archive = $try
     }
-    $entries = @(& tar -tzf $archive 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $entries.Count -eq 0) { throw "the backup $archive can't be read back" }
+    $code = Invoke-Native 'tar' @('-czf', $archive, '--dereference', '-C', $script:Root, $Company.Name)
+    $count = 0
+    if ($code -eq 0) {
+        $count = (& tar -tzf $archive 2>$null | Measure-Object).Count
+        if ($LASTEXITCODE -ne 0) { $count = 0 }
+    }
+    if ($code -ne 0 -or $count -eq 0) {
+        # A backup that failed or can't be read back must not sit among the good ones
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        throw "the backup of $($Company.Name) failed (tar code $code; the reason is above)"
+    }
     $size = (Get-Item -LiteralPath $archive).Length
-    Write-Host ('  {0}: {1} ({2} entries, {3:N0} KB)' -f $Company.Name, $archive, $entries.Count, ($size / 1KB))
+    Write-Host ('  {0}: {1} ({2} entries, {3:N0} KB)' -f $Company.Name, $archive, $count, ($size / 1KB))
     return $archive
 }
 
+# Every company; one that fails doesn't stop the others, and the end says which failed
 function Backup-AllCompanies {
     param([string]$Folder)
     $companies = @(Get-Companies)
     if ($companies.Count -eq 0) { throw "no companies in $($script:Root) yet" }
     Write-Step 'Backups'
-    foreach ($c in $companies) { $null = Backup-Company $c $Folder }
+    $failed = New-Object System.Collections.Generic.List[string]
+    foreach ($c in $companies) {
+        try { $null = Backup-Company $c $Folder }
+        catch { Write-Host "  $($c.Name): ERROR: $(Format-WmErrorText $_ -English)" -ForegroundColor Red; $failed.Add($c.Name) }
+    }
     Write-Host '  They hold the signing keys (protected by their passphrases) and the tokens of the configurations:'
     Write-Host '  keep them somewhere safe, not on the USB drive. Back: pwsh tools/wm.ps1 restore <archive>'
+    if ($failed.Count -gt 0) { throw "no backup of $($failed -join ', ') (above)" }
 }
 
-# A company back from a backup. The archive must hold one company's folder and nothing outside it; a company that is
-# here already is never overwritten (move it away first).
+# A company back from a backup. The archive must hold one company's folder (a folder with source, keys or config)
+# and no links (backups have none) or paths outside it. It is unpacked into a hidden folder of the companies folder,
+# checked there and only then renamed into place, so a failure leaves nothing behind; a company that is here already
+# is never overwritten (move it away first).
 function Restore-Company {
     param([string]$Archive)
     if (-not $Archive) { throw 'usage: pwsh tools/wm.ps1 restore <archive>' }
     $Archive = ConvertTo-FullPath $Archive
     if (-not [IO.File]::Exists($Archive)) { throw "no file $Archive" }
     if (-not (Get-Command tar -CommandType Application -ErrorAction SilentlyContinue)) { throw 'tar not found' }
+    $listing = @(& tar -tvzf $Archive 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $listing.Count -eq 0) { throw "$Archive is not a backup of wm.ps1 (tar can't read it)" }
+    $links = @($listing | Where-Object { $_ -match '^[lh]' })
+    if ($links.Count -gt 0) { throw "$Archive holds links ($($links[0].Trim())); a backup of wm.ps1 has none: not restored" }
     $entries = @(& tar -tzf $Archive 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $entries.Count -eq 0) { throw "$Archive is not a backup of wm.ps1 (tar can't read it)" }
     $bad = @($entries | Where-Object { $_ -match '^/' -or "/$_/" -match '/\.\./' })
     if ($bad.Count -gt 0) { throw "$Archive has paths outside a company's folder ($($bad[0])); not restored" }
     $tops = @($entries | ForEach-Object { ($_ -split '/')[0] } | Where-Object { $_ } | Sort-Object -Unique -CaseSensitive)
@@ -1447,8 +1483,23 @@ function Restore-Company {
         throw "there is a company $($existing[0].Name) already; restore never overwrites one: move $($existing[0].Dir) away first"
     }
     New-Item -ItemType Directory -Force -Path $script:Root | Out-Null
-    $code = Invoke-Native 'tar' @('-xzf', $Archive, '-C', $script:Root, '--no-same-owner')
-    if ($code -ne 0) { throw "restoring $name failed (tar code $code, the reason is above)" }
+    $staging = Join-Path $script:Root ('.restore-' + [guid]::NewGuid().ToString('N'))   # hidden: never a company
+    New-Item -ItemType Directory -Path $staging | Out-Null
+    try {
+        $code = Invoke-Native 'tar' @('-xzf', $Archive, '-C', $staging, '--no-same-owner')
+        if ($code -ne 0) { throw "restoring $name failed (tar code $code, the reason is above); nothing was restored" }
+        $unpacked = Join-Path $staging $name
+        $parts = @('source', 'keys', 'config') | Where-Object { [IO.Directory]::Exists((Join-Path $unpacked $_)) }
+        if (-not [IO.Directory]::Exists($unpacked) -or @($parts).Count -eq 0) {
+            throw "$Archive holds no company's folder (source, keys or config in $name); not restored"
+        }
+        if (@(Get-ChildItem -LiteralPath $unpacked -Recurse -Force | Where-Object { $_.LinkType }).Count -gt 0) {
+            throw "$Archive unpacked into links; not restored"
+        }
+        Move-Item -LiteralPath $unpacked -Destination (Join-Path $script:Root $name)
+    } finally {
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    }
     $c = Get-CompanyPaths $name
     Write-Host "Restored $name into $($c.Dir): $(Get-CompanyState $c)"
     Write-Host "Its menu: pwsh tools/wm.ps1 $name"
@@ -1810,6 +1861,10 @@ try {
     } elseif ($First -eq 'usb') {
         Copy-ToUsb $Second
     } elseif ($First -eq 'backup') {
+        # "backup acme" means acme's backup, not a folder ./acme for every company's archives
+        if ($Second -and @(Get-Companies | Where-Object { $_.Name -ieq $Second }).Count -gt 0) {
+            throw "$Second is a company: pwsh tools/wm.ps1 $Second backup [<folder>] backs it up; pwsh tools/wm.ps1 backup [<folder>] backs up every company"
+        }
         Backup-AllCompanies $Second
     } elseif ($First -eq 'restore') {
         Restore-Company $Second

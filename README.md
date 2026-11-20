@@ -556,12 +556,14 @@ pwsh tools/wm.ps1 restore ~/wmanager-backups/globex-20261120-101500.tar.gz
   certificate. `run.cmd` from there asks which company the computer is for (with a single company, it doesn't ask).
   `install.ps1` asks the same when you give it the folder (e.g. `\\server\share\wmanager`). wmanager v0.2.0 and older
   don't ask yet: with those, run `run.cmd -ConfigPath E:\wmanager\configs\acme\provision.config.psd1`.
-- **`backup [<folder>]`** (or `<company> backup`) puts each company's folder into `<company>-<time>.tar.gz`,
+- **`backup [<folder>]`** (or `<company> backup`) puts each company's folder into `<company>-<UTC time>.tar.gz`,
   readable by you only: the source with its Git history, the key (protected by its passphrase), the configuration
-  and the read-only keys (tokens in plain text, as on the USB drive). Keep the archives somewhere safe, away from the
-  USB drive; without the key a company's computers need a new certificate. `restore <archive>` brings a company back,
-  on another computer too; it accepts only an archive of one company's folder and never overwrites a company that is
-  there.
+  and the read-only keys (tokens in plain text, as on the USB drive). Linked folders go in with what they hold. A
+  company that fails doesn't stop the others; the end names it. Keep the archives somewhere safe, away from the USB
+  drive; without the key a company's computers need a new certificate. `restore <archive>` brings a company back, on
+  another computer too: it accepts only an archive of one company's folder (with no links or paths outside it),
+  unpacks it into a hidden folder first and moves it into place only when it is whole, and never overwrites a company
+  that is there.
 - **A company you already have** moves in by its folders: create `~/wmanager-companies/acme` and move (or link) its
   source to `source`, its key folder to `keys` and its configuration folder to `config`.
 
