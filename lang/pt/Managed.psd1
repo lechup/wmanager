@@ -79,4 +79,5 @@
     'managed.cert_switched'              = 'A origem está assinada com o próximo certificado {0}: passa a ser o deste computador, em vez de {1}.'
     'managed.cert_next_removed'          = 'A origem já não indica o próximo certificado de assinatura {0}; deixa de ser de confiança.'
     'managed.cert_next_invalid'          = 'O próximo certificado de assinatura da origem não pode ser usado: {0}'
+    'managed.cert_change_failed'         = 'Não foi possível mudar o certificado de assinatura: {0}. Esta execução mantém o atual; a seguinte tenta de novo.'
 }

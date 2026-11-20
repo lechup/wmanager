@@ -79,4 +79,5 @@
     'managed.cert_switched'              = 'La source est signée avec le prochain certificat {0} : il devient celui de cet ordinateur, à la place de {1}.'
     'managed.cert_next_removed'          = 'La source n''indique plus le prochain certificat de signature {0} ; il n''est plus approuvé.'
     'managed.cert_next_invalid'          = 'Le prochain certificat de signature de la source est inutilisable : {0}'
+    'managed.cert_change_failed'         = 'Le certificat de signature n''a pas pu être changé : {0}. Cette exécution garde celui en place ; la suivante réessaiera.'
 }

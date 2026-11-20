@@ -12,7 +12,8 @@
 #   groups/<group>/...                     any other files the scripts use
 #
 # The manifest lists every file with its SHA256. A computer accepts a manifest only when its Authenticode
-# signature is valid and made with the certificate named in the config, its SourceId is the one from the config
+# signature is valid and made with the certificate named in the config (during a key change also with the next
+# certificate the source named, see "Key change" below), its SourceId is the one from the config
 # (a manifest signed for another source doesn't fit), and its Serial is not lower than the one accepted before
 # (an old signed manifest can't be replayed). Every downloaded file must match its hash and every list must parse
 # before the new version replaces the previous one in state\managed. When the source can't be reached, or its new
@@ -123,7 +124,6 @@ function Get-WmSigningCertificate {
 # A signing certificate file with the checks of Get-WmSigningCertificate
 function Read-WmSigningCertificateFile {
     param([Parameter(Mandatory = $true)][string]$Path)
-    $path = $Path
     $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($path)
     if ($cert.HasPrivateKey) { throw (New-WmError 'managed.cert_private_key' @($path)) }
     foreach ($ext in $cert.Extensions) {
@@ -188,6 +188,16 @@ $script:WmNextCertFile = Join-Path $script:WmStateDir 'signing-next.cer'
 $script:WmCertCurrent = ''
 $script:WmCertNext = ''
 
+# A certificate file written whole or not at all (a temporary file next to it, then a replace): the computer's own
+# certificate is what it trusts the source by, and half a file would leave it with none
+function Write-WmCertificateFile {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][byte[]]$Bytes)
+    $tmp = "$Path.new"
+    [IO.File]::WriteAllBytes($tmp, $Bytes)
+    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($tmp, $Path, $null) }
+    else { [IO.File]::Move($tmp, $Path) }
+}
+
 # The next certificate this computer trusts during a key change, or $null
 function Get-WmNextCertificate {
     if (-not (Test-Path -LiteralPath $script:WmNextCertFile)) { return $null }
@@ -206,7 +216,7 @@ function Update-WmSigningKeys {
           [Parameter(Mandatory = $true)]$Current, $Next)
     $signer = (Get-AuthenticodeSignature -LiteralPath (Join-Path $script:WmManagedDir 'manifest.psd1')).SignerCertificate
     if ($Next -and $signer -and $signer.Thumbprint -eq $Next.Thumbprint) {
-        [IO.File]::WriteAllBytes((Join-Path $script:WmRoot (Get-WmCertificateFileName $Config)), $Next.RawData)
+        Write-WmCertificateFile -Path (Join-Path $script:WmRoot (Get-WmCertificateFileName $Config)) -Bytes $Next.RawData
         Remove-Item -LiteralPath $script:WmNextCertFile -Force -ErrorAction SilentlyContinue
         Write-WmLog -Key 'managed.cert_switched' -Arguments @($Next.Thumbprint, $Current.Thumbprint)
         $Current = $Next
@@ -220,7 +230,7 @@ function Update-WmSigningKeys {
     }
     if ($named -and $named.Thumbprint -ne $Current.Thumbprint) {
         if (-not $Next -or $Next.Thumbprint -ne $named.Thumbprint) {
-            [IO.File]::WriteAllBytes($script:WmNextCertFile, $named.RawData)
+            Write-WmCertificateFile -Path $script:WmNextCertFile -Bytes $named.RawData
             Write-WmLog -Key 'managed.cert_next_added' -Arguments @($named.Thumbprint)
             $Next = $named
             Install-WmSigningCertificate -Certificate $Current -Next $Next
@@ -236,8 +246,9 @@ function Update-WmSigningKeys {
     return $Current
 }
 
-# Removes the certificates wmanager added to the root store. Returns how many.
+# Removes the certificates wmanager added to the root store, and forgets a next certificate. Returns how many.
 function Remove-WmSigningCertificates {
+    Remove-Item -LiteralPath $script:WmNextCertFile -Force -ErrorAction SilentlyContinue
     $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
     $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     $n = 0
@@ -441,7 +452,12 @@ function Resolve-WmManagedContent {
         if (-not $manifest) { throw (New-WmError 'managed.no_verified_copy') }
         if (-not $CachedOnly) { Write-WmLog -Key 'managed.using_last_copy' -Arguments @($manifest.Serial) -Level warn }
     }
-    $cert = Update-WmSigningKeys -Config $Config -Manifest $manifest -Current $cert -Next $next
+    # The key change: a failure here (a locked file, the root store) doesn't stop the run, which keeps what it trusts;
+    # the next run tries again
+    $script:WmCertCurrent = $cert.Thumbprint
+    $script:WmCertNext = if ($next) { $next.Thumbprint } else { '' }
+    try { $null = Update-WmSigningKeys -Config $Config -Manifest $manifest -Current $cert -Next $next }
+    catch { Write-WmLog -Key 'managed.cert_change_failed' -Arguments @(Get-WmErrorText $_) -Level error }
 
     $snap = Read-WmManagedSnapshot -Dir $script:WmManagedDir -Manifest $manifest
     $groups = Get-WmComputerGroups -Map $snap.Map -ComputerName $script:WmHostName

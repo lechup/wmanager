@@ -79,4 +79,5 @@
     'managed.cert_switched'              = 'De bron is ondertekend met het volgende certificaat {0}: dat is nu het certificaat van deze computer, in plaats van {1}.'
     'managed.cert_next_removed'          = 'De bron noemt het volgende ondertekeningscertificaat {0} niet meer; het wordt niet meer vertrouwd.'
     'managed.cert_next_invalid'          = 'Het volgende ondertekeningscertificaat van de bron is niet bruikbaar: {0}'
+    'managed.cert_change_failed'         = 'Het ondertekeningscertificaat kon niet worden gewisseld: {0}. Deze run houdt het huidige; de volgende probeert het opnieuw.'
 }

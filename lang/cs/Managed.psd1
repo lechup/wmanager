@@ -79,4 +79,5 @@
     'managed.cert_switched'              = 'Zdroj je podepsán příštím certifikátem {0}: nyní je to certifikát tohoto počítače, místo {1}.'
     'managed.cert_next_removed'          = 'Zdroj už neuvádí příští podpisový certifikát {0}; přestává být důvěryhodný.'
     'managed.cert_next_invalid'          = 'Příští podpisový certifikát zdroje nelze použít: {0}'
+    'managed.cert_change_failed'         = 'Podpisový certifikát se nepodařilo vyměnit: {0}. Tento běh ponechává stávající; příští to zkusí znovu.'
 }

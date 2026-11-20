@@ -558,8 +558,10 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             Set-Content -LiteralPath (Join-Path $dir 'monitoring.psd1') -Value "@{ HealthchecksApiKey = 'hc-read'; HealthchecksApiUrl = ''; LokiReadToken = 'loki-read' }"
             Copy-Item -Recurse -LiteralPath (Join-Path $script:nextKeys 'keys') -Destination (Join-Path $dir 'keys-new')
             Copy-Item -LiteralPath (Join-Path $dir 'keys-new/wmanager-signing.cer') -Destination (Join-Path $dir 'source/next-certificate.cer')
+            Set-Content -LiteralPath (Join-Path $dir 'key-change.psd1') -Value "@{ State = 'named'; Thumbprint = '$($script:nextThumb)' }"
             $r = Invoke-Tool acme status
-            $r.Text | Should -Match 'Key change: 1 of 5 computers trust the new certificate'
+            $r.Text | Should -Match 'key change: 1 of 5 computers trust the new certificate'
+            (Invoke-Tool status).Text | Should -Match '(?m)^acme\s+.*; key change: 1 of 5 computers trust the new certificate'
         }
 
         It 'counts a check of the project as a computer only when it is one, without a slug prefix' {
@@ -964,6 +966,7 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             Get-CerThumbprint (Join-Path $dir 'keys/wmanager-signing.cer') | Should -Be $new
             @(Get-ChildItem -LiteralPath $dir -Directory -Filter 'keys-old-*').Count | Should -Be 1
             Test-Path -LiteralPath (Join-Path $dir 'keys-new') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $dir 'key-change.psd1') | Should -BeFalse
             Test-Path -LiteralPath (Join-Path $dir 'source/next-certificate.cer') | Should -BeFalse
             Get-Signer (Join-Path $dir 'source/manifest.psd1') | Should -Be $new
             Get-CerThumbprint (Join-Path $dir 'config/wmanager-signing.cer') | Should -Be $new
@@ -984,13 +987,41 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             (Invoke-Tool list).Text | Should -Not -Match 'key change'
         }
 
-        It 'refuses a source that names a next certificate without its key' {
+        It 'refuses to start over changes that aren''t signed, or a next certificate nobody started' {
             $dir = Add-Company 'gamma' -Source -Config $script:managed
             Add-FakeKey $dir
+            Write-Manifest (Join-Path $dir 'source')
+            Add-Content -LiteralPath (Join-Path $dir 'source/choco-reqs.txt') -Value 'half-done'
+            $r = Invoke-Typed @('y') @('gamma', 'rotate-key')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match "changes that aren't signed .*sign them \(publish\) or undo them first"
+            $r.Text | Should -Not -Match 'Start the key change\?'
             Set-Content -LiteralPath (Join-Path $dir 'source/next-certificate.cer') -Value 'x'
             $r = Invoke-Tool gamma rotate-key
             $r.Code | Should -Be 1
-            $r.Text | Should -Match 'names a next certificate .* has no key'
+            $r.Text | Should -Match 'names a next certificate \(next-certificate\.cer\) but no key change is under way'
+        }
+
+        It 'refuses a source signed with another key when no key change is under way' -Skip:$cantSign {
+            $dir = New-SignedCompany 'delta'
+            Remove-Item -LiteralPath (Join-Path $dir 'keys') -Recurse
+            Move-Item -LiteralPath (Join-Path $dir 'keys-new') -Destination (Join-Path $dir 'keys')   # put there by hand
+            $r = Invoke-Tool delta rotate-key
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'signed with another key .* no key change is under way'
+        }
+
+        It 'carries on a switch that stopped before its signature' -Skip:$cantSign {
+            $dir = New-SignedCompany 'epsilon'
+            $new = Get-CerThumbprint (Join-Path $dir 'keys-new/wmanager-signing.cer')
+            $null = Invoke-Typed @('y') @('epsilon', 'rotate-key')
+            # As if the switch had begun and its signature stopped
+            Set-Content -LiteralPath (Join-Path $dir 'key-change.psd1') -Value "@{ State = 'switching'; Thumbprint = '$new' }"
+            $r = Invoke-Typed @() @('epsilon', 'rotate-key')
+            $r.Code | Should -Be 0 -Because $r.Text
+            Get-Signer (Join-Path $dir 'source/manifest.psd1') | Should -Be $new
+            Test-Path -LiteralPath (Join-Path $dir 'key-change.psd1') | Should -BeFalse
+            $r.Text | Should -Match 'is signed with the new key'
         }
     }
 

@@ -79,4 +79,5 @@
     'managed.cert_switched'              = 'Die Quelle ist mit dem nächsten Zertifikat {0} signiert: Es ist jetzt das Zertifikat dieses Computers, anstelle von {1}.'
     'managed.cert_next_removed'          = 'Die Quelle nennt das nächste Signaturzertifikat {0} nicht mehr; ihm wird nicht mehr vertraut.'
     'managed.cert_next_invalid'          = 'Das nächste Signaturzertifikat der Quelle ist nicht verwendbar: {0}'
+    'managed.cert_change_failed'         = 'Das Signaturzertifikat konnte nicht gewechselt werden: {0}. Dieser Lauf behält das bisherige; der nächste versucht es erneut.'
 }

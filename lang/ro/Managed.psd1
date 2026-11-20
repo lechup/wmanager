@@ -79,4 +79,5 @@
     'managed.cert_switched'              = 'Sursa este semnată cu următorul certificat {0}: acum este cel al acestui calculator, în locul lui {1}.'
     'managed.cert_next_removed'          = 'Sursa nu mai indică următorul certificat de semnare {0}; nu mai este de încredere.'
     'managed.cert_next_invalid'          = 'Următorul certificat de semnare al sursei nu poate fi folosit: {0}'
+    'managed.cert_change_failed'         = 'Certificatul de semnare nu a putut fi schimbat: {0}. Această rulare îl păstrează pe cel actual; următoarea încearcă din nou.'
 }

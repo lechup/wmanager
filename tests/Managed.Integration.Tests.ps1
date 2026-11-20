@@ -245,8 +245,10 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Reset-WmKeys
     }
 
-    It 'removes the signing certificate again (Restore-Backup)' {
+    It 'removes the signing certificate again, and forgets a next one (Restore-Backup)' {
+        Copy-Item -LiteralPath (Join-Path $src 'next-signing.cer') -Destination $script:WmNextCertFile -Force
         Remove-WmSigningCertificates | Should -BeGreaterThan 0
+        Test-Path -LiteralPath $script:WmNextCertFile | Should -BeFalse
         (Get-AuthenticodeSignature -LiteralPath (Join-Path $src 'v2\manifest.psd1')).Status | Should -Not -Be 'Valid'
     }
 }

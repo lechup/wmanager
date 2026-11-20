@@ -79,4 +79,5 @@
     'managed.cert_switched'              = 'Źródło jest podpisane następnym certyfikatem {0}: teraz to certyfikat tego komputera, zamiast {1}.'
     'managed.cert_next_removed'          = 'Źródło nie wskazuje już następnego certyfikatu podpisu {0}; nie jest już zaufany.'
     'managed.cert_next_invalid'          = 'Następnego certyfikatu podpisu ze źródła nie da się użyć: {0}'
+    'managed.cert_change_failed'         = 'Nie udało się zmienić certyfikatu podpisu: {0}. Ten przebieg zostaje przy dotychczasowym; następny spróbuje ponownie.'
 }

@@ -79,4 +79,5 @@
     'managed.cert_switched'              = 'La fuente está firmada con el próximo certificado {0}: ahora es el de este equipo, en lugar de {1}.'
     'managed.cert_next_removed'          = 'La fuente ya no indica el próximo certificado de firma {0}; deja de ser de confianza.'
     'managed.cert_next_invalid'          = 'El próximo certificado de firma de la fuente no se puede usar: {0}'
+    'managed.cert_change_failed'         = 'No se pudo cambiar el certificado de firma: {0}. Esta ejecución mantiene el actual; la siguiente lo vuelve a intentar.'
 }
