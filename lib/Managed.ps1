@@ -117,6 +117,13 @@ function Get-WmSigningCertificate {
     param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$Dir)
     $path = Join-Path $Dir (Get-WmCertificateFileName $Config)
     if (-not (Test-Path -LiteralPath $path)) { throw (New-WmError 'managed.cert_missing' @($path)) }
+    return (Read-WmSigningCertificateFile $path)
+}
+
+# A signing certificate file with the checks of Get-WmSigningCertificate
+function Read-WmSigningCertificateFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $path = $Path
     $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($path)
     if ($cert.HasPrivateKey) { throw (New-WmError 'managed.cert_private_key' @($path)) }
     foreach ($ext in $cert.Extensions) {
@@ -143,26 +150,90 @@ function Write-WmCertificateExpiry {
 # Windows accepts the signature of a self-signed certificate only if the certificate is in the computer's
 # trusted root store. It is added with a FriendlyName, so a previous wmanager certificate is removed when the
 # config gets a new one, and Restore-Backup.ps1 can find it. A certificate that was already there stays as it was.
+# -Next: during a key change, the next certificate (Update-WmSigningKeys) is trusted too.
 function Install-WmSigningCertificate {
-    param([Parameter(Mandatory = $true)]$Certificate)
+    param([Parameter(Mandatory = $true)]$Certificate, $Next)
+    $wanted = @(@($Certificate, $Next) | Where-Object { $_ })
     $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
     $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     try {
         foreach ($c in @($store.Certificates)) {
-            if ($c.FriendlyName -eq $script:WmCertFriendlyName -and $c.Thumbprint -ne $Certificate.Thumbprint) {
+            if ($c.FriendlyName -eq $script:WmCertFriendlyName -and @($wanted | Where-Object { $_.Thumbprint -eq $c.Thumbprint }).Count -eq 0) {
                 $store.Remove($c)
                 Write-WmLog -Key 'managed.cert_previous_removed' -Arguments @($c.Thumbprint)
             }
         }
-        if (-not (@($store.Certificates) | Where-Object { $_.Thumbprint -eq $Certificate.Thumbprint })) {
-            $copy = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($Certificate.RawData)
-            $copy.FriendlyName = $script:WmCertFriendlyName
-            $store.Add($copy)
-            Write-WmLog -Key 'managed.cert_added' -Arguments @($Certificate.Thumbprint)
+        foreach ($w in $wanted) {
+            if (-not (@($store.Certificates) | Where-Object { $_.Thumbprint -eq $w.Thumbprint })) {
+                $copy = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($w.RawData)
+                $copy.FriendlyName = $script:WmCertFriendlyName
+                $store.Add($copy)
+                Write-WmLog -Key 'managed.cert_added' -Arguments @($w.Thumbprint)
+            }
         }
     } finally {
         $store.Close()
     }
+}
+
+# --- Key change ---------------------------------------------------------------------------------------------------
+# The source names its next signing certificate in next-certificate.cer while it is still signed with the current
+# key; a computer that reads it (in a copy signed with a key it trusts) keeps it in state\signing-next.cer and trusts
+# both. When the source comes signed with the next certificate, that one becomes the computer's own: it replaces the
+# certificate file next to the installed configuration, and the old one leaves the root store. A source that no
+# longer names it (a key change called off) makes the computer forget it. tools/wm.ps1 rotate-key does the other side.
+
+$script:WmNextCertName = 'next-certificate.cer'
+$script:WmNextCertFile = Join-Path $script:WmStateDir 'signing-next.cer'
+$script:WmCertCurrent = ''
+$script:WmCertNext = ''
+
+# The next certificate this computer trusts during a key change, or $null
+function Get-WmNextCertificate {
+    if (-not (Test-Path -LiteralPath $script:WmNextCertFile)) { return $null }
+    try { return (Read-WmSigningCertificateFile $script:WmNextCertFile) }
+    catch {
+        Write-WmLog -Key 'managed.cert_next_invalid' -Arguments @((Get-WmErrorText $_)) -Level warn
+        Remove-Item -LiteralPath $script:WmNextCertFile -Force -ErrorAction SilentlyContinue
+        return $null
+    }
+}
+
+# After the copy in state\managed is settled: switches to the next certificate when the copy is signed with it, and
+# takes (or forgets) the next certificate the copy names. Returns the computer's certificate after that.
+function Update-WmSigningKeys {
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)]$Manifest,
+          [Parameter(Mandatory = $true)]$Current, $Next)
+    $signer = (Get-AuthenticodeSignature -LiteralPath (Join-Path $script:WmManagedDir 'manifest.psd1')).SignerCertificate
+    if ($Next -and $signer -and $signer.Thumbprint -eq $Next.Thumbprint) {
+        [IO.File]::WriteAllBytes((Join-Path $script:WmRoot (Get-WmCertificateFileName $Config)), $Next.RawData)
+        Remove-Item -LiteralPath $script:WmNextCertFile -Force -ErrorAction SilentlyContinue
+        Write-WmLog -Key 'managed.cert_switched' -Arguments @($Next.Thumbprint, $Current.Thumbprint)
+        $Current = $Next
+        $Next = $null
+        Install-WmSigningCertificate -Certificate $Current
+    }
+    $named = $null
+    if ($Manifest.Files.ContainsKey($script:WmNextCertName)) {
+        try { $named = Read-WmSigningCertificateFile (Join-Path $script:WmManagedDir $script:WmNextCertName) }
+        catch { Write-WmLog -Key 'managed.cert_next_invalid' -Arguments @((Get-WmErrorText $_)) -Level warn }
+    }
+    if ($named -and $named.Thumbprint -ne $Current.Thumbprint) {
+        if (-not $Next -or $Next.Thumbprint -ne $named.Thumbprint) {
+            [IO.File]::WriteAllBytes($script:WmNextCertFile, $named.RawData)
+            Write-WmLog -Key 'managed.cert_next_added' -Arguments @($named.Thumbprint)
+            $Next = $named
+            Install-WmSigningCertificate -Certificate $Current -Next $Next
+        }
+    } elseif ($Next) {
+        Remove-Item -LiteralPath $script:WmNextCertFile -Force -ErrorAction SilentlyContinue
+        Write-WmLog -Key 'managed.cert_next_removed' -Arguments @($Next.Thumbprint)
+        $Next = $null
+        Install-WmSigningCertificate -Certificate $Current
+    }
+    $script:WmCertCurrent = $Current.Thumbprint
+    $script:WmCertNext = if ($Next) { $Next.Thumbprint } else { '' }
+    return $Current
 }
 
 # Removes the certificates wmanager added to the root store. Returns how many.
@@ -180,12 +251,13 @@ function Remove-WmSigningCertificates {
     return $n
 }
 
+# $Thumbprint: the certificates this computer trusts (its own, and during a key change the next one)
 function Test-WmManifestSignature {
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Thumbprint)
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string[]]$Thumbprint)
     $sig = Get-AuthenticodeSignature -LiteralPath $Path
     if ($sig.Status -ne 'Valid') { throw (New-WmError 'managed.signature_invalid' @($sig.Status, $sig.StatusMessage)) }
-    if (-not $sig.SignerCertificate -or $sig.SignerCertificate.Thumbprint -ne $Thumbprint) {
-        throw (New-WmError 'managed.signature_other_cert' @($sig.SignerCertificate.Thumbprint, $Thumbprint))
+    if (-not $sig.SignerCertificate -or $Thumbprint -notcontains $sig.SignerCertificate.Thumbprint) {
+        throw (New-WmError 'managed.signature_other_cert' @($sig.SignerCertificate.Thumbprint, ($Thumbprint -join ', ')))
     }
 }
 
@@ -206,7 +278,7 @@ function Get-WmManagedFile {
 
 # The manifest of the copy in state\managed, if it is still valid for the configured certificate and source.
 function Get-WmManagedManifest {
-    param([Parameter(Mandatory = $true)][string]$Thumbprint, [Parameter(Mandatory = $true)][string]$SourceId)
+    param([Parameter(Mandatory = $true)][string[]]$Thumbprint, [Parameter(Mandatory = $true)][string]$SourceId)
     $file = Join-Path $script:WmManagedDir 'manifest.psd1'
     if (-not (Test-Path -LiteralPath $file)) { return $null }
     try {
@@ -269,7 +341,7 @@ function Repair-WmManagedSwap {
 # Returns the accepted manifest, or $null when the manifest could not be downloaded (warning logged).
 # Throws when the new version is invalid (signature, source, serial, hashes, content) or can't be put in place.
 function Update-WmManagedCopy {
-    param([Parameter(Mandatory = $true)][hashtable]$Settings, [Parameter(Mandatory = $true)][string]$Thumbprint)
+    param([Parameter(Mandatory = $true)][hashtable]$Settings, [Parameter(Mandatory = $true)][string[]]$Thumbprint)
     $sourceId = [string]$Settings.SourceId
     $new = "$($script:WmManagedDir).new"
     if (Test-Path -LiteralPath $new) { Remove-Item -LiteralPath $new -Recurse -Force -ErrorAction Stop }
@@ -348,24 +420,28 @@ function Resolve-WmManagedContent {
     $sourceId = [string]$settings.SourceId
     # The installed copy of the certificate (Install-WmFiles puts it next to the installed config)
     $cert = Get-WmSigningCertificate -Config $Config -Dir $script:WmRoot
-    Install-WmSigningCertificate -Certificate $cert
+    $next = Get-WmNextCertificate
+    if ($next -and $next.Thumbprint -eq $cert.Thumbprint) { Remove-Item -LiteralPath $script:WmNextCertFile -Force -ErrorAction SilentlyContinue; $next = $null }
+    Install-WmSigningCertificate -Certificate $cert -Next $next
+    $trusted = @(@($cert, $next) | Where-Object { $_ } | ForEach-Object { $_.Thumbprint })
     Repair-WmManagedSwap
 
     $manifest = $null
     if (-not $CachedOnly) {
         Write-WmCertificateExpiry $cert
         try {
-            $manifest = Update-WmManagedCopy -Settings $settings -Thumbprint $cert.Thumbprint
+            $manifest = Update-WmManagedCopy -Settings $settings -Thumbprint $trusted
         } catch {
             Write-WmLog -Key 'managed.new_version_rejected' -Arguments @(Get-WmErrorText $_) -Level error
         }
         try { [IO.File]::WriteAllText($script:WmManagedChecked, [DateTime]::UtcNow.ToString('o')) } catch { }
     }
     if (-not $manifest) {
-        $manifest = Get-WmManagedManifest -Thumbprint $cert.Thumbprint -SourceId $sourceId
+        $manifest = Get-WmManagedManifest -Thumbprint $trusted -SourceId $sourceId
         if (-not $manifest) { throw (New-WmError 'managed.no_verified_copy') }
         if (-not $CachedOnly) { Write-WmLog -Key 'managed.using_last_copy' -Arguments @($manifest.Serial) -Level warn }
     }
+    $cert = Update-WmSigningKeys -Config $Config -Manifest $manifest -Current $cert -Next $next
 
     $snap = Read-WmManagedSnapshot -Dir $script:WmManagedDir -Manifest $manifest
     $groups = Get-WmComputerGroups -Map $snap.Map -ComputerName $script:WmHostName

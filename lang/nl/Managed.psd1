@@ -75,4 +75,8 @@
     'managed.version_bad_hash'         = 'version.psd1: {0} is geen SHA256 (64 hexadecimale cijfers)'
     'managed.version_bad_group'        = 'version.psd1: ongeldige groepsnaam in Groups: ''{0}'''
     'managed.version_groups_not_table' = 'version.psd1: Groups moet elke groep een eigen Version, Url en Sha256 geven'
+    'managed.cert_next_added'            = 'De bron noemt zijn volgende ondertekeningscertificaat ({0}); dat wordt ook vertrouwd tot de bron erop overstapt.'
+    'managed.cert_switched'              = 'De bron is ondertekend met het volgende certificaat {0}: dat is nu het certificaat van deze computer, in plaats van {1}.'
+    'managed.cert_next_removed'          = 'De bron noemt het volgende ondertekeningscertificaat {0} niet meer; het wordt niet meer vertrouwd.'
+    'managed.cert_next_invalid'          = 'Het volgende ondertekeningscertificaat van de bron is niet bruikbaar: {0}'
 }

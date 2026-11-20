@@ -67,11 +67,16 @@ function Get-WmName {
 
 # The end of a run as one JSON line for Loki only (not on the screen or in the log file), read by tools/wm.ps1 status:
 # the version that finished the run (after a self-update that failed, the old one, though the new one logged its
-# start), and the run's warnings and errors. Sent with the rest of the run by Send-WmLokiLog.
+# start), the run's warnings and errors, and the signing certificates the computer trusts (its own, and the next one
+# during a key change: lib\Managed.ps1), so the administrator sees which computers are ready to switch. Sent with
+# the rest of the run by Send-WmLokiLog.
 function Add-WmRunRecord {
     param([Parameter(Mandatory = $true)][string]$Job)
+    $current = [string](Get-Variable -Name WmCertCurrent -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    $next = [string](Get-Variable -Name WmCertNext -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
     $line = '{"wmanager_run":' + (ConvertTo-WmJsonString ([string]$script:WmVersion)) + ',"job":' + (ConvertTo-WmJsonString $Job) +
-            ',"warnings":' + [int]$script:WmWarnings + ',"errors":' + [int]$script:WmErrors + '}'
+            ',"warnings":' + [int]$script:WmWarnings + ',"errors":' + [int]$script:WmErrors +
+            ',"cert":' + (ConvertTo-WmJsonString $current) + ',"next":' + (ConvertTo-WmJsonString $next) + '}'
     $script:WmLogBuffer.Add([pscustomobject]@{ Time = Get-Date; Level = 'info'; Line = $line; Task = '' })
 }
 

@@ -75,4 +75,8 @@
     'managed.version_bad_hash'         = 'version.psd1: {0} não é um SHA256 (64 dígitos hexadecimais)'
     'managed.version_bad_group'        = 'version.psd1: nome de grupo inválido em Groups: ''{0}'''
     'managed.version_groups_not_table' = 'version.psd1: Groups tem de dar a cada grupo a sua própria Version, Url e Sha256'
+    'managed.cert_next_added'            = 'A origem indica o seu próximo certificado de assinatura ({0}); também é de confiança até a origem passar para ele.'
+    'managed.cert_switched'              = 'A origem está assinada com o próximo certificado {0}: passa a ser o deste computador, em vez de {1}.'
+    'managed.cert_next_removed'          = 'A origem já não indica o próximo certificado de assinatura {0}; deixa de ser de confiança.'
+    'managed.cert_next_invalid'          = 'O próximo certificado de assinatura da origem não pode ser usado: {0}'
 }

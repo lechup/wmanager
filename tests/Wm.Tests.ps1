@@ -424,19 +424,26 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
             $probe.Start(); $script:port = $probe.LocalEndpoint.Port; $probe.Stop()
             $script:requests = Join-Path $TestDrive 'requests.txt'
-            $script:server = Start-ThreadJob -ArgumentList $script:port, $script:requests -ScriptBlock {
-                param($port, $log)
+            # A key change: office-01 trusts the new certificate (its run record names it as next)
+            $script:nextKeys = Join-Path $TestDrive 'status-next'
+            $script:nextThumb = 'NONE'
+            if (Get-Command openssl -ErrorAction SilentlyContinue) {
+                Add-TestKey $script:nextKeys
+                $script:nextThumb = [Security.Cryptography.X509Certificates.X509Certificate2]::new((Join-Path $script:nextKeys 'keys/wmanager-signing.cer')).Thumbprint
+            }
+            $script:server = Start-ThreadJob -ArgumentList $script:port, $script:requests, $script:nextThumb -ScriptBlock {
+                param($port, $log, $nextThumb)
                 $l = New-Object System.Net.HttpListener
                 $l.Prefixes.Add("http://127.0.0.1:$port/")
                 $l.Start()
                 $now = [datetimeoffset]::UtcNow
                 $line = { param($t, $level, $text) @{ ns = [decimal]($t.ToUnixTimeMilliseconds() * 1000000); text = ('{0} [{1}] {2}' -f $t.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss'), $level, $text) } }
-                $record = { param($t, $version, $w, $e) @{ ns = [decimal]($t.ToUnixTimeMilliseconds() * 1000000 + 1); text = ('{{"wmanager_run":"{0}","job":"update","warnings":{1},"errors":{2}}}' -f $version, $w, $e) } }
+                $record = { param($t, $version, $w, $e, $next = '') @{ ns = [decimal]($t.ToUnixTimeMilliseconds() * 1000000 + 1); text = ('{{"wmanager_run":"{0}","job":"update","warnings":{1},"errors":{2},"cert":"OLD","next":"{3}"}}' -f $version, $w, $e, $next) } }
                 $entries = @{
                     # A computer that sends run records
                     'office-01' = @((& $line $now.AddMinutes(-65) 'INFO' 'wmanager v0.3.0 update on OFFICE-01'),
                                     (& $line $now.AddHours(-1) 'INFO' 'End: warnings 0, errors 0.'),
-                                    (& $record $now.AddHours(-1) 'v0.3.0' 0 0))
+                                    (& $record $now.AddHours(-1) 'v0.3.0' 0 0 $nextThumb))
                     # One on v0.2.0, from before run records
                     'office-02' = @((& $line $now.AddDays(-3).AddMinutes(-5) 'INFO' 'wmanager v0.2.0 update on OFFICE-02'),
                                     (& $line $now.AddDays(-3) 'INFO' 'End: warnings 1, errors 2.'))
@@ -544,6 +551,15 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $sent = @(Get-Content -LiteralPath $script:requests | Where-Object { $_ -like '/loki/api/v1/query_range *' })
             $sent.Count | Should -BeGreaterThan 2
             $sent[0] | Should -Match 'service_name="wmanager"'
+        }
+
+        It 'says during a key change how many computers trust the new certificate' -Skip:$noOpenssl {
+            $dir = Add-StatusCompany
+            Set-Content -LiteralPath (Join-Path $dir 'monitoring.psd1') -Value "@{ HealthchecksApiKey = 'hc-read'; HealthchecksApiUrl = ''; LokiReadToken = 'loki-read' }"
+            Copy-Item -Recurse -LiteralPath (Join-Path $script:nextKeys 'keys') -Destination (Join-Path $dir 'keys-new')
+            Copy-Item -LiteralPath (Join-Path $dir 'keys-new/wmanager-signing.cer') -Destination (Join-Path $dir 'source/next-certificate.cer')
+            $r = Invoke-Tool acme status
+            $r.Text | Should -Match 'Key change: 1 of 5 computers trust the new certificate'
         }
 
         It 'counts a check of the project as a computer only when it is one, without a slug prefix' {
@@ -895,6 +911,86 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $r.Code | Should -Be 1
             $r.Text | Should -Match 'there is a company Acme already'
             Test-Path -LiteralPath (Join-Path $env:WMANAGER_COMPANIES 'acme') | Should -BeFalse
+        }
+    }
+
+    Context 'key change' {
+        BeforeAll {
+            # The certificate that signed manifest.psd1, and a certificate file's thumbprint
+            function Get-Signer {
+                param([string]$Path)
+                $m = [regex]::Match([IO.File]::ReadAllText($Path), '(?s)# SIG # Begin signature block\r?\n(.*?)# SIG # End signature block')
+                $b64 = (($m.Groups[1].Value -split '\r?\n') | ForEach-Object { $_ -replace '^# ', '' }) -join ''
+                $cms = New-Object System.Security.Cryptography.Pkcs.SignedCms
+                $cms.Decode([Convert]::FromBase64String($b64))
+                return $cms.SignerInfos[0].Certificate.Thumbprint
+            }
+            function Get-CerThumbprint { param([string]$Path) [Security.Cryptography.X509Certificates.X509Certificate2]::new($Path).Thumbprint }
+            # A company with a key, signed; and a second key ready in keys-new (no passphrase to ask for)
+            function New-SignedCompany {
+                param([string]$Name)
+                $dir = Add-Company $Name -Source -Config $script:managed
+                Add-TestKey $dir
+                $r = Invoke-Typed @() @($Name, 'publish', '-Yes')
+                $r.Code | Should -Be 0 -Because $r.Text
+                $other = Join-Path $TestDrive ('next-' + [guid]::NewGuid().ToString('N'))
+                Add-TestKey $other
+                Move-Item -LiteralPath (Join-Path $other 'keys') -Destination (Join-Path $dir 'keys-new')
+                return $dir
+            }
+        }
+
+        It 'names the new certificate first, signed with the current key, then switches to the new key' -Skip:$cantSign {
+            $dir = New-SignedCompany 'acme'
+            $old = Get-CerThumbprint (Join-Path $dir 'keys/wmanager-signing.cer')
+            $new = Get-CerThumbprint (Join-Path $dir 'keys-new/wmanager-signing.cer')
+
+            $r = Invoke-Typed @('y') @('acme', 'rotate-key')
+            $r.Code | Should -Be 0 -Because $r.Text
+            $r.Text | Should -Match 'The new key is in .*keys-new already'
+            Get-CerThumbprint (Join-Path $dir 'source/next-certificate.cer') | Should -Be $new
+            Get-Signer (Join-Path $dir 'source/manifest.psd1') | Should -Be $old
+            $r.Text | Should -Match 'once the computers have it'
+            (Invoke-Tool list).Text | Should -Match '(?m)^acme\s+.*key change in progress'
+
+            # Without read-only keys nobody can tell how many are ready: the switch defaults to no
+            $r = Invoke-Typed @('s', '') @('acme', 'rotate-key')
+            $r.Text | Should -Match "can't be told here"
+            $r.Text | Should -Match 'Switch acme to the new key\? \[y/N\]'
+            Get-CerThumbprint (Join-Path $dir 'keys/wmanager-signing.cer') | Should -Be $old
+
+            $r = Invoke-Typed @('s', 'y') @('acme', 'rotate-key')
+            $r.Code | Should -Be 0 -Because $r.Text
+            Get-CerThumbprint (Join-Path $dir 'keys/wmanager-signing.cer') | Should -Be $new
+            @(Get-ChildItem -LiteralPath $dir -Directory -Filter 'keys-old-*').Count | Should -Be 1
+            Test-Path -LiteralPath (Join-Path $dir 'keys-new') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $dir 'source/next-certificate.cer') | Should -BeFalse
+            Get-Signer (Join-Path $dir 'source/manifest.psd1') | Should -Be $new
+            Get-CerThumbprint (Join-Path $dir 'config/wmanager-signing.cer') | Should -Be $new
+            $r.Text | Should -Match 'pwsh tools/wm\.ps1 usb'
+            (Invoke-Tool list).Text | Should -Not -Match 'key change|another key'
+        }
+
+        It 'calls a key change off: the source no longer names the new certificate, still signed with the current key' -Skip:$cantSign {
+            $dir = New-SignedCompany 'beta'
+            $old = Get-CerThumbprint (Join-Path $dir 'keys/wmanager-signing.cer')
+            $null = Invoke-Typed @('y') @('beta', 'rotate-key')
+            $r = Invoke-Typed @('c', 'y') @('beta', 'rotate-key')
+            $r.Code | Should -Be 0 -Because $r.Text
+            Test-Path -LiteralPath (Join-Path $dir 'source/next-certificate.cer') | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $dir -Directory -Filter 'keys-called-off-*').Count | Should -Be 1
+            Get-CerThumbprint (Join-Path $dir 'keys/wmanager-signing.cer') | Should -Be $old
+            Get-Signer (Join-Path $dir 'source/manifest.psd1') | Should -Be $old
+            (Invoke-Tool list).Text | Should -Not -Match 'key change'
+        }
+
+        It 'refuses a source that names a next certificate without its key' {
+            $dir = Add-Company 'gamma' -Source -Config $script:managed
+            Add-FakeKey $dir
+            Set-Content -LiteralPath (Join-Path $dir 'source/next-certificate.cer') -Value 'x'
+            $r = Invoke-Tool gamma rotate-key
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'names a next certificate .* has no key'
         }
     }
 

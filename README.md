@@ -275,6 +275,18 @@ none yet (a new or re-provisioned one), and keep computers on the version they a
 So keep write access to the source tight anyway, and when you remove a dangerous script, check new computers after
 provisioning.
 
+**A new key** (`pwsh tools/wm.ps1 <company> rotate-key`) reaches the computers through the source itself, in two
+steps. First the source names the next certificate in `next-certificate.cer`, still signed with the current key: a
+computer that reads it keeps it in `state\signing-next.cer`, adds it to the root store and accepts either signature
+from then on. When the source comes signed with the new key, that certificate replaces the computer's own (the file
+next to the installed configuration) and the old one leaves the root store; a source that stops naming it (a change
+called off) makes the computers forget it. Each run reports the certificates a computer trusts in its run record, so
+`tools/wm.ps1 status` says how many are ready to switch. A computer that missed the first step rejects the new
+signature and keeps its last copy until it gets the new certificate with its configuration (`run.cmd`), as does a
+computer provisioned again from a USB drive with the old certificate: put the drive together again after the switch.
+A key that leaked is not changed this way (whoever has it could name a certificate too): give the computers a new
+configuration with `run.cmd`.
+
 Windows accepts a self-signed signature only from a certificate in the computer's trusted root store, so provisioning
 adds the wmanager certificate to **LocalMachine\Root** (with the friendly name `wmanager-signing`). The certificate is
 limited to code signing and is not a CA, so it can't vouch for websites or other certificates; but anything signed with
@@ -498,6 +510,7 @@ pwsh tools/wm.ps1 globex target                              # where the compute
 pwsh tools/wm.ps1 globex sync                                # send the signed source there again, and check it
 pwsh tools/wm.ps1 globex config                              # the wizard for its provision.config.psd1
 pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and every company's configuration
+pwsh tools/wm.ps1 globex rotate-key                          # a new signing key, in two steps
 pwsh tools/wm.ps1 backup                                     # every company as an archive, in ~/wmanager-backups
 pwsh tools/wm.ps1 restore ~/wmanager-backups/globex-20261120-101500.tar.gz
 ```
@@ -564,6 +577,12 @@ pwsh tools/wm.ps1 restore ~/wmanager-backups/globex-20261120-101500.tar.gz
   another computer too: it accepts only an archive of one company's folder (with no links or paths outside it),
   unpacks it into a hidden folder first and moves it into place only when it is whole, and never overwrites a company
   that is there.
+- **`rotate-key`** changes a company's signing key with a time when the computers trust both: it makes the new key
+  (`keys-new/`, a passphrase of its own), names its certificate in the source and signs it with the current key. Run
+  again once `status` shows the computers have it, it switches: the previous key goes to `keys-old-<date>` (keep it
+  until every computer has switched), the new one to `keys/`, the configuration gets the new certificate (put the USB
+  drive together again), and the source is signed with the new key. It can also call the change off. See
+  [How a computer checks the source](#how-a-computer-checks-the-source).
 - **A company you already have** moves in by its folders: create `~/wmanager-companies/acme` and move (or link) its
   source to `source`, its key folder to `keys` and its configuration folder to `config`.
 
@@ -691,7 +710,9 @@ The integration tests (`tests\Managed.Integration.Tests.ps1`) change the compute
    another source, a changed file and a changed manifest; a script runs once per content and a failing one every time;
    jobs run when due, their JSON lines reach the Loki batch with the `task` label; the example system report runs;
    the hourly task is registered; the wizard accepts the manifest signed with the source certificate and names
-   another signer.
+   another signer; a key change: the next certificate is trusted, forgotten when the source stops naming it, and
+   becomes the computer's own when the source comes signed with it, while a source signed with a key the computer was
+   never told about is rejected.
 3. Linux, PowerShell 7: the tests of the configuration wizard (`init.ps1` also runs there), the languages,
    `tools/groups.ps1` and `tools/wm.ps1` (a new company signed with osslsigncode, when the runner's version can sign
    PowerShell files).
