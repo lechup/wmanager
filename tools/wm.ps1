@@ -10,6 +10,8 @@
 #   pwsh tools/wm.ps1                          the menu
 #   pwsh tools/wm.ps1 list                     the companies and their state
 #   pwsh tools/wm.ps1 status                   the computers of every company, one line each (Healthchecks, Loki)
+#   pwsh tools/wm.ps1 backup [<folder>]        every company as an archive (default ~/wmanager-backups)
+#   pwsh tools/wm.ps1 restore <archive>        a company back from its archive (never over one that is here)
 #   pwsh tools/wm.ps1 new <company>            key, source (from examples/management), first signature, configuration;
 #                                              run it again and it carries on where it stopped
 #   pwsh tools/wm.ps1 usb <folder>             wmanager (the latest release, when the folder has none) and every
@@ -22,6 +24,7 @@
 #                                              them where the computers read it; -Yes: without asking, for scripts
 #   pwsh tools/wm.ps1 <company> sync           send the signed source where the computers read it, and check they can
 #   pwsh tools/wm.ps1 <company> target         where that is: a Git repository (gh can create it) or a folder
+#   pwsh tools/wm.ps1 <company> backup [<f>]   the company as an archive
 #   pwsh tools/wm.ps1 <company> config         the configuration wizard (init.ps1) for its provision.config.psd1
 #   pwsh tools/wm.ps1 <company> <command> ...  a tools/groups.ps1 command on its source, e.g.
 #                                              add-computer OFFICE-07 accounting, enable power all, set-version v0.2.0
@@ -54,7 +57,7 @@ function ConvertTo-FullPath {
 }
 
 $script:Root = if ($env:WMANAGER_COMPANIES) { ConvertTo-FullPath $env:WMANAGER_COMPANIES } else { Join-Path $HOME 'wmanager-companies' }
-$script:Commands = @('list', 'new', 'usb', 'status', 'help')
+$script:Commands = @('list', 'new', 'usb', 'status', 'backup', 'restore', 'help')
 $script:Releases = 'https://github.com/lechup/wmanager/releases'
 
 function Show-Usage {
@@ -348,7 +351,7 @@ function Show-Companies {
     foreach ($c in $companies) { Write-Host ('{0,-20} {1}' -f $c.Name, (Get-CompanyState $c)) }
     # Folders whose names can't be a company's (a command, a number...) are left out: say so
     foreach ($d in @(Get-ChildItem -LiteralPath $script:Root -Directory | Where-Object { -not (Test-CompanyName $_.Name) })) {
-        Write-Warn "$($d.Name) in $($script:Root) is left out: a company's name has 2 to 40 letters, digits, '.', '-', '_', with a letter, and isn't list, new, usb, status or help"
+        Write-Warn "$($d.Name) in $($script:Root) is left out: a company's name has 2 to 40 letters, digits, '.', '-', '_', with a letter, and isn't list, new, usb, status, backup, restore or help"
     }
 }
 
@@ -452,7 +455,7 @@ function Invoke-Wizard {
 function New-Company {
     param([string]$Name)
     if (-not (Test-CompanyName $Name)) {
-        throw "invalid company name '$Name': 2 to 40 letters, digits, '.', '-', '_', with a letter (not list, new, usb, status or help)"
+        throw "invalid company name '$Name': 2 to 40 letters, digits, '.', '-', '_', with a letter (not list, new, usb, status, backup, restore or help)"
     }
     # Folders that differ only in letter case would be one folder on the USB drive (configs\<company>)
     $other = @(Get-Companies | Where-Object { $_.Name -ieq $Name -and $_.Name -cne $Name })
@@ -1379,6 +1382,79 @@ function Test-Published {
 }
 
 # ---------------------------------------------------------------------------
+# Backup: a company as one archive, and back
+# ---------------------------------------------------------------------------
+
+$script:BackupRoot = Join-Path $HOME 'wmanager-backups'
+
+# The whole folder of a company in <folder>/<company>-<time>.tar.gz, readable by you only: its source (with its Git
+# history), its key (protected by its passphrase), its configuration and the read-only keys (tokens in plain text,
+# as on the USB drive). Not inside the companies folder: the next backup would hold the last one.
+function Backup-Company {
+    param($Company, [string]$Folder)
+    if (-not (Get-Command tar -CommandType Application -ErrorAction SilentlyContinue)) { throw 'tar not found' }
+    $Folder = if ($Folder) { ConvertTo-FullPath $Folder } else { $script:BackupRoot }
+    $root = $script:Root.TrimEnd('/') + '/'
+    if (($Folder.TrimEnd('/') + '/').StartsWith($root)) { throw "a backup can't go into $($script:Root) (the next backup would hold it); choose another folder" }
+    if (-not [IO.Directory]::Exists($Folder)) {
+        New-Item -ItemType Directory -Force -Path $Folder | Out-Null
+        if (-not $IsWindows) { [IO.File]::SetUnixFileMode($Folder, [IO.UnixFileMode]'UserRead, UserWrite, UserExecute') }
+    }
+    $archive = Join-Path $Folder ('{0}-{1}.tar.gz' -f $Company.Name, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    # Made readable by you only first: tar then writes into it and keeps that mode
+    Write-PrivateFile $archive ''
+    $code = Invoke-Native 'tar' @('-czf', $archive, '-C', $script:Root, $Company.Name)
+    if ($code -ne 0) {
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        throw "the backup of $($Company.Name) failed (tar code $code, the reason is above)"
+    }
+    $entries = @(& tar -tzf $archive 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $entries.Count -eq 0) { throw "the backup $archive can't be read back" }
+    $size = (Get-Item -LiteralPath $archive).Length
+    Write-Host ('  {0}: {1} ({2} entries, {3:N0} KB)' -f $Company.Name, $archive, $entries.Count, ($size / 1KB))
+    return $archive
+}
+
+function Backup-AllCompanies {
+    param([string]$Folder)
+    $companies = @(Get-Companies)
+    if ($companies.Count -eq 0) { throw "no companies in $($script:Root) yet" }
+    Write-Step 'Backups'
+    foreach ($c in $companies) { $null = Backup-Company $c $Folder }
+    Write-Host '  They hold the signing keys (protected by their passphrases) and the tokens of the configurations:'
+    Write-Host '  keep them somewhere safe, not on the USB drive. Back: pwsh tools/wm.ps1 restore <archive>'
+}
+
+# A company back from a backup. The archive must hold one company's folder and nothing outside it; a company that is
+# here already is never overwritten (move it away first).
+function Restore-Company {
+    param([string]$Archive)
+    if (-not $Archive) { throw 'usage: pwsh tools/wm.ps1 restore <archive>' }
+    $Archive = ConvertTo-FullPath $Archive
+    if (-not [IO.File]::Exists($Archive)) { throw "no file $Archive" }
+    if (-not (Get-Command tar -CommandType Application -ErrorAction SilentlyContinue)) { throw 'tar not found' }
+    $entries = @(& tar -tzf $Archive 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $entries.Count -eq 0) { throw "$Archive is not a backup of wm.ps1 (tar can't read it)" }
+    $bad = @($entries | Where-Object { $_ -match '^/' -or "/$_/" -match '/\.\./' })
+    if ($bad.Count -gt 0) { throw "$Archive has paths outside a company's folder ($($bad[0])); not restored" }
+    $tops = @($entries | ForEach-Object { ($_ -split '/')[0] } | Where-Object { $_ } | Sort-Object -Unique -CaseSensitive)
+    if ($tops.Count -ne 1 -or -not (Test-CompanyName $tops[0])) {
+        throw "$Archive holds $($tops -join ', '), not one company's folder; not restored"
+    }
+    $name = $tops[0]
+    $existing = @(Get-Companies | Where-Object { $_.Name -ieq $name })
+    if ($existing.Count -gt 0) {
+        throw "there is a company $($existing[0].Name) already; restore never overwrites one: move $($existing[0].Dir) away first"
+    }
+    New-Item -ItemType Directory -Force -Path $script:Root | Out-Null
+    $code = Invoke-Native 'tar' @('-xzf', $Archive, '-C', $script:Root, '--no-same-owner')
+    if ($code -ne 0) { throw "restoring $name failed (tar code $code, the reason is above)" }
+    $c = Get-CompanyPaths $name
+    Write-Host "Restored $name into $($c.Dir): $(Get-CompanyState $c)"
+    Write-Host "Its menu: pwsh tools/wm.ps1 $name"
+}
+
+# ---------------------------------------------------------------------------
 # Menus
 # ---------------------------------------------------------------------------
 
@@ -1620,6 +1696,7 @@ function Invoke-CompanyMenu {
         Write-Host ' 14) configuration wizard (provision.config.psd1)'
         Write-Host ' 15) read-only keys for the status (Healthchecks, Grafana Cloud)'
         Write-Host ' 16) where the computers read the source from (Git repository or folder)'
+        Write-Host ' 17) a backup of this company (an archive of its source, key and configuration)'
         Write-Host '  b) back'
         $answer = Read-Line 'Choose'
         if ($null -eq $answer -or $answer -eq 'b' -or $answer -eq 'q') { return }
@@ -1649,6 +1726,11 @@ function Invoke-CompanyMenu {
                 '14' { Invoke-Wizard $Company }
                 '15' { Set-Monitoring $Company }
                 '16' { Set-PublishTarget $Company }
+                '17' {
+                    $folder = [string](Read-Line "Folder for the archive (Enter = $($script:BackupRoot))")
+                    $null = Backup-Company $Company $folder
+                    Write-Host '  It holds the signing key (protected by its passphrase) and the tokens: keep it safe.'
+                }
                 default { if ($answer) { Write-Host '  Choose a number from the list, or b.' -ForegroundColor Yellow } }
             }
             if ($changed) {
@@ -1678,6 +1760,8 @@ function Invoke-Menu {
         Write-Host '  s) status of the computers of every company'
         Write-Host '  n) a new company'
         Write-Host '  u) wmanager and the configurations onto a USB drive or a share'
+        Write-Host '  k) a backup of every company (archives)'
+        Write-Host '  r) a company back from a backup'
         Write-Host '  q) quit'
         $answer = Read-Line 'Choose'
         if ($null -eq $answer -or $answer -eq 'q') { return }
@@ -1693,11 +1777,17 @@ function Invoke-Menu {
             } elseif ($answer -eq 'n') {
                 $name = [string](Read-Line 'Name of the new company (letters, digits, . - _), e.g. acme')
                 if ($name) { New-Company $name }
+            } elseif ($answer -eq 'k') {
+                $folder = [string](Read-Line "Folder for the archives (Enter = $($script:BackupRoot))")
+                Backup-AllCompanies $folder
+            } elseif ($answer -eq 'r') {
+                $archive = [string](Read-Line 'The archive (a .tar.gz from a backup)')
+                if ($archive) { Restore-Company $archive }
             } elseif ($answer -eq 'u') {
                 $folder = [string](Read-Line 'Folder on the USB drive or the share, e.g. /media/you/USB/wmanager')
                 if ($folder) { Copy-ToUsb $folder }
             } elseif ($answer) {
-                Write-Host '  Choose a number from the list, s, n, u or q.' -ForegroundColor Yellow
+                Write-Host '  Choose a number from the list, s, n, u, k, r or q.' -ForegroundColor Yellow
             }
         } catch {
             Write-Host "ERROR: $(Format-WmErrorText $_ -English)" -ForegroundColor Red
@@ -1719,6 +1809,10 @@ try {
         New-Company $Second
     } elseif ($First -eq 'usb') {
         Copy-ToUsb $Second
+    } elseif ($First -eq 'backup') {
+        Backup-AllCompanies $Second
+    } elseif ($First -eq 'restore') {
+        Restore-Company $Second
     } elseif ($First -eq 'status') {
         Show-AllStatus
     } elseif ($First -eq 'help') {
@@ -1734,6 +1828,8 @@ try {
             if ((Sync-Company $company -Wait:$Yes) -eq $false) { exit 1 }
         } elseif ($Second -eq 'target') {
             Set-PublishTarget $company
+        } elseif ($Second -eq 'backup') {
+            $null = Backup-Company $company @($Rest | Where-Object { $_ })[0]
         } elseif ($Second -eq 'changes') {
             Show-SourceChanges $company
         } elseif ($Second -eq 'config') {

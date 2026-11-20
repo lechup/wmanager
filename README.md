@@ -498,6 +498,8 @@ pwsh tools/wm.ps1 globex target                              # where the compute
 pwsh tools/wm.ps1 globex sync                                # send the signed source there again, and check it
 pwsh tools/wm.ps1 globex config                              # the wizard for its provision.config.psd1
 pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and every company's configuration
+pwsh tools/wm.ps1 backup                                     # every company as an archive, in ~/wmanager-backups
+pwsh tools/wm.ps1 restore ~/wmanager-backups/globex-20261120-101500.tar.gz
 ```
 
 - **The menu of a company** shows the groups, adds and removes computers, adds and removes packages, makes a new
@@ -554,6 +556,12 @@ pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and ever
   certificate. `run.cmd` from there asks which company the computer is for (with a single company, it doesn't ask).
   `install.ps1` asks the same when you give it the folder (e.g. `\\server\share\wmanager`). wmanager v0.2.0 and older
   don't ask yet: with those, run `run.cmd -ConfigPath E:\wmanager\configs\acme\provision.config.psd1`.
+- **`backup [<folder>]`** (or `<company> backup`) puts each company's folder into `<company>-<time>.tar.gz`,
+  readable by you only: the source with its Git history, the key (protected by its passphrase), the configuration
+  and the read-only keys (tokens in plain text, as on the USB drive). Keep the archives somewhere safe, away from the
+  USB drive; without the key a company's computers need a new certificate. `restore <archive>` brings a company back,
+  on another computer too; it accepts only an archive of one company's folder and never overwrites a company that is
+  there.
 - **A company you already have** moves in by its folders: create `~/wmanager-companies/acme` and move (or link) its
   source to `source`, its key folder to `keys` and its configuration folder to `config`.
 

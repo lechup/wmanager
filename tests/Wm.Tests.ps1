@@ -767,6 +767,69 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         }
     }
 
+    Context 'backup' -Skip:(-not (Get-Command tar -ErrorAction SilentlyContinue)) {
+        It 'puts a company into an archive only you can read, and back, never over one that is there' {
+            $dir = Add-Company 'acme' -Source -Config "@{ LokiToken = 'a secret' }"
+            Add-FakeKey $dir
+            $backups = Join-Path $TestDrive ('backups-' + [guid]::NewGuid().ToString('N'))
+            $r = Invoke-Tool acme backup $backups
+            $r.Code | Should -Be 0 -Because $r.Text
+            $archive = @(Get-ChildItem -LiteralPath $backups -Filter 'acme-*.tar.gz')
+            $archive.Count | Should -Be 1
+            (& stat -c '%a' $archive[0].FullName) | Should -Be '600'
+            (& stat -c '%a' $backups) | Should -Be '700'
+            $entries = @(& tar -tzf $archive[0].FullName)
+            $entries | Should -Contain 'acme/keys/key.pem'
+            $entries | Should -Contain 'acme/config/provision.config.psd1'
+            $entries | Should -Contain 'acme/source/groups.psd1'
+            $entries | Should -Contain 'acme/source/.gitattributes'
+
+            # Elsewhere (another computer): back, as it was
+            $env:WMANAGER_COMPANIES = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $r = Invoke-Tool restore $archive[0].FullName
+            $r.Code | Should -Be 0 -Because $r.Text
+            $r.Text | Should -Match 'Restored acme into'
+            [IO.File]::ReadAllText((Join-Path $env:WMANAGER_COMPANIES 'acme/config/provision.config.psd1')) |
+                Should -Be ([IO.File]::ReadAllText((Join-Path $dir 'config/provision.config.psd1')))
+            $r = Invoke-Tool restore $archive[0].FullName
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'restore never overwrites one'
+        }
+
+        It 'backs up every company, but not into the companies folder' {
+            $null = Add-Company 'acme' -Source -Config '@{}'
+            $null = Add-Company 'beta' -Config '@{}'
+            $backups = Join-Path $TestDrive ('all-' + [guid]::NewGuid().ToString('N'))
+            $r = Invoke-Tool backup $backups
+            $r.Code | Should -Be 0 -Because $r.Text
+            @(Get-ChildItem -LiteralPath $backups -Filter '*.tar.gz' | ForEach-Object { ($_.Name -split '-')[0] } | Sort-Object) -join ',' |
+                Should -Be 'acme,beta'
+            $r.Text | Should -Match 'keep them somewhere safe, not on the USB drive'
+            $r = Invoke-Tool backup (Join-Path $env:WMANAGER_COMPANIES 'backups')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match "a backup can't go into"
+        }
+
+        It 'restores only an archive of one company''s folder' {
+            $work = Join-Path $TestDrive ('archives-' + [guid]::NewGuid().ToString('N'))
+            foreach ($d in @('acme', 'beta')) { New-Item -ItemType Directory -Force -Path (Join-Path $work "$d/config") | Out-Null }
+            & tar -czf (Join-Path $work 'two.tar.gz') -C $work acme beta
+            $r = Invoke-Tool restore (Join-Path $work 'two.tar.gz')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'holds acme, beta, not one company''s folder'
+            Set-Content -LiteralPath (Join-Path $TestDrive 'outside.txt') -Value 'x'
+            Push-Location $work
+            try { & tar -czPf (Join-Path $work 'evil.tar.gz') acme ../outside.txt 2>$null } finally { Pop-Location }
+            $r = Invoke-Tool restore (Join-Path $work 'evil.tar.gz')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'paths outside a company''s folder'
+            $null = Add-Company 'Acme' -Config '@{}'
+            & tar -czf (Join-Path $work 'acme.tar.gz') -C $work acme
+            $r = Invoke-Tool restore (Join-Path $work 'acme.tar.gz')
+            $r.Text | Should -Match 'there is a company Acme already'
+        }
+    }
+
     Context 'usb' {
         BeforeEach {
             $script:usb = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
