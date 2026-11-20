@@ -800,12 +800,17 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $dir = Add-Company 'acme' -Source -Config '@{}'
             $keysElsewhere = Join-Path $TestDrive ('keys-' + [guid]::NewGuid().ToString('N'))
             Add-FakeKey $keysElsewhere
-            New-Item -ItemType SymbolicLink -Path (Join-Path $dir 'keys') -Target (Join-Path $keysElsewhere 'keys') | Out-Null
+            $link = Join-Path $dir 'keys'
+            New-Item -ItemType SymbolicLink -Path $link -Target (Join-Path $keysElsewhere 'keys') | Out-Null
             $backups = Join-Path $TestDrive ('linked-' + [guid]::NewGuid().ToString('N'))
-            $r = Invoke-Tool acme backup $backups
-            $r.Code | Should -Be 0 -Because $r.Text
-            $r = Invoke-Tool acme backup $backups
-            $r.Code | Should -Be 0 -Because $r.Text
+            try {
+                $r = Invoke-Tool acme backup $backups
+                $r.Code | Should -Be 0 -Because $r.Text
+                $r = Invoke-Tool acme backup $backups
+                $r.Code | Should -Be 0 -Because $r.Text
+            } finally {
+                [IO.Directory]::Delete($link)   # the link only: cleaning TestDrive must not walk through it
+            }
             $archives = @(Get-ChildItem -LiteralPath $backups -Filter 'acme-*Z*.tar.gz')
             $archives.Count | Should -Be 2
             $listing = @(& tar -tvzf $archives[0].FullName)
@@ -863,10 +868,11 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $r.Code | Should -Be 1
             $r.Text | Should -Match 'paths outside a company''s folder'
             # A link (a backup has none): a keys folder that points elsewhere
-            New-Item -ItemType Directory -Force -Path (Join-Path $work 'linked') | Out-Null
-            New-Item -ItemType Directory -Force -Path (Join-Path $work 'linked/acme/config') | Out-Null
-            New-Item -ItemType SymbolicLink -Path (Join-Path $work 'linked/acme/keys') -Target '/tmp' | Out-Null
-            & tar -czf (Join-Path $work 'link.tar.gz') -C (Join-Path $work 'linked') acme
+            New-Item -ItemType Directory -Force -Path (Join-Path $work 'linked/acme/config'), (Join-Path $work 'elsewhere') | Out-Null
+            $link = Join-Path $work 'linked/acme/keys'
+            New-Item -ItemType SymbolicLink -Path $link -Target (Join-Path $work 'elsewhere') | Out-Null
+            try { & tar -czf (Join-Path $work 'link.tar.gz') -C (Join-Path $work 'linked') acme }
+            finally { [IO.Directory]::Delete($link) }
             $r = Invoke-Tool restore (Join-Path $work 'link.tar.gz')
             $r.Code | Should -Be 1
             $r.Text | Should -Match 'holds links'
