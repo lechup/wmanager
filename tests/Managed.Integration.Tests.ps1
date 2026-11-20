@@ -239,7 +239,8 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Reset-WmRun
         Clear-WmBuffer
         (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'rot2'))).Serial | Should -Be (Get-Serial (Join-Path $src 'v2'))
-        (@(Get-WmBuffer | ForEach-Object Line) -join "`n") | Should -Match 'another certificate'
+        # Its certificate isn't in the root store either, so Windows itself calls the signature untrusted
+        (@(Get-WmBuffer | ForEach-Object Line) -join "`n") | Should -Match 'Rejected the new version from the management source: invalid manifest signature|another certificate'
         Get-PinnedThumbprint | Should -Be $thumb
         Reset-WmKeys
     }
