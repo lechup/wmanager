@@ -493,7 +493,9 @@ pwsh tools/wm.ps1 globex status                              # its computers: He
 pwsh tools/wm.ps1 new globex                                 # key, source, first signature, the wizard
 pwsh tools/wm.ps1 globex add-computer OFFICE-07 accounting   # any tools/groups.ps1 command, on its source
 pwsh tools/wm.ps1 globex changes                             # what changed since the last signature
-pwsh tools/wm.ps1 globex publish                             # those changes, then check and sign; then push or copy it
+pwsh tools/wm.ps1 globex publish                             # those changes, then check, sign and send them
+pwsh tools/wm.ps1 globex target                              # where the computers read it: Git repository or folder
+pwsh tools/wm.ps1 globex sync                                # send the signed source there again, and check it
 pwsh tools/wm.ps1 globex config                              # the wizard for its provision.config.psd1
 pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and every company's configuration
 ```
@@ -522,6 +524,24 @@ pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and ever
     the configuration's `LokiUser`).
 
   Loki is read 14 days back, as long as Grafana Cloud's free plan keeps logs.
+- **Where the computers read the source** is set once per company (`target`, kept in `<company>/publish.psd1`):
+  - a Git repository of its own: the helper makes the source one if needed (`git init`, with a `.gitattributes`
+    that keeps the bytes as signed; a source inside a bigger work tree, e.g. a whole `~/wmanager-companies`, gets a
+    repository of its own, so the configurations and keys next to it are never pushed), creates a private GitHub
+    repository with `gh repo create --private` when `gh` is signed in, or adds the remote you give. For GitHub it
+    names the address for `Management.Source` (`https://raw.githubusercontent.com/<owner>/<repo>/<branch>`, with a
+    fine-grained read-only token in `Management.AuthHeader`);
+  - a folder: a share mounted on your computer (it must exist: a share that isn't mounted isn't filled on your
+    disk), or `user@host:/path` (rsync over ssh).
+
+  Only a signed source goes out, with no changes since its signature (the computers would reject them). After
+  signing, `publish` (and the menu) offers to send it: a commit listing the files and a push (git must keep the line
+  endings, as `publish.sh` checks), or the changed files and then `manifest.psd1` under another name, renamed last.
+  A folder whose manifest is newer, or belongs to another source, isn't overwritten. Files removed from the source
+  stay in a folder; the computers ignore them. Then it fetches `manifest.psd1` from the address the computers read
+  (`Management.Source`, with its `AuthHeader`) and says whether they get the new one; GitHub keeps raw files up to 5
+  minutes, so it offers to wait. A `\\server\share` address can't be checked from Linux. `publish -Yes` signs, sends
+  and waits without asking; it and `sync` end with code 1 when the computers' address doesn't give what was sent.
 - **`new`** goes step by step: a key of its own, the source from `examples/management/` (never a copy of another
   company's source, whose `source-id.txt` must stay its own), the first signature, which creates `source-id.txt`, and
   the wizard, which already offers that identifier. Each step checks whether it is done, so running `new` again
