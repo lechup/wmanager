@@ -767,6 +767,137 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         }
     }
 
+    Context 'backup' -Skip:(-not (Get-Command tar -ErrorAction SilentlyContinue)) {
+        It 'puts a company into an archive only you can read, and back, never over one that is there' {
+            $dir = Add-Company 'acme' -Source -Config "@{ LokiToken = 'a secret' }"
+            Add-FakeKey $dir
+            $backups = Join-Path $TestDrive ('backups-' + [guid]::NewGuid().ToString('N'))
+            $r = Invoke-Tool acme backup $backups
+            $r.Code | Should -Be 0 -Because $r.Text
+            $archive = @(Get-ChildItem -LiteralPath $backups -Filter 'acme-*.tar.gz')
+            $archive.Count | Should -Be 1
+            (& stat -c '%a' $archive[0].FullName) | Should -Be '600'
+            (& stat -c '%a' $backups) | Should -Be '700'
+            $entries = @(& tar -tzf $archive[0].FullName)
+            $entries | Should -Contain 'acme/keys/key.pem'
+            $entries | Should -Contain 'acme/config/provision.config.psd1'
+            $entries | Should -Contain 'acme/source/groups.psd1'
+            $entries | Should -Contain 'acme/source/.gitattributes'
+
+            # Elsewhere (another computer): back, as it was
+            $env:WMANAGER_COMPANIES = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $r = Invoke-Tool restore $archive[0].FullName
+            $r.Code | Should -Be 0 -Because $r.Text
+            $r.Text | Should -Match 'Restored acme into'
+            [IO.File]::ReadAllText((Join-Path $env:WMANAGER_COMPANIES 'acme/config/provision.config.psd1')) |
+                Should -Be ([IO.File]::ReadAllText((Join-Path $dir 'config/provision.config.psd1')))
+            $r = Invoke-Tool restore $archive[0].FullName
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'restore never overwrites one'
+        }
+
+        It 'puts linked folders in with what they hold, and never overwrites an earlier backup' {
+            $dir = Add-Company 'acme' -Source -Config '@{}'
+            $keysElsewhere = Join-Path $TestDrive ('keys-' + [guid]::NewGuid().ToString('N'))
+            Add-FakeKey $keysElsewhere
+            $link = Join-Path $dir 'keys'
+            New-Item -ItemType SymbolicLink -Path $link -Target (Join-Path $keysElsewhere 'keys') | Out-Null
+            $backups = Join-Path $TestDrive ('linked-' + [guid]::NewGuid().ToString('N'))
+            try {
+                $r = Invoke-Tool acme backup $backups
+                $r.Code | Should -Be 0 -Because $r.Text
+                $r = Invoke-Tool acme backup $backups
+                $r.Code | Should -Be 0 -Because $r.Text
+            } finally {
+                [IO.Directory]::Delete($link)   # the link only: cleaning TestDrive must not walk through it
+            }
+            $archives = @(Get-ChildItem -LiteralPath $backups -Filter 'acme-*Z*.tar.gz')
+            $archives.Count | Should -Be 2
+            $listing = @(& tar -tvzf $archives[0].FullName)
+            ($listing | Where-Object { $_ -match ' acme/keys/key\.pem$' }) | Should -Match '^-'
+            @($listing | Where-Object { $_ -match '^l' }).Count | Should -Be 0
+            $r = Invoke-Tool backup acme
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'acme is a company: pwsh tools/wm\.ps1 acme backup'
+        }
+
+        It 'backs up the other companies when one fails, and says which' {
+            $acme = Add-Company 'acme' -Source -Config '@{}'
+            $null = Add-Company 'beta' -Config '@{}'
+            $secret = Join-Path $acme 'config/unreadable.txt'
+            Set-Content -LiteralPath $secret -Value 'x'
+            & chmod 000 $secret
+            try {
+                $backups = Join-Path $TestDrive ('partial-' + [guid]::NewGuid().ToString('N'))
+                $r = Invoke-Tool backup $backups
+            } finally {
+                & chmod 600 $secret
+            }
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'acme: ERROR: the backup of acme failed'
+            $r.Text | Should -Match 'no backup of acme'
+            @(Get-ChildItem -LiteralPath $backups -Filter 'beta-*.tar.gz').Count | Should -Be 1
+            @(Get-ChildItem -LiteralPath $backups -Filter 'acme-*').Count | Should -Be 0
+        }
+
+        It 'backs up every company, but not into the companies folder' {
+            $null = Add-Company 'acme' -Source -Config '@{}'
+            $null = Add-Company 'beta' -Config '@{}'
+            $backups = Join-Path $TestDrive ('all-' + [guid]::NewGuid().ToString('N'))
+            $r = Invoke-Tool backup $backups
+            $r.Code | Should -Be 0 -Because $r.Text
+            @(Get-ChildItem -LiteralPath $backups -Filter '*.tar.gz' | ForEach-Object { ($_.Name -split '-')[0] } | Sort-Object) -join ',' |
+                Should -Be 'acme,beta'
+            $r.Text | Should -Match 'keep them somewhere safe, not on the USB drive'
+            $r = Invoke-Tool backup (Join-Path $env:WMANAGER_COMPANIES 'backups')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match "a backup can't go into"
+        }
+
+        It 'restores only an archive of one company''s folder, and leaves nothing behind when it fails' {
+            $work = Join-Path $TestDrive ('archives-' + [guid]::NewGuid().ToString('N'))
+            foreach ($d in @('acme', 'beta')) { New-Item -ItemType Directory -Force -Path (Join-Path $work "$d/config") | Out-Null }
+            & tar -czf (Join-Path $work 'two.tar.gz') -C $work acme beta
+            $r = Invoke-Tool restore (Join-Path $work 'two.tar.gz')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'holds acme, beta, not one company''s folder'
+            Set-Content -LiteralPath (Join-Path $TestDrive 'outside.txt') -Value 'x'
+            Push-Location $work
+            try { & tar -czPf (Join-Path $work 'evil.tar.gz') acme ../outside.txt 2>$null } finally { Pop-Location }
+            $r = Invoke-Tool restore (Join-Path $work 'evil.tar.gz')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'paths outside a company''s folder'
+            # A link (a backup has none): a keys folder that points elsewhere
+            New-Item -ItemType Directory -Force -Path (Join-Path $work 'linked/acme/config'), (Join-Path $work 'elsewhere') | Out-Null
+            $link = Join-Path $work 'linked/acme/keys'
+            New-Item -ItemType SymbolicLink -Path $link -Target (Join-Path $work 'elsewhere') | Out-Null
+            try { & tar -czf (Join-Path $work 'link.tar.gz') -C (Join-Path $work 'linked') acme }
+            finally { [IO.Directory]::Delete($link) }
+            $r = Invoke-Tool restore (Join-Path $work 'link.tar.gz')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'holds links'
+            # Not a company's folder: a file, or a folder without source, keys or config
+            New-Item -ItemType Directory -Force -Path (Join-Path $work 'project/acme/src') | Out-Null
+            & tar -czf (Join-Path $work 'project.tar.gz') -C (Join-Path $work 'project') acme
+            $r = Invoke-Tool restore (Join-Path $work 'project.tar.gz')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'holds no company''s folder'
+            # Cut short: tar fails partway
+            & tar -czf (Join-Path $work 'acme.tar.gz') -C $work acme
+            $bytes = [IO.File]::ReadAllBytes((Join-Path $work 'acme.tar.gz'))
+            [IO.File]::WriteAllBytes((Join-Path $work 'short.tar.gz'), $bytes[0..([int]($bytes.Length / 2))])
+            $r = Invoke-Tool restore (Join-Path $work 'short.tar.gz')
+            $r.Code | Should -Be 1
+            @(Get-ChildItem -LiteralPath $env:WMANAGER_COMPANIES -Force -ErrorAction SilentlyContinue).Count | Should -Be 0
+            # A company of that name is here already (letter case aside)
+            $null = Add-Company 'Acme' -Config '@{}'
+            $r = Invoke-Tool restore (Join-Path $work 'acme.tar.gz')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'there is a company Acme already'
+            Test-Path -LiteralPath (Join-Path $env:WMANAGER_COMPANIES 'acme') | Should -BeFalse
+        }
+    }
+
     Context 'usb' {
         BeforeEach {
             $script:usb = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
