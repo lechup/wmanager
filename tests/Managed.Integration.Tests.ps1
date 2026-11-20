@@ -38,6 +38,26 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         function Get-Serial { param([string]$Dir) [long](Import-PowerShellDataFile -LiteralPath (Join-Path $Dir 'manifest.psd1')).Serial }
 
         $thumb = (Get-WmSigningCertificate -Config (New-TestConfig (Join-Path $src 'v1')) -Dir $script:WmRoot).Thumbprint
+        $nextThumb = (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (Join-Path $src 'next-signing.cer')).Thumbprint
+
+        # The wmanager certificates in the root store
+        function Get-WmRootThumbprints {
+            $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+            try { return @($store.Certificates | Where-Object { $_.FriendlyName -eq $script:WmCertFriendlyName } | ForEach-Object Thumbprint) }
+            finally { $store.Close() }
+        }
+        # Before a key change: the first certificate pinned, no next one, no copy of the source
+        function Reset-WmKeys {
+            Copy-Item -LiteralPath (Join-Path $src 'wmanager-signing.cer') -Destination $script:WmRoot -Force
+            Remove-Item -LiteralPath $script:WmNextCertFile -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $script:WmManagedDir) { Remove-Item -LiteralPath $script:WmManagedDir -Recurse -Force }
+            $null = Remove-WmSigningCertificates
+            Install-WmSigningCertificate -Certificate (Get-WmSigningCertificate -Config (New-TestConfig (Join-Path $src 'v1')) -Dir $script:WmRoot)
+        }
+        function Get-PinnedThumbprint {
+            (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (Join-Path $script:WmRoot 'wmanager-signing.cer')).Thumbprint
+        }
     }
 
     It 'accepts the osslsigncode signature once the certificate is in the root store' {
@@ -179,8 +199,58 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         (Get-ScheduledTaskInfo -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).NextRunTime | Should -Not -BeNullOrEmpty
     }
 
-    It 'removes the signing certificate again (Restore-Backup)' {
+    It 'trusts the next certificate the source names, and forgets it when the source stops naming it' {
+        Reset-WmKeys
+        Reset-WmRun
+        (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'rot1'))).Serial | Should -Be (Get-Serial (Join-Path $src 'rot1'))
+        Test-Path -LiteralPath $script:WmNextCertFile | Should -BeTrue
+        $script:WmCertNext | Should -Be $nextThumb
+        @(Get-WmRootThumbprints | Sort-Object) | Should -Be @(@($thumb, $nextThumb) | Sort-Object)
+        Get-PinnedThumbprint | Should -Be $thumb
+
+        Reset-WmRun
+        (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'rotcancel'))).Serial | Should -Be (Get-Serial (Join-Path $src 'rotcancel'))
+        Test-Path -LiteralPath $script:WmNextCertFile | Should -BeFalse
+        $script:WmCertNext | Should -Be ''
+        @(Get-WmRootThumbprints) | Should -Be @($thumb)
+    }
+
+    It 'switches to the next certificate when the source comes signed with it' {
+        Reset-WmKeys
+        Reset-WmRun
+        $null = Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'rot1'))
+        Reset-WmRun
+        Clear-WmBuffer
+        (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'rot2'))).Serial | Should -Be (Get-Serial (Join-Path $src 'rot2'))
+        $log = @(Get-WmBuffer | ForEach-Object Line) -join "`n"
+        $log | Should -Not -Match "couldn't be changed"
+        Get-PinnedThumbprint | Should -Be $nextThumb -Because $log
+        $script:WmCertCurrent | Should -Be $nextThumb
+        @(Get-WmRootThumbprints) | Should -Be @($nextThumb)
+        Test-Path -LiteralPath $script:WmNextCertFile | Should -BeFalse
+        (@(Get-WmBuffer | ForEach-Object Line) -join "`n") | Should -Match 'signed with the next certificate'
+        # The next run trusts only the new key
+        Reset-WmRun
+        (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'rot2'))).Serial | Should -Be (Get-Serial (Join-Path $src 'rot2'))
+    }
+
+    It 'rejects the new key without the step that named it, and keeps the last copy' {
+        Reset-WmKeys
+        Reset-WmRun
+        $null = Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'v2'))
+        Reset-WmRun
+        Clear-WmBuffer
+        (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'rot2'))).Serial | Should -Be (Get-Serial (Join-Path $src 'v2'))
+        # Its certificate isn't in the root store either, so Windows itself calls the signature untrusted
+        (@(Get-WmBuffer | ForEach-Object Line) -join "`n") | Should -Match 'Rejected the new version from the management source: invalid manifest signature|another certificate'
+        Get-PinnedThumbprint | Should -Be $thumb
+        Reset-WmKeys
+    }
+
+    It 'removes the signing certificate again, and forgets a next one (Restore-Backup)' {
+        Copy-Item -LiteralPath (Join-Path $src 'next-signing.cer') -Destination $script:WmNextCertFile -Force
         Remove-WmSigningCertificates | Should -BeGreaterThan 0
+        Test-Path -LiteralPath $script:WmNextCertFile | Should -BeFalse
         (Get-AuthenticodeSignature -LiteralPath (Join-Path $src 'v2\manifest.psd1')).Status | Should -Not -Be 'Valid'
     }
 }

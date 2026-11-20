@@ -120,6 +120,7 @@ Describe 'Add-WmRunRecord' {
         $saved = $script:WmVersion, $script:WmWarnings, $script:WmErrors
         try {
             $script:WmVersion = 'v0.3.0'; $script:WmWarnings = 1; $script:WmErrors = 2
+            $script:WmCertCurrent = 'AAAA'; $script:WmCertNext = 'BBBB'   # set by lib\Managed.ps1 during a run
             Mock Write-Host { }
             Add-WmRunRecord -Job 'update'
             Should -Invoke Write-Host -Times 0
@@ -131,9 +132,12 @@ Describe 'Add-WmRunRecord' {
             $run.job | Should -Be 'update'
             $run.warnings | Should -Be 1
             $run.errors | Should -Be 2
+            $run.cert | Should -Be 'AAAA'
+            $run.next | Should -Be 'BBBB'
             $script:WmLogBuffer[0].Level | Should -Be 'info'
         } finally {
             $script:WmVersion, $script:WmWarnings, $script:WmErrors = $saved
+            $script:WmCertCurrent = ''; $script:WmCertNext = ''
             $script:WmLogBuffer.Clear()
         }
     }

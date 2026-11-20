@@ -75,4 +75,9 @@
     'managed.version_bad_hash'         = 'version.psd1: {0} ist kein SHA256-Hash (64 Hexadezimalziffern)'
     'managed.version_bad_group'        = 'version.psd1: ungültiger Gruppenname in Groups: ''{0}'''
     'managed.version_groups_not_table' = 'version.psd1: Groups muss jeder Gruppe eigene Version, Url und Sha256 geben'
+    'managed.cert_next_added'            = 'Die Quelle nennt ihr nächstes Signaturzertifikat ({0}); ihm wird ebenfalls vertraut, bis die Quelle darauf umstellt.'
+    'managed.cert_switched'              = 'Die Quelle ist mit dem nächsten Zertifikat {0} signiert: Es ist jetzt das Zertifikat dieses Computers, anstelle von {1}.'
+    'managed.cert_next_removed'          = 'Die Quelle nennt das nächste Signaturzertifikat {0} nicht mehr; ihm wird nicht mehr vertraut.'
+    'managed.cert_next_invalid'          = 'Das nächste Signaturzertifikat der Quelle ist nicht verwendbar: {0}'
+    'managed.cert_change_failed'         = 'Das Signaturzertifikat konnte nicht gewechselt werden: {0}. Dieser Lauf behält das bisherige; der nächste versucht es erneut.'
 }

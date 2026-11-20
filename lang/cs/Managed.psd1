@@ -75,4 +75,9 @@
     'managed.version_bad_hash'         = 'version.psd1: {0} není SHA256 (64 šestnáctkových číslic)'
     'managed.version_bad_group'        = 'version.psd1: neplatný název skupiny v Groups: ''{0}'''
     'managed.version_groups_not_table' = 'version.psd1: Groups musí každé skupině dát vlastní Version, Url a Sha256'
+    'managed.cert_next_added'            = 'Zdroj uvádí svůj příští podpisový certifikát ({0}); i jemu se důvěřuje, dokud zdroj na něj nepřejde.'
+    'managed.cert_switched'              = 'Zdroj je podepsán příštím certifikátem {0}: nyní je to certifikát tohoto počítače, místo {1}.'
+    'managed.cert_next_removed'          = 'Zdroj už neuvádí příští podpisový certifikát {0}; přestává být důvěryhodný.'
+    'managed.cert_next_invalid'          = 'Příští podpisový certifikát zdroje nelze použít: {0}'
+    'managed.cert_change_failed'         = 'Podpisový certifikát se nepodařilo vyměnit: {0}. Tento běh ponechává stávající; příští to zkusí znovu.'
 }

@@ -75,4 +75,9 @@
     'managed.version_bad_hash'         = 'version.psd1: {0} nie jest sumą SHA256 (64 cyfry szesnastkowe)'
     'managed.version_bad_group'        = 'version.psd1: niepoprawna nazwa grupy w Groups: ''{0}'''
     'managed.version_groups_not_table' = 'version.psd1: Groups musi podawać każdej grupie jej własne Version, Url i Sha256'
+    'managed.cert_next_added'            = 'Źródło wskazuje swój następny certyfikat podpisu ({0}); jemu też ufamy, dopóki źródło się na niego nie przełączy.'
+    'managed.cert_switched'              = 'Źródło jest podpisane następnym certyfikatem {0}: teraz to certyfikat tego komputera, zamiast {1}.'
+    'managed.cert_next_removed'          = 'Źródło nie wskazuje już następnego certyfikatu podpisu {0}; nie jest już zaufany.'
+    'managed.cert_next_invalid'          = 'Następnego certyfikatu podpisu ze źródła nie da się użyć: {0}'
+    'managed.cert_change_failed'         = 'Nie udało się zmienić certyfikatu podpisu: {0}. Ten przebieg zostaje przy dotychczasowym; następny spróbuje ponownie.'
 }

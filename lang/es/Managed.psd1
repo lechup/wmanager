@@ -75,4 +75,9 @@
     'managed.version_bad_hash'         = 'version.psd1: {0} no es un SHA256 (64 dígitos hexadecimales)'
     'managed.version_bad_group'        = 'version.psd1: nombre de grupo no válido en Groups: ''{0}'''
     'managed.version_groups_not_table' = 'version.psd1: Groups debe dar a cada grupo su propia Version, Url y Sha256'
+    'managed.cert_next_added'            = 'La fuente indica su próximo certificado de firma ({0}); también es de confianza hasta que la fuente cambie a él.'
+    'managed.cert_switched'              = 'La fuente está firmada con el próximo certificado {0}: ahora es el de este equipo, en lugar de {1}.'
+    'managed.cert_next_removed'          = 'La fuente ya no indica el próximo certificado de firma {0}; deja de ser de confianza.'
+    'managed.cert_next_invalid'          = 'El próximo certificado de firma de la fuente no se puede usar: {0}'
+    'managed.cert_change_failed'         = 'No se pudo cambiar el certificado de firma: {0}. Esta ejecución mantiene el actual; la siguiente lo vuelve a intentar.'
 }

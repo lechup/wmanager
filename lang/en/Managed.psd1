@@ -75,4 +75,9 @@
     'managed.version_bad_hash'         = 'version.psd1: {0} is not a SHA256 (64 hexadecimal digits)'
     'managed.version_bad_group'        = 'version.psd1: invalid group name in Groups: ''{0}'''
     'managed.version_groups_not_table' = 'version.psd1: Groups must give each group its own Version, Url and Sha256'
+    'managed.cert_next_added'            = 'The source names its next signing certificate ({0}); it is trusted too until the source switches to it.'
+    'managed.cert_switched'              = 'The source is signed with the next certificate {0}: it is this computer''s own now, instead of {1}.'
+    'managed.cert_next_removed'          = 'The source no longer names the next signing certificate {0}; it is no longer trusted.'
+    'managed.cert_next_invalid'          = 'The next signing certificate of the source can''t be used: {0}'
+    'managed.cert_change_failed'         = 'The signing certificate couldn''t be changed: {0}. This run keeps the one it trusts; the next run tries again.'
 }

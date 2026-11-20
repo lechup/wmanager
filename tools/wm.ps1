@@ -25,6 +25,8 @@
 #   pwsh tools/wm.ps1 <company> sync           send the signed source where the computers read it, and check they can
 #   pwsh tools/wm.ps1 <company> target         where that is: a Git repository (gh can create it) or a folder
 #   pwsh tools/wm.ps1 <company> backup [<f>]   the company as an archive
+#   pwsh tools/wm.ps1 <company> rotate-key     a new signing key: the computers get its certificate first, then the
+#                                              switch (run it again); or call it off
 #   pwsh tools/wm.ps1 <company> config         the configuration wizard (init.ps1) for its provision.config.psd1
 #   pwsh tools/wm.ps1 <company> <command> ...  a tools/groups.ps1 command on its source, e.g.
 #                                              add-computer OFFICE-07 accounting, enable power all, set-version v0.2.0
@@ -340,6 +342,7 @@ function Get-CompanyState {
         if (-not $hasKey) { $parts.Add('no signing key') }
     }
     if (-not [IO.File]::Exists($Company.Config)) { $parts.Add('no configuration yet') }
+    if ([IO.File]::Exists((Join-Path $Company.Dir 'key-change.psd1'))) { $parts.Add('key change in progress') }
     return ($parts -join ', ')
 }
 
@@ -465,18 +468,11 @@ function New-Company {
     New-Item -ItemType Directory -Force -Path $c.Dir | Out-Null
 
     Write-Step "1/4 Signing key: $($c.Keys)"
-    $key = Join-Path $c.Keys 'key.pem'
     if (Test-HasKey $c) {
         Write-Host '  Already there.'
-    } elseif ([IO.File]::Exists($key) -and (Get-Item -LiteralPath $key).Length -gt 0) {
-        throw "$($c.Keys) has a key.pem but no certificates (cert.pem, wmanager-signing.cer); make them from that key, or move it away and run: pwsh tools/wm.ps1 new $Name"
     } else {
-        # An empty key.pem is what a creation stopped at the passphrase leaves
-        if ([IO.File]::Exists($key)) { Remove-Item -LiteralPath $key }
         Write-Host '  A key of its own: a company that leaves takes its key and has no way into the others.'
-        if ((Invoke-Native 'bash' @((Join-Path $script:Tools 'new-signing-cert.sh'), $c.Keys)) -ne 0) {
-            throw "no key (the reason is above); to carry on: pwsh tools/wm.ps1 new $Name"
-        }
+        $null = New-KeyFolder $c.Keys "pwsh tools/wm.ps1 new $Name"
     }
 
     Write-Step "2/4 Management source: $($c.Source)"
@@ -806,7 +802,8 @@ function Invoke-Loki {
 }
 
 function New-HostRecord {
-    return [pscustomobject]@{ Version = $null; VersionAt = $null; FromRecord = $false; LastRun = $null; Warnings = 0; Errors = 0; Errors24h = 0 }
+    return [pscustomobject]@{ Version = $null; VersionAt = $null; FromRecord = $false; LastRun = $null; Warnings = 0; Errors = 0
+                              Errors24h = 0; Cert = ''; Next = '' }
 }
 
 # Loki: for each computer (the host label, lowercase) its last run and the errors of the last 24 hours, jobs
@@ -865,6 +862,8 @@ function Add-LokiLine {
             $Record.FromRecord = $true
             $Record.VersionAt = $At
             $Record.Version = if ($run.wmanager_run) { [string]$run.wmanager_run } else { '?' }
+            $Record.Cert = [string]$run.cert   # the signing certificates it trusts (a key change)
+            $Record.Next = [string]$run.next
         }
         if ($null -eq $Record.LastRun -or $At -ge $Record.LastRun) { $Record.LastRun = $At; $Record.Warnings = [int]$run.warnings; $Record.Errors = [int]$run.errors }
         return
@@ -996,6 +995,8 @@ function Show-ComputerStatus {
     }
     Write-Host ''
     Write-Host (Format-StatusSummary $s)
+    $line = Format-KeyChangeLine $Company $s
+    if ($line) { Write-Host "$line; then: pwsh tools/wm.ps1 $($Company.Name) rotate-key" -ForegroundColor Cyan }
     Write-Host "Loki: the last $($script:StatusDays) days. (5h) = 5 hours ago; - = nothing reported; ? = the service didn't answer;"
     Write-Host 'a -> b = runs a, switches to b at its next update.'
     if ($s.OtherChecks -gt 0) {
@@ -1024,6 +1025,8 @@ function Show-AllStatus {
             $s = Get-ComputerStatus $c
             $line = Format-StatusSummary $s
             if ($s.Problems.Count -gt 0) { $line += ' (' + ($s.Problems -join '; ') + ')' }
+            $kcLine = Format-KeyChangeLine $c $s
+            if ($kcLine) { $line += "; $kcLine" }
         } catch {
             $line = Format-WmErrorText $_ -English
         }
@@ -1506,6 +1509,238 @@ function Restore-Company {
 }
 
 # ---------------------------------------------------------------------------
+# Key change, with a time when the computers trust both keys (lib/Managed.ps1 does their side)
+# ---------------------------------------------------------------------------
+
+# A signing key in $Dir made by tools/new-signing-cert.sh (it asks for the passphrase), unless the folder has a whole
+# one; an empty key.pem (a creation stopped at the passphrase) goes first, a key.pem without its certificates stops it
+function New-KeyFolder {
+    param([string]$Dir, [string]$CarryOn)
+    if (Test-HasKey ([pscustomobject]@{ Keys = $Dir })) { return $false }
+    $key = Join-Path $Dir 'key.pem'
+    if ([IO.File]::Exists($key) -and (Get-Item -LiteralPath $key).Length -gt 0) {
+        throw "$Dir has a key.pem but no certificates (cert.pem, wmanager-signing.cer); make them from that key, or move it away and run: $CarryOn"
+    }
+    if ([IO.File]::Exists($key)) { Remove-Item -LiteralPath $key }
+    if ((Invoke-Native 'bash' @((Join-Path $script:Tools 'new-signing-cert.sh'), $Dir)) -ne 0) {
+        throw "no key (the reason is above); to carry on: $CarryOn"
+    }
+    return $true
+}
+
+function Get-CertThumbprint {
+    param([string]$Path)
+    return [Security.Cryptography.X509Certificates.X509Certificate2]::new($Path).Thumbprint
+}
+
+# <company>/key-change.psd1: where a key change stands, so a step that stopped (a mistyped passphrase, a push that
+# failed) is carried on, not started again. State: naming (the new key's certificate goes into the source, signed
+# with the current key), named (the computers are getting it), switching, calling-off. Thumbprint: the new key's.
+function Get-KeyChangePath { param($Company) return (Join-Path $Company.Dir 'key-change.psd1') }
+
+function Read-KeyChange {
+    param($Company)
+    $path = Get-KeyChangePath $Company
+    if (-not [IO.File]::Exists($path)) { return $null }
+    try { return (Import-PowerShellDataFile -LiteralPath $path) }
+    catch { throw "$path can't be read ($($_.Exception.Message)); look at it before going on with the key change" }
+}
+
+function Save-KeyChange {
+    param($Company, [string]$State, [string]$Thumbprint)
+    Write-PrivateFile (Get-KeyChangePath $Company) (@(
+        '# Where the key change of this company stands (pwsh tools/wm.ps1 <company> rotate-key writes it; do not edit).'
+        '@{'
+        "    State      = $(ConvertTo-WmPsdString $State)"
+        "    Thumbprint = $(ConvertTo-WmPsdString $Thumbprint)"
+        '}'
+        '') -join "`n")
+}
+
+function Get-KeyChangeKeys { param($Company) return (Join-Path $Company.Dir 'keys-new') }
+function Get-NamedCertPath { param($Company) return (Join-Path $Company.Source 'next-certificate.cer') }
+
+# A computer that trusts the new certificate (its last run record names it as next, or as its own)
+function Test-TrustsCertificate {
+    param($Row, [string]$Thumbprint)
+    return [bool]($Row.Log -and ($Row.Log.Next -eq $Thumbprint -or $Row.Log.Cert -eq $Thumbprint))
+}
+
+# How many computers trust the new certificate; $null when it can't be told (no read-only keys, Loki didn't answer)
+function Get-KeyChangeReadiness {
+    param($Company, [string]$Thumbprint, $Status)
+    if ($null -eq $Status) { try { $Status = Get-ComputerStatus $Company } catch { return $null } }
+    if (-not $Status.LokiOk) { return $null }
+    $notReady = @($Status.Rows | Where-Object { -not (Test-TrustsCertificate $_ $Thumbprint) } | ForEach-Object Name)
+    return [pscustomobject]@{ Ready = $Status.Rows.Count - $notReady.Count; Total = $Status.Rows.Count; NotReady = $notReady }
+}
+
+# A key change under way: "Key change: 8 of 10 computers trust the new certificate", or $null
+function Format-KeyChangeLine {
+    param($Company, $Status)
+    $kc = $null
+    try { $kc = Read-KeyChange $Company } catch { return 'key change: key-change.psd1 unreadable' }
+    if ($null -eq $kc -or $kc.State -ne 'named') { if ($kc) { return "key change: $($kc.State), not finished (rotate-key)" }; return $null }
+    $r = Get-KeyChangeReadiness $Company $kc.Thumbprint $Status
+    if ($null -eq $r) { return "key change: how many computers trust the new certificate can't be told without Loki" }
+    return "key change: $($r.Ready) of $($r.Total) computers trust the new certificate"
+}
+
+# rotate-key: starts a key change, carries on a step that stopped, or switches / calls it off
+function Invoke-KeyChange {
+    param($Company)
+    Assert-Source $Company
+    $kc = Read-KeyChange $Company
+    if ($null -eq $kc) {
+        if (-not (Test-HasKey $Company)) { throw "$($Company.Name) has no signing key yet: pwsh tools/wm.ps1 new $($Company.Name)" }
+        $changes = Get-SourceChanges $Company
+        if ($changes.OtherKey) {
+            throw "the source is signed with another key ($($changes.OtherKey)) than the one in keys/, and no key change is under way: if keys/ is the wrong key, put the right one back; to sign with keys/ anyway (the computers trust only a key they were told about): pwsh tools/wm.ps1 $($Company.Name) publish"
+        }
+        if ([IO.File]::Exists((Get-NamedCertPath $Company))) {
+            throw "the source names a next certificate (next-certificate.cer) but no key change is under way: remove the file and sign, or restore <company>/key-change.psd1 and keys-new/ from a backup"
+        }
+        Start-KeyChange $Company
+        return
+    }
+    switch ($kc.State) {
+        'naming' { Send-NewCertificate $Company ([string]$kc.Thumbprint) }
+        'named' { Complete-KeyChange $Company ([string]$kc.Thumbprint) }
+        'switching' { Switch-SigningKey $Company ([string]$kc.Thumbprint) }
+        'calling-off' { Stop-KeyChange $Company ([string]$kc.Thumbprint) }
+        default { throw "key-change.psd1 has an unknown state '$($kc.State)'" }
+    }
+}
+
+function Start-KeyChange {
+    param($Company)
+    Write-Step "A new signing key for $($Company.Name), in two steps"
+    Write-Host '  1. Now: a new key; its certificate goes into the source, signed still with the current key. From their next'
+    Write-Host '     update the computers trust both keys.'
+    Write-Host "  2. Later, when the computers have it (pwsh tools/wm.ps1 $($Company.Name) status shows how many): rotate-key"
+    Write-Host '     again switches to the new key. A computer that missed step 1 needs its configuration again (run.cmd).'
+    Write-Host '  A key that leaked is not changed this way (whoever has it could name a certificate too): give the computers a'
+    Write-Host '  new configuration and certificate with run.cmd instead.'
+    # Only this change goes out with the signature: other changes are signed with their own look (publish)
+    if (Test-SourceChanged (Get-SourceChanges $Company)) {
+        throw "the source has changes that aren't signed (pwsh tools/wm.ps1 $($Company.Name) changes): sign them (publish) or undo them first"
+    }
+    if (-not (Read-WmYesNo 'Start the key change?' $true)) { return }
+    $keys = Get-KeyChangeKeys $Company
+    Write-Host '  The new key gets a passphrase of its own.'
+    if (-not (New-KeyFolder $keys "pwsh tools/wm.ps1 $($Company.Name) rotate-key")) { Write-Host "  The new key is in $keys already." }
+    $thumb = Get-CertThumbprint (Join-Path $keys 'wmanager-signing.cer')
+    Save-KeyChange $Company 'naming' $thumb
+    Send-NewCertificate $Company $thumb -Confirmed
+}
+
+# Step 1: the source names the new certificate, signed with the current key
+function Send-NewCertificate {
+    param($Company, [string]$Thumbprint, [switch]$Confirmed)
+    $keys = Get-KeyChangeKeys $Company
+    if (-not (Test-HasKey ([pscustomobject]@{ Keys = $keys })) -or (Get-CertThumbprint (Join-Path $keys 'wmanager-signing.cer')) -ne $Thumbprint) {
+        throw "$keys doesn't hold the new key ($Thumbprint) any more; put it back from a backup, or remove key-change.psd1 and next-certificate.cer and sign (that ends the change)"
+    }
+    Copy-Item -LiteralPath (Join-Path $keys 'wmanager-signing.cer') -Destination (Get-NamedCertPath $Company) -Force
+    Write-Host '  The source names the new certificate (next-certificate.cer); signing it with the current key:'
+    $null = Publish-Company $Company -Confirmed:$Confirmed
+    if (Test-SourceChanged (Get-SourceChanges $Company)) { Write-Host "  Not signed; to carry on: pwsh tools/wm.ps1 $($Company.Name) rotate-key"; return }
+    Save-KeyChange $Company 'named' $Thumbprint
+    Write-Host ''
+    Write-Host "  Next: once the computers have it (pwsh tools/wm.ps1 $($Company.Name) status), pwsh tools/wm.ps1 $($Company.Name) rotate-key"
+    if (-not (Get-PublishTarget $Company)) { Write-Host '  First send the signed source where the computers read it (push it, or copy it).' }
+}
+
+# Step 2: switch, or call it off. The switch asks with the default no: the computers that didn't report in the last
+# days (or aren't in groups.psd1) aren't counted, and they would be cut off.
+function Complete-KeyChange {
+    param($Company, [string]$Thumbprint)
+    Write-Step "Key change of $($Company.Name): the new certificate $Thumbprint"
+    $r = Get-KeyChangeReadiness $Company $Thumbprint $null
+    if ($null -eq $r) {
+        Write-Host "  How many computers have it can't be told here (read-only keys and Loki: pwsh tools/wm.ps1 $($Company.Name) monitoring)."
+    } else {
+        Write-Host "  $($r.Ready) of $($r.Total) computers trust it (computers silent for $($script:StatusDays) days aren't counted)."
+        if ($r.NotReady.Count -gt 0) { Write-Host "  Not yet: $($r.NotReady -join ', '). After the switch they need their configuration again (run.cmd)." }
+    }
+    Write-Host '  s) switch to the new key now'
+    Write-Host '  c) call the change off (the computers forget the new certificate)'
+    while ($true) {
+        $answer = [string](Read-Line 'Choose (Enter = later)')
+        if (-not $answer) { return }
+        if (@('s', 'c') -contains $answer) { break }
+        Write-Host '  s, c or Enter.' -ForegroundColor Yellow
+    }
+    if ($answer -eq 'c') {
+        if (-not (Read-WmYesNo 'Call the key change off?' $true)) { return }
+        Save-KeyChange $Company 'calling-off' $Thumbprint
+        Stop-KeyChange $Company $Thumbprint
+        return
+    }
+    if (-not (Read-WmYesNo "Switch $($Company.Name) to the new key?" $false)) { return }
+    Save-KeyChange $Company 'switching' $Thumbprint
+    Switch-SigningKey $Company $Thumbprint
+}
+
+# Each step checks whether it is done, so running it again carries on where it stopped
+function Switch-SigningKey {
+    param($Company, [string]$Thumbprint)
+    $named = Get-NamedCertPath $Company
+    if ([IO.File]::Exists($named)) { Remove-Item -LiteralPath $named -Force }
+    $keys = Get-KeyChangeKeys $Company
+    if ([IO.Directory]::Exists($keys)) {
+        if ([IO.Directory]::Exists($Company.Keys)) {
+            $old = Get-FreeFolderName $Company.Dir 'keys-old'
+            Move-Item -LiteralPath $Company.Keys -Destination $old
+            Write-Host "  The previous key moved to $old (keep it until every computer has switched)."
+        }
+        Move-Item -LiteralPath $keys -Destination $Company.Keys
+    }
+    if (-not (Test-HasKey $Company) -or (Get-CertThumbprint (Join-Path $Company.Keys 'wmanager-signing.cer')) -ne $Thumbprint) {
+        throw "$($Company.Keys) doesn't hold the new key ($Thumbprint); look at keys/, keys-new/ and keys-old-*/ before going on"
+    }
+    # The configuration for new computers gets the new certificate
+    if ([IO.File]::Exists($Company.Config)) {
+        $name = Get-ConfigCertificate $Company.Config
+        if (-not $name) { $name = 'wmanager-signing.cer' }
+        Copy-Item -LiteralPath (Join-Path $Company.Keys 'wmanager-signing.cer') -Destination (Join-Path $Company.ConfigDir $name) -Force
+        Write-Host "  config/$name is the new certificate: put it on the USB drive again (pwsh tools/wm.ps1 usb <folder>)."
+    }
+    Write-Host '  Signing the source with the new key:'
+    $null = Publish-Company $Company -Confirmed
+    if (Test-SourceChanged (Get-SourceChanges $Company)) { Write-Host "  Not signed; to carry on: pwsh tools/wm.ps1 $($Company.Name) rotate-key"; return }
+    Remove-Item -LiteralPath (Get-KeyChangePath $Company) -Force
+    Write-Host "  $($Company.Name) is signed with the new key."
+}
+
+function Stop-KeyChange {
+    param($Company, [string]$Thumbprint)
+    $named = Get-NamedCertPath $Company
+    if ([IO.File]::Exists($named)) { Remove-Item -LiteralPath $named -Force }
+    Write-Host '  Signing the source (without the new certificate) with the current key:'
+    $null = Publish-Company $Company -Confirmed
+    if (Test-SourceChanged (Get-SourceChanges $Company)) { Write-Host "  Not signed; to carry on: pwsh tools/wm.ps1 $($Company.Name) rotate-key"; return }
+    $keys = Get-KeyChangeKeys $Company
+    if ([IO.Directory]::Exists($keys)) {
+        $kept = Get-FreeFolderName $Company.Dir 'keys-called-off'
+        Move-Item -LiteralPath $keys -Destination $kept
+        Write-Host "  The new key moved to $kept."
+    }
+    Remove-Item -LiteralPath (Get-KeyChangePath $Company) -Force
+    Write-Host '  The key change is called off.'
+}
+
+# A folder name that isn't taken: <base>-<date>, -2, -3...
+function Get-FreeFolderName {
+    param([string]$Dir, [string]$Base)
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd')
+    for ($i = 1; ; $i++) {
+        $name = if ($i -eq 1) { "$Base-$stamp" } else { "$Base-$stamp-$i" }
+        if (-not (Test-Path -LiteralPath (Join-Path $Dir $name))) { return (Join-Path $Dir $name) }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Menus
 # ---------------------------------------------------------------------------
 
@@ -1748,6 +1983,7 @@ function Invoke-CompanyMenu {
         Write-Host ' 15) read-only keys for the status (Healthchecks, Grafana Cloud)'
         Write-Host ' 16) where the computers read the source from (Git repository or folder)'
         Write-Host ' 17) a backup of this company (an archive of its source, key and configuration)'
+        Write-Host ' 18) change the signing key, with a time when the computers trust both'
         Write-Host '  b) back'
         $answer = Read-Line 'Choose'
         if ($null -eq $answer -or $answer -eq 'b' -or $answer -eq 'q') { return }
@@ -1777,6 +2013,7 @@ function Invoke-CompanyMenu {
                 '14' { Invoke-Wizard $Company }
                 '15' { Set-Monitoring $Company }
                 '16' { Set-PublishTarget $Company }
+                '18' { Invoke-KeyChange $Company }
                 '17' {
                     $folder = [string](Read-Line "Folder for the archive (Enter = $($script:BackupRoot))")
                     $null = Backup-Company $Company $folder
@@ -1883,6 +2120,8 @@ try {
             if ((Sync-Company $company -Wait:$Yes) -eq $false) { exit 1 }
         } elseif ($Second -eq 'target') {
             Set-PublishTarget $company
+        } elseif ($Second -eq 'rotate-key') {
+            Invoke-KeyChange $company
         } elseif ($Second -eq 'backup') {
             $null = Backup-Company $company @($Rest | Where-Object { $_ })[0]
         } elseif ($Second -eq 'changes') {

@@ -75,4 +75,9 @@
     'managed.version_bad_hash'         = 'version.psd1: {0} nu este un SHA256 (64 de cifre hexazecimale)'
     'managed.version_bad_group'        = 'version.psd1: nume de grup nevalid în Groups: ''{0}'''
     'managed.version_groups_not_table' = 'version.psd1: Groups trebuie să dea fiecărui grup propriile Version, Url și Sha256'
+    'managed.cert_next_added'            = 'Sursa indică următorul său certificat de semnare ({0}); este de încredere și el până când sursa trece la el.'
+    'managed.cert_switched'              = 'Sursa este semnată cu următorul certificat {0}: acum este cel al acestui calculator, în locul lui {1}.'
+    'managed.cert_next_removed'          = 'Sursa nu mai indică următorul certificat de semnare {0}; nu mai este de încredere.'
+    'managed.cert_next_invalid'          = 'Următorul certificat de semnare al sursei nu poate fi folosit: {0}'
+    'managed.cert_change_failed'         = 'Certificatul de semnare nu a putut fi schimbat: {0}. Această rulare îl păstrează pe cel actual; următoarea încearcă din nou.'
 }

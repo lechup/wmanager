@@ -134,6 +134,9 @@ function Install-WmFiles {
         if ($srcCert -ne $dstCert) {
             Copy-Item -LiteralPath $srcCert -Destination $dstCert -Force -ErrorAction Stop
             Write-WmLog -Key 'provision.certificate_copied' -Arguments @($srcCert)
+            # The configuration's certificate is what the computer trusts now: a next certificate learned before (from
+            # this or another source, maybe named with a key that leaked) is forgotten
+            Remove-Item -LiteralPath $script:WmNextCertFile -Force -ErrorAction SilentlyContinue
         }
     }
     Set-WmFolderAcl -Path $dst -ConfigFile (Join-Path $dst 'provision.config.psd1')
