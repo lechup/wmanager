@@ -8,7 +8,10 @@
 
 {$LOKI_DOMAIN} {
 	# The computers send here
-	@push path /loki/api/v1/push
+	@push {
+		method POST
+		path /loki/api/v1/push
+	}
 	handle @push {
 		basic_auth {
 			import /etc/caddy/companies/push-users
@@ -17,8 +20,12 @@
 			header_up X-Scope-OrgID {http.auth.user.id}
 		}
 	}
-	# Reading: tools/wm.ps1 status (a read token never sends, a write token never reads)
-	handle /loki/api/v1/* {
+	# Reading: tools/wm.ps1 status, GET only (a read token never sends nor deletes, a write token never reads)
+	@read {
+		method GET
+		path /loki/api/v1/*
+	}
+	handle @read {
 		basic_auth {
 			import /etc/caddy/companies/read-users
 		}

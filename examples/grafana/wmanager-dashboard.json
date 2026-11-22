@@ -33,10 +33,10 @@
       {
         "name": "datasource",
         "label": "Loki",
-        "description": "The Loki data source the computers send to; with several companies, one each",
+        "description": "The Loki data source the computers send to (Grafana Cloud's own alert-state-history and usage-insights left out); with several companies, one each",
         "type": "datasource",
         "query": "loki",
-        "regex": "",
+        "regex": "/^(?!grafanacloud-.+-(alert-state-history|usage-insights)$).+/",
         "current": {},
         "hide": 0,
         "refresh": 1,

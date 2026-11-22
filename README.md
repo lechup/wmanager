@@ -720,13 +720,14 @@ docker compose up -d                  # after another add-company: docker compos
 - **Grafana** is at `https://<grafana name>`, user `admin`, the password in `.env`. The alert rules (one set per
   company, named `<company>: ...`) go to its contact points: fill in the SMTP lines of `.env` for e-mail, or add
   another contact point (Alerting > Contact points).
-- **Healthchecks** can run on the same server as well (its own image); `HealthchecksBaseUrl` in the configuration
-  names it.
+- **Healthchecks** can run on the same server as well (its own image): `HealthchecksBaseUrl` in the configuration
+  names its ping address for the computers, `HealthchecksApiUrl` in the company's `monitoring.psd1` its API for
+  `status`.
 - **Back up** the Docker volumes (`loki-data`, `grafana-data`) and the folder (`.env`, `caddy/`) if the logs matter.
 
 CI runs the kit end to end (`tests/ci/check-selfhosted.sh`): init, two companies, `docker compose up` with Caddy's own
-certificates, the logins and tenants (a read token doesn't send, a write token doesn't read, a company doesn't see
-another's lines), and Grafana's data sources, dashboard and alert rules.
+certificates, the logins and tenants (a read token doesn't send or delete, a write token doesn't read, a company
+doesn't see another's lines), and Grafana's data sources, dashboard and alert rules.
 
 ### Healthchecks.io setup
 

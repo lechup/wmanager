@@ -15,6 +15,8 @@ set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+# Grafana and Loki run as users of their own in the containers: what this writes must be readable to them (.env not)
+umask 022
 here=$(cd "$(dirname "$0")" && pwd)
 cd "$here"
 caddy_image=caddy:2.8.4
@@ -26,6 +28,7 @@ cmd_init() {
     mkdir -p caddy grafana/provisioning/datasources grafana/provisioning/alerting grafana/dashboards
     touch caddy/push-users caddy/read-users "$tenants"
     cp ../grafana/wmanager-dashboard.json grafana/dashboards/
+    chmod -R a+rX loki.yaml Caddyfile grafana   # a checkout made with umask 077 too (nothing secret in them)
     if [[ -f .env ]]; then
         echo ".env is there already; kept. The dashboard is copied again."
         return
@@ -36,8 +39,7 @@ cmd_init() {
     [[ -n $email ]] || read -rp "E-mail for the certificates (Let's Encrypt): " email
     [[ $loki =~ ^[A-Za-z0-9.-]+$ && $grafana =~ ^[A-Za-z0-9.-]+$ ]] || die "a server name: letters, digits, dots and dashes"
     [[ $email == *@* ]] || die "an e-mail address, please"
-    umask 077
-    {
+    (umask 077; {
         echo "# wmanager: Grafana and Loki of your own (selfhosted.sh init). Both names must point to this server."
         echo "LOKI_DOMAIN=$loki"
         echo "GRAFANA_DOMAIN=$grafana"
@@ -49,7 +51,7 @@ cmd_init() {
         echo "SMTP_USER="
         echo "SMTP_PASSWORD="
         echo "SMTP_FROM="
-    } > .env
+    } > .env)
     echo "Written .env (readable by you only). Grafana: https://$grafana, user admin, the password in .env."
     echo "Next: ./selfhosted.sh add-company <name>, then docker compose up -d"
 }
@@ -66,11 +68,11 @@ cmd_add_company() {
     awk -v n="$name" '$1 == n { found = 1 } END { exit !found }' "$tenants" && die "there is a company $name already"
     local tenant
     tenant=$(awk 'BEGIN { max = 1000 } $2 > max { max = $2 } END { print max + 1 }' "$tenants")
-    local write read
+    local write reader
     write=$(openssl rand -hex 24)
-    read=$(openssl rand -hex 24)
+    reader=$(openssl rand -hex 24)
     echo "$tenant $(hash_token "$write")" >> caddy/push-users
-    echo "$tenant $(hash_token "$read")" >> caddy/read-users
+    echo "$tenant $(hash_token "$reader")" >> caddy/read-users
     echo "$name $tenant" >> "$tenants"
 
     # Grafana: a Loki data source of the company's tenant, and the alert rules of ../grafana on it
@@ -128,7 +130,7 @@ PY
     echo "  LokiUrl   https://$domain"
     echo "  LokiUser  $tenant"
     echo "  LokiToken $write"
-    echo "Read-only, for pwsh tools/wm.ps1 $name monitoring (the Grafana Cloud token question): $read"
+    echo "Read-only, for pwsh tools/wm.ps1 $name monitoring (the Grafana Cloud token question): $reader"
     echo "The tokens are shown only now (the server keeps their hashes). Then: docker compose restart caddy grafana"
 }
 

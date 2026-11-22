@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CI: checks examples/selfhosted end to end with Docker: init, two companies, docker compose up (certificates of
 # Caddy's own instead of Let's Encrypt), then the logins and the tenants as the computers and tools/wm.ps1 meet them
-# (a write token only sends, a read token only reads, a company sees only its own lines, a wrong login and other paths
-# are refused), and Grafana: the data source of each company reads its tenant only, the dashboard and the alert
+# (a write token only sends, a read token only reads and can't delete, a company sees only its own lines, a wrong login
+# and other paths are refused), and Grafana: the data source of each company reads its tenant only, the dashboard and the alert
 # rules are provisioned.
 #
 # Usage: tests/ci/check-selfhosted.sh            (needs docker with compose, curl, openssl and python3)
@@ -69,6 +69,10 @@ code() { loki -o /dev/null -w '%{http_code}' "$@"; }
 [[ $(push "$acme_user:wrong" office-acme) == 401 ]] && ok 'a wrong token does not send' || fail 'a wrong token sends'
 [[ $(push "$globex_user:$acme_write" office-acme) == 401 ]] && ok "acme's token is not globex's login" || fail "acme's token works as globex"
 [[ $(code -u "$acme_user:$acme_write" "https://loki.localhost:$https_port/loki/api/v1/labels") == 401 ]] && ok 'a write token does not read' || fail 'a write token reads'
+[[ $(code -u "$acme_user:$acme_read" -X POST "https://loki.localhost:$https_port/loki/api/v1/delete?query=%7Bhost%3D%22office-acme%22%7D&start=1") == 404 ]] &&
+    ok 'a read token does not delete' || fail 'a read token reaches the delete API'
+[[ $(code -u "$acme_user:$acme_read" -X POST --data 'query={host="office-acme"}' "https://loki.localhost:$https_port/loki/api/v1/query") == 404 ]] &&
+    ok 'reading is GET only' || fail 'reading takes POST'
 [[ $(code "https://loki.localhost:$https_port/") == 404 ]] && ok 'nothing else is served' || fail 'other paths answer'
 sleep 2
 [[ $(hosts "$acme_user:$acme_read") == office-acme ]] && ok 'acme reads only its own computers (tools/wm.ps1 status)' || fail "acme reads $(hosts "$acme_user:$acme_read")"

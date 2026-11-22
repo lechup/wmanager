@@ -228,6 +228,10 @@ imported = json.loads(body)['dashboard'] if status == 200 else {}
 variables = {v['name']: v for v in imported.get('templating', {}).get('list', [])}
 check('it picks the Loki data source with a variable', variables.get('datasource', {}).get('type') == 'datasource'
       and variables['datasource'].get('query') == 'loki', f'{variables.get("datasource")}')
+pattern = re.compile(variables.get('datasource', {}).get('regex', '')[1:-1])
+check("the selector leaves out Grafana Cloud's own Loki data sources",
+      all(pattern.fullmatch(n) for n in ['grafanacloud-acme-logs', 'Loki', 'Loki acme'])
+      and not any(pattern.fullmatch(n) for n in ['grafanacloud-acme-alert-state-history', 'grafanacloud-acme-usage-insights']))
 check('every panel reads that data source', all(p['datasource']['uid'] == '${datasource}' for p in imported.get('panels', [])))
 # A panel's query through Grafana itself (its Loki plugin, the data source), not only through Loki's API
 first = dash['panels'][0]['targets'][0]['expr'].replace('$host', '.+')
