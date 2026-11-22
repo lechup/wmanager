@@ -1,0 +1,36 @@
+# wmanager: Caddy in front of Loki and Grafana (docker-compose.yml). A company's login is its Loki tenant number:
+# the computers send with its write token (LokiUser and LokiToken of provision.config.psd1), tools/wm.ps1 status reads
+# with its read token. selfhosted.sh add-company writes the logins (hashes only) into caddy/.
+{
+	email {$ACME_EMAIL}
+	{$CADDY_GLOBAL}
+}
+
+{$LOKI_DOMAIN} {
+	# The computers send here
+	@push path /loki/api/v1/push
+	handle @push {
+		basic_auth {
+			import /etc/caddy/companies/push-users
+		}
+		reverse_proxy loki:3100 {
+			header_up X-Scope-OrgID {http.auth.user.id}
+		}
+	}
+	# Reading: tools/wm.ps1 status (a read token never sends, a write token never reads)
+	handle /loki/api/v1/* {
+		basic_auth {
+			import /etc/caddy/companies/read-users
+		}
+		reverse_proxy loki:3100 {
+			header_up X-Scope-OrgID {http.auth.user.id}
+		}
+	}
+	handle {
+		respond 404
+	}
+}
+
+{$GRAFANA_DOMAIN} {
+	reverse_proxy grafana:3000
+}

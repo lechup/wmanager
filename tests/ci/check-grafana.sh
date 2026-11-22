@@ -221,11 +221,21 @@ auth = {'Authorization': 'Basic ' + base64.b64encode(b'admin:wm-check').decode()
 status, body = http(f'{grafana}/api/datasources', json.dumps({'name': 'Loki', 'type': 'loki', 'uid': 'wm-loki',
                     'url': f'http://{loki_host}:3100', 'access': 'proxy'}).encode(), auth)
 check('Grafana takes the Loki data source', status == 200, f'{status} {body[:300]}')
-status, body = http(f'{grafana}/api/dashboards/import', json.dumps({'dashboard': dash, 'overwrite': True,
-                    'inputs': [{'name': 'DS_LOKI', 'type': 'datasource', 'pluginId': 'loki', 'value': 'wm-loki'}]}).encode(), auth)
+status, body = http(f'{grafana}/api/dashboards/import', json.dumps({'dashboard': dash, 'overwrite': True, 'inputs': []}).encode(), auth)
 check('Grafana imports the dashboard', status == 200 and '"imported":true' in body.replace(' ', ''), f'{status} {body[:300]}')
 status, body = http(f'{grafana}/api/dashboards/uid/wmanager', headers=auth)
-check('the imported dashboard uses the data source', status == 200 and 'wm-loki' in body and '${DS_LOKI}' not in body, f'{status}')
+imported = json.loads(body)['dashboard'] if status == 200 else {}
+variables = {v['name']: v for v in imported.get('templating', {}).get('list', [])}
+check('it picks the Loki data source with a variable', variables.get('datasource', {}).get('type') == 'datasource'
+      and variables['datasource'].get('query') == 'loki', f'{variables.get("datasource")}')
+check('every panel reads that data source', all(p['datasource']['uid'] == '${datasource}' for p in imported.get('panels', [])))
+# A panel's query through Grafana itself (its Loki plugin, the data source), not only through Loki's API
+first = dash['panels'][0]['targets'][0]['expr'].replace('$host', '.+')
+status, body = http(f'{grafana}/api/ds/query', json.dumps({'from': 'now-6h', 'to': 'now', 'queries': [
+    {'refId': 'A', 'datasource': {'uid': 'wm-loki'}, 'expr': first, 'queryType': 'instant'}]}).encode(), auth)
+frames = json.loads(body)['results']['A'].get('frames', []) if status == 200 else []
+values = [v for f in frames for v in (f['data']['values'][-1] if f['data']['values'] else [])]
+check('Grafana runs a panel query through the data source', status == 200 and values == [5], f'{status} {values} {body[:200]}')
 
 if failures: sys.exit(f'{len(failures)} checks failed')
 print('All checks passed.')

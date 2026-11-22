@@ -85,6 +85,7 @@ changing anything.
 | `configs\<company>\` | Optional, on the USB drive: the configuration of each company; `run.cmd` asks which one (see [Several companies](#several-companies)) |
 | `library/` | Ready group scripts and jobs to switch on with `tools/groups.ps1 enable` (see [Library](#library-of-ready-scripts-and-jobs)) |
 | `examples/grafana/` | A Grafana dashboard and Loki alert rules for the computers' lines (see [Grafana dashboard and alerts](#grafana-dashboard-and-alerts)) |
+| `examples/selfhosted/` | Loki, Grafana and Caddy of your own with Docker, a tenant per company (see [Hosting Grafana and Loki yourself](#hosting-grafana-and-loki-yourself)) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, the daily system report from the library) |
 | `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
@@ -669,8 +670,9 @@ The log file and Loki are in English; the console and the user's notifications i
 `examples/grafana/` has a dashboard and alert rules for the lines wmanager sends (they are English on every computer,
 so the same patterns read all of them):
 
-- `wmanager-dashboard.json`: Dashboards > New > Import, upload the file and choose the Loki data source the computers
-  send to (in Grafana Cloud `grafanacloud-<stack>-logs`). Computers that reported and those with errors in the last
+- `wmanager-dashboard.json`: Dashboards > New > Import, upload the file; the Loki selector at the top picks the data
+  source the computers send to (in Grafana Cloud `grafanacloud-<stack>-logs`; with several companies on one Grafana,
+  one each). Computers that reported and those with errors in the last
   24 hours, silent computers (lines in the last 14 days, none in the last 3), the computers whose last run trusts the
   next certificate during a key change, the last run of each computer (the wmanager version that finished it, when,
   warnings, errors), the versions in use (each computer once, by its last run), error lines over time, failed group
@@ -692,6 +694,39 @@ CI checks both against a real Loki and Grafana (`tests/ci/check-grafana.sh`): li
 from the English messages in `lang/en` (a reworded message that a rule reads fails there) and the run record's fields;
 every query runs, each rule fires for the computers it should and no other, the panels count the right computers and
 show the last run, the ruler loads the rules, Grafana imports the dashboard.
+
+### Hosting Grafana and Loki yourself
+
+`examples/selfhosted/` runs Loki, Grafana and Caddy with Docker on a server of your own, for any number of companies.
+Caddy gets the certificates (Let's Encrypt) and checks the logins; Loki keeps each company apart (a tenant each) and
+the logs 90 days (`retention_period` in `loki.yaml`); Grafana gets a data source and the alert rules of each company
+and the dashboard, ready. A small server (2 GB of memory) is enough for dozens of computers; the logs are a few MB a
+day per computer.
+
+On the server, with Docker, the `examples` folder of the repository (or the release) and two names pointing to it:
+
+```bash
+cd examples/selfhosted
+./selfhosted.sh init                  # the names (e.g. logs.example.com, grafana.example.com), the e-mail for the certificates
+./selfhosted.sh add-company acme      # prints LokiUrl, LokiUser and LokiToken for acme, and a read-only token
+docker compose up -d                  # after another add-company: docker compose restart caddy grafana
+```
+
+- **A company's login** is its tenant number (`LokiUser`, from 1001 on) with a write token (`LokiToken`), as Grafana
+  Cloud's: give them to the wizard (`pwsh tools/wm.ps1 acme config`). The read-only token goes to
+  `pwsh tools/wm.ps1 acme monitoring` (the Grafana Cloud question) for `status`. A write token only sends and a read
+  token only reads; a company reads only its own lines. The server keeps only the tokens' hashes: `add-company` shows
+  them once.
+- **Grafana** is at `https://<grafana name>`, user `admin`, the password in `.env`. The alert rules (one set per
+  company, named `<company>: ...`) go to its contact points: fill in the SMTP lines of `.env` for e-mail, or add
+  another contact point (Alerting > Contact points).
+- **Healthchecks** can run on the same server as well (its own image); `HealthchecksBaseUrl` in the configuration
+  names it.
+- **Back up** the Docker volumes (`loki-data`, `grafana-data`) and the folder (`.env`, `caddy/`) if the logs matter.
+
+CI runs the kit end to end (`tests/ci/check-selfhosted.sh`): init, two companies, `docker compose up` with Caddy's own
+certificates, the logins and tenants (a read token doesn't send, a write token doesn't read, a company doesn't see
+another's lines), and Grafana's data sources, dashboard and alert rules.
 
 ### Healthchecks.io setup
 
