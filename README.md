@@ -746,7 +746,7 @@ sudo usermod -aG kvm $USER
 tests/vm/vm.sh create pro ~/Downloads/Win11_pl.iso    # 30-60 min; done when: tests/vm/vm.sh ssh pro hostname
 tests/vm/vm.sh installed pro                          # boot from the disk only from now on
 tests/vm/vm.sh stop pro && tests/vm/vm.sh snapshot pro clean
-tests/vm/vm.sh start pro
+tests/vm/vm.sh start pro                              # or with less memory: tests/vm/vm.sh start pro 4096
 tests/vm/vm.sh deploy pro                             # working tree + example config -> C:\wmanager
 tests/vm/vm.sh run pro Provision.ps1 -ComputerName WM-TEST-PRO
 tests/vm/vm.sh stop pro && tests/vm/vm.sh revert pro clean
@@ -755,7 +755,11 @@ tests/vm/vm.sh stop pro && tests/vm/vm.sh revert pro clean
 `deploy` copies the repository as it is on disk (uncommitted changes included) and `provision.config.example.psd1`,
 or the configuration given as the second parameter (with the `.cer` files next to it).
 
-Run one machine at a time (6 GB RAM each). `vm.sh stop` shuts Windows down fully over SSH: the power button only
+A machine gets 6144 MB by default: give another amount as the last parameter of `start` or `create` (e.g.
+`tests/vm/vm.sh start pro 4096`) or in `WM_VM_MEMORY`; at least 4096, which Windows 11 needs (provisioning works there
+too, slower). `start` refuses when the host has less memory available than that plus 1 GB for itself, so a machine
+doesn't push the host into swapping or other programs out (`WM_VM_MEMORY_CHECK=0` starts it anyway); two machines at
+once rarely fit. `vm.sh stop` shuts Windows down fully over SSH: the power button only
 hibernates the kernel while Fast Startup is on (the Windows default), so a new computer name or a pending update would
 wait for a restart. Over SSH there is no console, so provisioning takes the default answers (as in a scheduled task).
 

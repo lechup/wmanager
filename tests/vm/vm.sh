@@ -2,11 +2,11 @@
 # wmanager: Windows 11 test virtual machines on KVM/QEMU, driven from the terminal.
 #
 # Two machines: "pro" (Windows 11 Pro) and "home" (Windows 11 Home), Polish, from the official multi-edition ISO
-# without a product key (not activated). TPM 2.0 by swtpm, Secure Boot by OVMF. Run one at a time (6 GB RAM each).
+# without a product key (not activated). TPM 2.0 by swtpm, Secure Boot by OVMF.
 #
-#   tests/vm/vm.sh create <pro|home> <windows11.iso>   new disk, unattended installation (30-60 min)
+#   tests/vm/vm.sh create <pro|home> <windows11.iso> [memory-MB]   new disk, unattended installation (30-60 min)
 #   tests/vm/vm.sh installed <vm>                      after the installation: boot from the disk only
-#   tests/vm/vm.sh start <vm>                          start in the background
+#   tests/vm/vm.sh start <vm> [memory-MB]              start in the background
 #   tests/vm/vm.sh stop <vm>                           full Windows shutdown (not Fast Startup), then stop
 #   tests/vm/vm.sh status                              which machines run
 #   tests/vm/vm.sh ssh <vm> [command]                  PowerShell over SSH as "tester" (administrator)
@@ -18,6 +18,10 @@
 #   tests/vm/vm.sh revert <vm> <name>                  go back to a saved state (machine stopped)
 #   tests/vm/vm.sh forget <vm> <name>                  delete a saved state
 #   tests/vm/vm.sh snapshots <vm>                      list saved states
+#
+# Memory of a machine: the [memory-MB] given, else $WM_VM_MEMORY, else 6144; at least 4096 (Windows 11 won't install
+# with less; provisioning works there too, slower). A start is refused when the host has less memory available than
+# that plus 1 GB for itself (two machines at once rarely fit); WM_VM_MEMORY_CHECK=0 skips that check.
 #
 # Machines live in $WM_VM_DIR (default ~/vm/wmanager), outside the repository. VNC for a look at the screen:
 # 127.0.0.1:5901 (pro), 127.0.0.1:5902 (home). Needs: qemu-system-x86 qemu-utils ovmf swtpm swtpm-tools xorriso,
@@ -90,8 +94,22 @@ set_ssh_opts() {
               -o "UserKnownHostsFile=$dir/known_hosts" -o ConnectTimeout=10)
 }
 
+# The memory for a machine in MB (see the header), checked against what the host has available
+vm_memory() {
+    local mb=${1:-${WM_VM_MEMORY:-6144}} avail
+    [[ $mb =~ ^[0-9]+$ ]] || die "memory: a number of megabytes, e.g. 4096 ('$mb')"
+    (( mb >= 4096 )) || die "memory: at least 4096 MB, as Windows 11 needs ($mb)"
+    if [[ ${WM_VM_MEMORY_CHECK:-1} != 0 && -r /proc/meminfo ]]; then
+        avail=$(awk '/^MemAvailable:/ { print int($2 / 1024) }' /proc/meminfo)
+        if [[ -n $avail ]] && (( avail < mb + 1024 )); then
+            die "the host has $avail MB available; this machine needs $mb MB and the host about 1024 more. Close programs (or stop the other machine), or give it less, e.g.: $0 start <vm> 4096 (at least 4096). WM_VM_MEMORY_CHECK=0 starts it anyway."
+        fi
+    fi
+    echo "$mb"
+}
+
 cmd_create() {
-    local name=$1 iso=$2
+    local name=$1 iso=$2 memory=${3:-}
     need qemu-system-x86_64 qemu-img swtpm xorriso ssh-keygen python3 curl
     need_kvm   # before anything is created: it may run the script again through sg
     vm_conf "$name"
@@ -127,7 +145,7 @@ cmd_create() {
     cp "$(ovmf_file /usr/share/OVMF/OVMF_VARS_4M.ms.fd /usr/share/OVMF/OVMF_VARS.ms.fd)" "$dir/OVMF_VARS.fd"
     realpath "$iso" > "$dir/install.iso"
     echo "Machine $name: $dir. Installing Windows ($computer)..."
-    cmd_start "$name"
+    cmd_start "$name" "$memory"
     echo "Installing (45-90 min). Progress: tests/vm/vm.sh screenshot $name screen.png; done when this works: tests/vm/vm.sh ssh $name hostname"
 }
 
@@ -137,6 +155,8 @@ cmd_start() {
     need_kvm
     [[ -f $dir/disk.qcow2 ]] || die "machine $1 does not exist (tests/vm/vm.sh create $1 <iso>)"
     running && { echo "Machine $1 is already running."; return; }
+    local memory
+    memory=$(vm_memory "${2:-}")
     rm -f "$dir/swtpm.sock" "$dir/qmp.sock"
     swtpm socket --tpm2 --tpmstate dir="$dir/tpm" --ctrl type=unixio,path="$dir/swtpm.sock" \
         --daemon --pid file="$dir/swtpm.pid" --log file="$dir/swtpm.log"
@@ -152,7 +172,7 @@ cmd_start() {
     fi
     if ! qemu-system-x86_64 \
         -name "wm-test-$1" -enable-kvm -machine q35,smm=on \
-        -cpu host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time -smp 4 -m 6144 \
+        -cpu host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time -smp 4 -m "$memory" \
         -global driver=cfi.pflash01,property=secure,value=on \
         -drive "if=pflash,format=raw,unit=0,readonly=on,file=${code//,/,,}" \
         -drive "if=pflash,format=raw,unit=1,file=$d/OVMF_VARS.fd" \
@@ -178,7 +198,7 @@ cmd_start() {
         for _ in $(seq 1 40); do presses+=("$enter" sleep:0.5); done
         qmp "${presses[@]}" >/dev/null
     fi
-    echo "Machine $1 is running (SSH 127.0.0.1:$ssh_port, VNC 127.0.0.1:$((5900 + vnc)))."
+    echo "Machine $1 is running with $memory MB (SSH 127.0.0.1:$ssh_port, VNC 127.0.0.1:$((5900 + vnc)))."
 }
 
 cmd_stop() {
@@ -336,11 +356,11 @@ cmd_installed() {
     echo "Machine $1: installation discs detached (from the next start)."
 }
 
-[[ $# -ge 1 ]] || { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+[[ $# -ge 1 ]] || { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 1; }
 cmd=$1; shift
 case $cmd in
-    create)     [[ $# -eq 2 ]] || die "usage: $0 create <pro|home> <iso>"; cmd_create "$@" ;;
-    start)      [[ $# -eq 1 ]] || die "usage: $0 start <vm>"; cmd_start "$1" ;;
+    create)     [[ $# -ge 2 && $# -le 3 ]] || die "usage: $0 create <pro|home> <iso> [memory-MB]"; cmd_create "$@" ;;
+    start)      [[ $# -ge 1 && $# -le 2 ]] || die "usage: $0 start <vm> [memory-MB]"; cmd_start "$@" ;;
     stop)       [[ $# -eq 1 ]] || die "usage: $0 stop <vm>"; cmd_stop "$1" ;;
     status)     cmd_status ;;
     ssh)        [[ $# -ge 1 ]] || die "usage: $0 ssh <vm> [command]"; cmd_ssh "$@" ;;
