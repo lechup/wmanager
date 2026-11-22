@@ -84,6 +84,7 @@ changing anything.
 | `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts, jobs and the wmanager version, switch on library items; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `wm.ps1`, a menu over all of them for several companies (see [Several companies](#several-companies)); `build-release.sh` (see [Releases](#releases)) |
 | `configs\<company>\` | Optional, on the USB drive: the configuration of each company; `run.cmd` asks which one (see [Several companies](#several-companies)) |
 | `library/` | Ready group scripts and jobs to switch on with `tools/groups.ps1 enable` (see [Library](#library-of-ready-scripts-and-jobs)) |
+| `examples/grafana/` | A Grafana dashboard and Loki alert rules for the computers' lines (see [Grafana dashboard and alerts](#grafana-dashboard-and-alerts)) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, the daily system report from the library) |
 | `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
@@ -663,6 +664,27 @@ The log file and Loki are in English; the console and the user's notifications i
 2. Administration → Cloud access policies: create a policy with only the `logs:write` scope and generate a token.
 3. Put `LokiUrl`, `LokiUser` and `LokiToken` in `provision.config.psd1`.
 
+### Grafana dashboard and alerts
+
+`examples/grafana/` has a dashboard and alert rules for the lines wmanager sends (they are English on every computer,
+so the same patterns read all of them):
+
+- `wmanager-dashboard.json`: Dashboards > New > Import, upload the file and choose the Loki data source the computers
+  send to (in Grafana Cloud `grafanacloud-<stack>-logs`). Computers that reported and those with errors in the last
+  24 hours, silent computers (an update in the last 14 days, none in the last 3), the computers that trust the next
+  certificate during a key change, the last runs (wmanager version, warnings, errors), the versions in use, error lines
+  over time, failed group jobs, and the errors and warnings themselves; a Computer filter at the top. The last runs,
+  versions and key change come from the run records of wmanager v0.3.0 and later.
+- `wmanager-alerts.yaml`: alert rules in the Loki ruler format: errors in an update or provisioning, a failed group job,
+  a silent computer, a management source the computer rejected, a self-update or certificate change that didn't
+  happen, and a signing certificate that expires soon. Load them into the Loki ruler of the stack
+  (`lokitool rules load wmanager-alerts.yaml`, with a token that has `rules:write`), or make a Grafana alert rule from
+  each `expr` (Alerts & IRM > Alert rules > New alert rule, the Loki data source), and send them where you want
+  (contact points).
+
+CI checks both against a real Loki and Grafana (`tests/ci/check-grafana.sh`): lines like the computers send, every
+query runs and finds what it should, the ruler loads the rules, Grafana imports the dashboard.
+
 ### Healthchecks.io setup
 
 1. Create a project and generate a **Ping key** in its settings.
@@ -718,7 +740,8 @@ The integration tests (`tests\Managed.Integration.Tests.ps1`) change the compute
    another signer; a key change: the next certificate is trusted, forgotten when the source stops naming it, and
    becomes the computer's own when the source comes signed with it, while a source signed with a key the computer was
    never told about is rejected.
-3. Linux, PowerShell 7: the tests of the configuration wizard (`init.ps1` also runs there), the languages,
+3. Linux, Docker: the Grafana dashboard and the alert rules against a real Loki and Grafana.
+4. Linux, PowerShell 7: the tests of the configuration wizard (`init.ps1` also runs there), the languages,
    `tools/groups.ps1` and `tools/wm.ps1` (a new company signed with osslsigncode, when the runner's version can sign
    PowerShell files).
 

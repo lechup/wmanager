@@ -1,0 +1,518 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_LOKI",
+      "label": "Loki",
+      "description": "The Loki data source the computers send to (Grafana Cloud: grafanacloud-<stack>-logs)",
+      "type": "datasource",
+      "pluginId": "loki",
+      "pluginName": "Loki"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "datasource",
+      "id": "loki",
+      "name": "Loki",
+      "version": "1.0.0"
+    },
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    }
+  ],
+  "title": "wmanager",
+  "uid": "wmanager",
+  "description": "The computers wmanager looks after: runs, versions, errors, silent computers, key changes. README: Grafana dashboard and alerts.",
+  "tags": [
+    "wmanager"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "refresh": "",
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Computer",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "${DS_LOKI}"
+        },
+        "query": {
+          "label": "host",
+          "stream": "{service_name=\"wmanager\"}",
+          "type": 1,
+          "refId": "LokiVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values({service_name=\"wmanager\"}, host)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Computers that reported (24 h)",
+      "description": "Computers with any wmanager log line in the last 24 hours.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "count(sum by (host) (count_over_time({service_name=\"wmanager\", host=~\"$host\"}[24h])))",
+          "queryType": "instant",
+          "editorMode": "code"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 1,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Computers with errors (24 h)",
+      "description": "Computers with an error line in the last 24 hours: updates, provisioning, group scripts and jobs.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "count(sum by (host) (count_over_time({service_name=\"wmanager\", level=\"error\", host=~\"$host\"}[24h])) > 0)",
+          "queryType": "instant",
+          "editorMode": "code"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 2,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Silent computers",
+      "description": "Computers that ran an update or provisioning in the last 14 days but not in the last 3: off, or wmanager stuck.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "count(sum by (host) (count_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"}[14d])) unless sum by (host) (count_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"}[3d])))",
+          "queryType": "instant",
+          "editorMode": "code"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 3,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Key change: computers that trust the next certificate (24 h)",
+      "description": "During a key change (tools/wm.ps1 rotate-key): computers whose last runs name a next certificate. Run records exist from wmanager v0.3.0 on.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "count(count by (host) (count_over_time({service_name=\"wmanager\", host=~\"$host\"} |= \"wmanager_run\" | json | next != \"\" [24h])))",
+          "queryType": "instant",
+          "editorMode": "code"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 4,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Last runs: wmanager version, warnings and errors (24 h)",
+      "description": "From the run record each update and provisioning ends with (wmanager v0.3.0 and later): the version that finished the run, and its warnings and errors.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "max by (host, wmanager_run, job) (last_over_time({service_name=\"wmanager\", host=~\"$host\"} |= \"wmanager_run\" | json | unwrap errors [24h]))",
+          "queryType": "instant",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "max by (host, wmanager_run, job) (last_over_time({service_name=\"wmanager\", host=~\"$host\"} |= \"wmanager_run\" | json | unwrap warnings [24h]))",
+          "queryType": "instant",
+          "editorMode": "code"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "host": "Computer",
+              "wmanager_run": "wmanager",
+              "job": "Run",
+              "Value #A": "Errors",
+              "Value #B": "Warnings"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 9
+      },
+      "id": 5,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    },
+    {
+      "type": "piechart",
+      "title": "wmanager versions (24 h)",
+      "description": "Computers per wmanager version, from their run records.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "count by (wmanager_run) (count by (host, wmanager_run) (count_over_time({service_name=\"wmanager\", host=~\"$host\"} |= \"wmanager_run\" | json [24h])))",
+          "queryType": "instant",
+          "editorMode": "code",
+          "legendFormat": "{{wmanager_run}}"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value"
+          ]
+        },
+        "pieType": "donut"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 9
+      },
+      "id": 6,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Error lines per computer",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum by (host) (count_over_time({service_name=\"wmanager\", level=\"error\", host=~\"$host\"}[$__interval]))",
+          "queryType": "range",
+          "editorMode": "code",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "id": 7,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Failed group jobs (24 h)",
+      "description": "Error lines of group jobs (wmanager-Jobs), by computer and job (task label: group/name).",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum by (host, task) (count_over_time({service_name=\"wmanager\", job=\"jobs\", level=\"error\", host=~\"$host\"}[24h]))",
+          "queryType": "instant",
+          "editorMode": "code"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "host": "Computer",
+              "task": "Job",
+              "Value": "Error lines"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "id": 8,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Errors and warnings",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{service_name=\"wmanager\", level=~\"error|warn\", host=~\"$host\"}",
+          "queryType": "range",
+          "editorMode": "code"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 10
+      },
+      "id": 9,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      }
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}
