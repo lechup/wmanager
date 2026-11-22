@@ -1,0 +1,9 @@
+# The wmanager dashboard (grafana/dashboards, copied by selfhosted.sh init from ../grafana), in a folder of its own
+apiVersion: 1
+providers:
+  - name: wmanager
+    folder: wmanager
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
