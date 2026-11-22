@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# CI: checks examples/grafana against a real Loki and Grafana in Docker. Loki gets lines like the computers send
-# (Write-WmLog's prefix, run records, job errors), then: the alert rules load into Loki's ruler; every query of the
-# dashboard and of the rules runs; the ones that count computers give what the lines say; Grafana imports the
-# dashboard with a Loki data source.
+# CI: checks examples/grafana against a real Loki and Grafana in Docker. Loki gets lines like the computers send:
+# the messages taken from lang/en (so a reworded message that a rule reads fails here), with Write-WmLog's prefix,
+# and run records with the fields Add-WmRunRecord writes. Then: the alert rules load into Loki's ruler; every query
+# of the dashboard and of the rules runs; each rule fires for the computers it should and no other; the panels count
+# the right computers and show the last run; Grafana imports the dashboard with a Loki data source.
 #
 # Usage: tests/ci/check-grafana.sh            (needs docker, curl and python3)
 set -euo pipefail
@@ -74,10 +75,11 @@ grafana=http://127.0.0.1:$(docker port "$id-grafana" 3000 | head -n1 | sed 's/.*
 for _ in $(seq 1 90); do curl -fs "$loki/ready" >/dev/null 2>&1 && break; sleep 1; done
 curl -fs "$loki/ready" >/dev/null || { docker logs "$id-loki" | tail -20; echo "ERROR: Loki did not start" >&2; exit 1; }
 for _ in $(seq 1 90); do curl -fs "$grafana/api/health" >/dev/null 2>&1 && break; sleep 1; done
+curl -fs "$grafana/api/health" >/dev/null || { docker logs "$id-grafana" | tail -20; echo "ERROR: Grafana did not start" >&2; exit 1; }
 
-python3 - "$loki" "$grafana" "$root/examples/grafana/wmanager-dashboard.json" "$id-loki" <<'PY'
-import base64, json, re, sys, time, urllib.error, urllib.parse, urllib.request
-loki, grafana, dashboard_file, loki_host = sys.argv[1:5]
+python3 - "$loki" "$grafana" "$root" "$id-loki" <<'PY'
+import base64, glob, json, re, sys, time, urllib.error, urllib.parse, urllib.request
+loki, grafana, root, loki_host = sys.argv[1:5]
 failures = []
 
 def http(url, data=None, headers=None, method=None):
@@ -87,35 +89,61 @@ def http(url, data=None, headers=None, method=None):
             return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()
+    except urllib.error.URLError as e:
+        return 0, str(e)
 
-# --- Lines like the computers send ---------------------------------------------------------------------------
+def check(name, ok, detail=''):
+    print(('ok    ' if ok else 'FAIL  ') + name + (f'  ({detail})' if detail and not ok else ''))
+    if not ok: failures.append(name)
+
+# --- The English messages, as the computers log them ---------------------------------------------------------
+catalog = {}
+for f in glob.glob(f'{root}/lang/en/*.psd1'):
+    for m in re.finditer(r"^\s*'([\w.]+)'\s*=\s*(?:'((?:[^']|'')*)'|\"([^\"]*)\")", open(f, encoding='utf-8-sig').read(), re.M):
+        catalog[m.group(1)] = m.group(2).replace("''", "'") if m.group(2) is not None else m.group(3)
+def msg(key, *args): return catalog[key].format(*args)
+# The fields of the run record, as Add-WmRunRecord writes them
+common = open(f'{root}/lib/Common.ps1', encoding='utf-8-sig').read()
+record_fn = common[common.index('function Add-WmRunRecord'):]
+record_fn = record_fn[:record_fn.index('\n}')]
+for field in ['"wmanager_run":', '"job":', '"warnings":', '"errors":', '"cert":', '"next":']:
+    check(f'Add-WmRunRecord writes {field}', field in record_fn)
+
 now = time.time()
+H = 3600
 def ns(seconds_ago): return str(int((now - seconds_ago) * 1e9))
-def prefixed(seconds_ago, level, text):
+def line(seconds_ago, level, text):
     return [ns(seconds_ago), time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now - seconds_ago)) + f' [{level.upper()}] ' + text]
-def record(seconds_ago, version, w, e, cert='OLD', nxt=''):
-    return [ns(seconds_ago - 1), json.dumps({'wmanager_run': version, 'job': 'update', 'warnings': w, 'errors': e, 'cert': cert, 'next': nxt}, separators=(',', ':'))]
+def record(seconds_ago, version, w, e, nxt=''):
+    return [ns(seconds_ago - 1), json.dumps({'wmanager_run': version, 'job': 'update', 'warnings': w, 'errors': e, 'cert': 'OLD', 'next': nxt}, separators=(',', ':'))]
 def stream(host, job, level, values, task=None):
     labels = {'service_name': 'wmanager', 'host': host, 'job': job, 'level': level}
     if task: labels['task'] = task
     return {'stream': labels, 'values': values}
-H = 3600
+def run(host, ago, version, w, e, nxt=''):
+    return stream(host, 'update', 'info', [line(ago + 300, 'info', msg('update.start', f'wmanager {version}', 'update', host.upper())),
+                                           line(ago, 'info', msg('update.summary', w, e)), record(ago, version, w, e, nxt)])
 streams = [
     # office-01: a clean update
-    stream('office-01', 'update', 'info', [prefixed(H + 300, 'info', 'wmanager v0.3.0 update on OFFICE-01'),
-                                           prefixed(H, 'info', 'End: warnings 0, errors 0.'), record(H, 'v0.3.0', 0, 0)]),
-    # office-02: errors, a refused source, an expiring certificate, a failed job
-    stream('office-02', 'update', 'info', [prefixed(2 * H + 300, 'info', 'wmanager v0.3.0 update on OFFICE-02'),
-                                           prefixed(2 * H, 'info', 'End: warnings 1, errors 2.'), record(2 * H, 'v0.3.0', 1, 2)]),
-    stream('office-02', 'update', 'error', [prefixed(2 * H + 200, 'error', 'Rejected the new version from the management source: invalid manifest signature (NotSigned): x'),
-                                            prefixed(2 * H + 100, 'error', 'choco upgrade vlc ended with exit code 1')]),
-    stream('office-02', 'update', 'warn', [prefixed(2 * H + 250, 'warn', 'The signing certificate expires on 2026-12-20; prepare a new one.')]),
-    stream('office-02', 'jobs', 'error', [prefixed(3 * H, 'error', 'Job all/check-disk-space ended with exit code 1')], task='all/check-disk-space'),
-    # office-03: a key change, ready for the next certificate
-    stream('office-03', 'update', 'info', [prefixed(4 * H, 'info', 'End: warnings 0, errors 0.'), record(4 * H, 'v0.4.0', 0, 0, nxt='NEXT')]),
-    # office-silent: last update five days ago
-    stream('office-silent', 'update', 'info', [prefixed(5 * 24 * H, 'info', 'wmanager v0.3.0 update on OFFICE-SILENT'),
-                                               prefixed(5 * 24 * H - 60, 'info', 'End: warnings 0, errors 0.')]),
+    run('office-01', H, 'v0.3.0', 0, 0),
+    # office-02: errors, a refused source, an expiring certificate, a failed job, a group script that failed hourly
+    run('office-02', 2 * H, 'v0.3.0', 1, 2),
+    stream('office-02', 'update', 'error', [line(2 * H + 200, 'error', msg('managed.new_version_rejected', 'invalid manifest signature (NotSigned): x')),
+                                            line(2 * H + 100, 'error', 'choco upgrade vlc ended with exit code 1')]),
+    stream('office-02', 'update', 'warn', [line(2 * H + 250, 'warn', msg('managed.cert_expiring', '2026-12-20'))]),
+    stream('office-02', 'jobs', 'error', [line(3 * H, 'error', 'Job all/check-disk-space ended with exit code 1')], task='all/check-disk-space'),
+    stream('office-02', 'jobs', 'error', [line(3 * H + 60, 'error', msg('managed.script_exit_code', 'groups/all/scripts/10-power.ps1', 1, 'tried again in 20 hours'))]),
+    # office-03: a run with errors, then a clean one on a newer version that names the next certificate
+    stream('office-03', 'update', 'info', [record(20 * H, 'v0.3.0', 0, 3), record(4 * H, 'v0.4.0', 0, 0, nxt='NEXT')]),
+    # office-04: a self-update whose download fails, a certificate change that failed, an expired certificate
+    run('office-04', H, 'v0.3.0', 1, 1),
+    stream('office-04', 'update', 'warn', [line(H + 200, 'warn', msg('update.self_update_download_failed', 'v0.4.0', 'timeout', 'wmanager v0.3.0')),
+                                           line(H + 150, 'warn', msg('managed.cert_expired', '2026-11-01'))]),
+    stream('office-04', 'update', 'error', [line(H + 100, 'error', msg('managed.cert_change_failed', 'access denied'))]),
+    # office-05: an hourly job's own output mentions wmanager_run, which is not a run record
+    stream('office-05', 'jobs', 'info', [line(2 * H, 'info', 'report: wmanager_run is the field of the run record')], task='all/system-report'),
+    # office-silent: last lines five days ago
+    run('office-silent', 5 * 24 * H, 'v0.3.0', 0, 0),
 ]
 status, body = http(f'{loki}/loki/api/v1/push', json.dumps({'streams': streams}).encode(), {'Content-Type': 'application/json'})
 if status not in (200, 204): sys.exit(f'ERROR: push to Loki: {status} {body}')
@@ -126,64 +154,69 @@ def query(expr, instant=True):
         url = f'{loki}/loki/api/v1/query?' + urllib.parse.urlencode({'query': expr, 'time': str(int(now * 1e9))})
     else:
         url = f'{loki}/loki/api/v1/query_range?' + urllib.parse.urlencode(
-            {'query': expr, 'start': ns(7 * 24 * H), 'end': ns(0), 'step': '3600', 'limit': 1000})
+            {'query': expr, 'start': ns(2 * 24 * H), 'end': ns(0), 'step': '3600', 'limit': 1000})
     status, body = http(url)
-    if status != 200: return None, f'{status} {body.strip()}'
+    if status != 200: return None, f'{status} {body.strip()[:300]}'
     return json.loads(body)['data'], None
-
 def scalar(data):
     if not data or not data['result']: return 0
-    return float(data['result'][0]['value'][1])
+    r = data['result'][0]
+    return float(r['value'][1] if 'value' in r else r['values'][-1][1])
+def by(data, label):
+    out = {}
+    for r in data['result']:
+        out[r['metric'].get(label)] = float(r['value'][1] if 'value' in r else r['values'][-1][1])
+    return out
 
-def check(name, ok, detail=''):
-    print(('ok    ' if ok else 'FAIL  ') + name + (f'  ({detail})' if detail and not ok else ''))
-    if not ok: failures.append(name)
-
-# --- Dashboard: every query runs; the counts are right ----------------------------------------------------------
-dash = json.load(open(dashboard_file))
-expected = {
-    'Computers that reported (24 h)': 3,
-    'Computers with errors (24 h)': 1,
-    'Silent computers': 1,
-    'Key change: computers that trust the next certificate (24 h)': 1,
-}
+# --- Dashboard ------------------------------------------------------------------------------------------------
+dash = json.load(open(f'{root}/examples/grafana/wmanager-dashboard.json'))
+results = {}
 for panel in dash['panels']:
     for t in panel.get('targets', []):
         expr = t['expr'].replace('$host', '.+').replace('$__interval', '1h')
         data, err = query(expr, t.get('queryType') == 'instant')
         check(f'dashboard "{panel["title"]}" {t["refId"]} runs', err is None, err)
-        if err is None and panel['title'] in expected and t['refId'] == 'A':
-            check(f'dashboard "{panel["title"]}" = {expected[panel["title"]]}', scalar(data) == expected[panel['title']], f'got {scalar(data)}')
-        if err is None and panel['title'] == 'wmanager versions (24 h)':
-            got = {r['metric'].get('wmanager_run'): float(r['value'][1]) for r in data['result']}
-            check('dashboard versions: v0.3.0 x2, v0.4.0 x1', got == {'v0.3.0': 2, 'v0.4.0': 1}, f'got {got}')
-        if err is None and panel['title'].startswith('Last runs') and t['refId'] == 'A':
-            hosts = sorted(r['metric']['host'] for r in data['result'])
-            check('dashboard last runs: office-01, office-02, office-03', hosts == ['office-01', 'office-02', 'office-03'], f'got {hosts}')
+        results[(panel['title'], t['refId'])] = data
+def panel(prefix, ref='A'):
+    return next(v for (title, r), v in results.items() if title.startswith(prefix) and r == ref)
+for prefix, want in [('Computers that reported', 5), ('Computers with errors', 2), ('Silent computers', 1), ('Key change', 1)]:
+    check(f'dashboard "{prefix}" = {want}', scalar(panel(prefix)) == want, f'got {scalar(panel(prefix))}')
+last = panel('Last run of each computer', 'A')
+got = {r['metric']['host']: r['metric']['wmanager_run'] for r in last['result']}
+check('last run: each computer once, with the version of its last run',
+      got == {'office-01': 'v0.3.0', 'office-02': 'v0.3.0', 'office-03': 'v0.4.0', 'office-04': 'v0.3.0'}, f'got {got}')
+check('last run: when, in milliseconds', all(abs(float(r['value'][1]) / 1000 - now) < 24 * H for r in last['result']))
+errors = by(panel('Last run of each computer', 'B'), 'host')
+check('last run: the errors of the last run (office-03: 0, not 3)', errors == {'office-01': 0, 'office-02': 2, 'office-03': 0, 'office-04': 1}, f'got {errors}')
+warnings = by(panel('Last run of each computer', 'C'), 'host')
+check('last run: its warnings', warnings == {'office-01': 0, 'office-02': 1, 'office-03': 0, 'office-04': 1}, f'got {warnings}')
+versions = by(panel('wmanager versions'), 'wmanager_run')
+check('versions: each computer once', versions == {'v0.3.0': 3, 'v0.4.0': 1}, f'got {versions}')
+jobs = {(r['metric']['host'], r['metric'].get('task', '')) for r in panel('Failed group jobs')['result']}
+check('hourly run: the job by name, and the group script without one', jobs == {('office-02', 'all/check-disk-space'), ('office-02', '')}, f'got {jobs}')
 
-# --- Alert rules: Loki's ruler loads them, and each finds what it should --------------------------------------
+# --- Alert rules ---------------------------------------------------------------------------------------------
 status, body = http(f'{loki}/loki/api/v1/rules')
 check('the ruler loads the rules', status == 200 and 'WmanagerSilent' in body, f'{status} {body[:300]}')
-rules = {}
-for m in re.finditer(r'- alert: (\w+)\n\s+expr: (.+)', open(dashboard_file.replace('wmanager-dashboard.json', 'wmanager-alerts.yaml')).read()):
-    rules[m.group(1)] = m.group(2).strip()
+rules = {m.group(1): m.group(2).strip() for m in re.finditer(r'- alert: (\w+)\n\s+expr: (.+)', open(f'{root}/examples/grafana/wmanager-alerts.yaml').read())}
 want = {
-    'WmanagerRunErrors': ['office-02'],
-    'WmanagerJobErrors': ['office-02'],
-    'WmanagerSilent': ['office-silent'],
-    'WmanagerSourceRejected': ['office-02'],
-    'WmanagerSelfUpdateFailed': [],
-    'WmanagerCertificateExpiring': [None],
+    'WmanagerRunErrors': [('office-02', None), ('office-04', None)],
+    'WmanagerJobErrors': [('office-02', 'all/check-disk-space')],
+    'WmanagerSilent': [('office-silent', None)],
+    'WmanagerSourceRejected': [('office-02', None)],
+    'WmanagerSelfUpdateFailed': [('office-04', None)],
+    'WmanagerCertificateExpiring': [(None, None)],
+    'WmanagerCertificateExpired': [(None, None)],
 }
-check('six rules', sorted(rules) == sorted(want), f'got {sorted(rules)}')
+check('the rules are the expected ones', sorted(rules) == sorted(want), f'got {sorted(rules)}')
 for name, expr in rules.items():
     data, err = query(expr)
     check(f'rule {name} runs', err is None, err)
     if err is None:
-        hosts = sorted((r['metric'].get('host') for r in data['result']), key=lambda h: h or '')
-        check(f'rule {name} fires for {want.get(name)}', hosts == want.get(name), f'got {hosts}')
+        got = sorted(((r['metric'].get('host'), r['metric'].get('task')) for r in data['result']), key=str)
+        check(f'rule {name} fires for {want.get(name)}', got == want.get(name), f'got {got}')
 
-# --- Grafana imports the dashboard -------------------------------------------------------------------------------
+# --- Grafana imports the dashboard ---------------------------------------------------------------------------
 auth = {'Authorization': 'Basic ' + base64.b64encode(b'admin:wm-check').decode(), 'Content-Type': 'application/json'}
 status, body = http(f'{grafana}/api/datasources', json.dumps({'name': 'Loki', 'type': 'loki', 'uid': 'wm-loki',
                     'url': f'http://{loki_host}:3100', 'access': 'proxy'}).encode(), auth)

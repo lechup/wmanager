@@ -671,19 +671,27 @@ so the same patterns read all of them):
 
 - `wmanager-dashboard.json`: Dashboards > New > Import, upload the file and choose the Loki data source the computers
   send to (in Grafana Cloud `grafanacloud-<stack>-logs`). Computers that reported and those with errors in the last
-  24 hours, silent computers (an update in the last 14 days, none in the last 3), the computers that trust the next
-  certificate during a key change, the last runs (wmanager version, warnings, errors), the versions in use, error lines
-  over time, failed group jobs, and the errors and warnings themselves; a Computer filter at the top. The last runs,
-  versions and key change come from the run records of wmanager v0.3.0 and later.
-- `wmanager-alerts.yaml`: alert rules in the Loki ruler format: errors in an update or provisioning, a failed group job,
-  a silent computer, a management source the computer rejected, a self-update or certificate change that didn't
-  happen, and a signing certificate that expires soon. Load them into the Loki ruler of the stack
-  (`lokitool rules load wmanager-alerts.yaml`, with a token that has `rules:write`), or make a Grafana alert rule from
-  each `expr` (Alerts & IRM > Alert rules > New alert rule, the Loki data source), and send them where you want
-  (contact points).
+  24 hours, silent computers (lines in the last 14 days, none in the last 3), the computers whose last run trusts the
+  next certificate during a key change, the last run of each computer (the wmanager version that finished it, when,
+  warnings, errors), the versions in use (each computer once, by its last run), error lines over time, failed group
+  jobs and errors of the hourly run, and the errors and warnings themselves; a Computer filter at the top. The last
+  runs, versions and key change come from the run records of wmanager v0.3.0 and later.
+- `wmanager-alerts.yaml`: alert rules in the Loki ruler format, evaluated every 15 minutes: errors of an update,
+  provisioning or the hourly run's group scripts and source; a failed group job (by name); a silent computer; a
+  management source the computer rejected; a wmanager version or signing certificate that didn't switch (a download
+  that keeps failing included); a signing certificate that expires within 60 days, and one that has expired. Load them
+  into the Loki ruler of the stack (`lokitool rules load wmanager-alerts.yaml`, with a token that has `rules:write`),
+  or make a Grafana alert rule from each `expr` (Alerts & IRM > Alert rules > New alert rule, the Loki data source)
+  and set "Alert state if no data" to Normal: a healthy result is empty. Send them where you want (contact points).
 
-CI checks both against a real Loki and Grafana (`tests/ci/check-grafana.sh`): lines like the computers send, every
-query runs and finds what it should, the ruler loads the rules, Grafana imports the dashboard.
+"Silent" means no line for 3 days. A computer that updates once a week and runs no daily job (the example source has
+the daily system report) looks silent between its updates: use `8d` in the rule and the panel for it. A computer
+silent longer than the logs are kept (14 days on Grafana Cloud's free plan) drops out of both; Healthchecks keeps it.
+
+CI checks both against a real Loki and Grafana (`tests/ci/check-grafana.sh`): lines like the computers send, built
+from the English messages in `lang/en` (a reworded message that a rule reads fails there) and the run record's fields;
+every query runs, each rule fires for the computers it should and no other, the panels count the right computers and
+show the last run, the ruler loads the rules, Grafana imports the dashboard.
 
 ### Healthchecks.io setup
 

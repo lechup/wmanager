@@ -31,7 +31,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": true,
   "time": {
     "from": "now-7d",
@@ -71,7 +71,7 @@
     {
       "type": "stat",
       "title": "Computers that reported (24 h)",
-      "description": "Computers with any wmanager log line in the last 24 hours.",
+      "description": "Computers with any wmanager line in the last 24 hours.",
       "targets": [
         {
           "refId": "A",
@@ -115,7 +115,7 @@
     {
       "type": "stat",
       "title": "Computers with errors (24 h)",
-      "description": "Computers with an error line in the last 24 hours: updates, provisioning, group scripts and jobs.",
+      "description": "Computers with an error line in the last 24 hours: updates, provisioning, the hourly run (group scripts, the source) and jobs.",
       "targets": [
         {
           "refId": "A",
@@ -172,7 +172,7 @@
     {
       "type": "stat",
       "title": "Silent computers",
-      "description": "Computers that ran an update or provisioning in the last 14 days but not in the last 3: off, or wmanager stuck.",
+      "description": "Computers with lines in the last 14 days but none in the last 3: off, or wmanager stuck. Computers that update once a week and run no daily job look silent too (change 3d to 8d for them). Logs older than 14 days (Grafana Cloud's free plan) are gone, so a computer silent longer drops out: Healthchecks keeps it.",
       "targets": [
         {
           "refId": "A",
@@ -180,7 +180,7 @@
             "type": "loki",
             "uid": "${DS_LOKI}"
           },
-          "expr": "count(sum by (host) (count_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"}[14d])) unless sum by (host) (count_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"}[3d])))",
+          "expr": "count(sum by (host) (count_over_time({service_name=\"wmanager\", host=~\"$host\"}[14d])) unless sum by (host) (count_over_time({service_name=\"wmanager\", host=~\"$host\"}[3d])))",
           "queryType": "instant",
           "editorMode": "code"
         }
@@ -228,8 +228,8 @@
     },
     {
       "type": "stat",
-      "title": "Key change: computers that trust the next certificate (24 h)",
-      "description": "During a key change (tools/wm.ps1 rotate-key): computers whose last runs name a next certificate. Run records exist from wmanager v0.3.0 on.",
+      "title": "Key change: computers that trust the next certificate",
+      "description": "During a key change (tools/wm.ps1 rotate-key): computers whose last run (24 h) names a next certificate. Run records exist from wmanager v0.3.0 on.",
       "targets": [
         {
           "refId": "A",
@@ -237,7 +237,7 @@
             "type": "loki",
             "uid": "${DS_LOKI}"
           },
-          "expr": "count(count by (host) (count_over_time({service_name=\"wmanager\", host=~\"$host\"} |= \"wmanager_run\" | json | next != \"\" [24h])))",
+          "expr": "sum(max by (host) (last_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"} |~ `^\\{\"wmanager_run\"` | json | __error__=\"\" | label_format has_next=`{{ if .next }}1{{ else }}0{{ end }}` | keep host, has_next | unwrap has_next [24h])))",
           "queryType": "instant",
           "editorMode": "code"
         }
@@ -272,8 +272,8 @@
     },
     {
       "type": "table",
-      "title": "Last runs: wmanager version, warnings and errors (24 h)",
-      "description": "From the run record each update and provisioning ends with (wmanager v0.3.0 and later): the version that finished the run, and its warnings and errors.",
+      "title": "Last run of each computer (24 h)",
+      "description": "From the run record each update and provisioning ends with (wmanager v0.3.0 and later): the version that finished the last run, when, and its warnings and errors.",
       "targets": [
         {
           "refId": "A",
@@ -281,7 +281,7 @@
             "type": "loki",
             "uid": "${DS_LOKI}"
           },
-          "expr": "max by (host, wmanager_run, job) (last_over_time({service_name=\"wmanager\", host=~\"$host\"} |= \"wmanager_run\" | json | unwrap errors [24h]))",
+          "expr": "(topk by (host) (1, max by (host, wmanager_run) (last_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"} |~ `^\\{\"wmanager_run\"` | json | __error__=\"\" | label_format ts=`{{ __timestamp__ | unixEpoch }}` | keep host, wmanager_run, ts | unwrap ts [24h])))) * 1000",
           "queryType": "instant",
           "editorMode": "code"
         },
@@ -291,7 +291,17 @@
             "type": "loki",
             "uid": "${DS_LOKI}"
           },
-          "expr": "max by (host, wmanager_run, job) (last_over_time({service_name=\"wmanager\", host=~\"$host\"} |= \"wmanager_run\" | json | unwrap warnings [24h]))",
+          "expr": "max by (host) (last_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"} |~ `^\\{\"wmanager_run\"` | json | __error__=\"\" | keep host, errors | unwrap errors [24h]))",
+          "queryType": "instant",
+          "editorMode": "code"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "max by (host) (last_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"} |~ `^\\{\"wmanager_run\"` | json | __error__=\"\" | keep host, warnings | unwrap warnings [24h]))",
           "queryType": "instant",
           "editorMode": "code"
         }
@@ -310,16 +320,29 @@
             "renameByName": {
               "host": "Computer",
               "wmanager_run": "wmanager",
-              "job": "Run",
-              "Value #A": "Errors",
-              "Value #B": "Warnings"
+              "Value #A": "Last run",
+              "Value #B": "Errors",
+              "Value #C": "Warnings"
             }
           }
         }
       ],
       "fieldConfig": {
         "defaults": {},
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last run"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "showHeader": true
@@ -338,8 +361,10 @@
     },
     {
       "type": "piechart",
-      "title": "wmanager versions (24 h)",
-      "description": "Computers per wmanager version, from their run records.",
+      "title": "wmanager versions (last run, 24 h)",
+      "description": "Computers per wmanager version of their last run (run records, wmanager v0.3.0 and later).",
+      "interval": "1h",
+      "maxDataPoints": 24,
       "targets": [
         {
           "refId": "A",
@@ -347,8 +372,8 @@
             "type": "loki",
             "uid": "${DS_LOKI}"
           },
-          "expr": "count by (wmanager_run) (count by (host, wmanager_run) (count_over_time({service_name=\"wmanager\", host=~\"$host\"} |= \"wmanager_run\" | json [24h])))",
-          "queryType": "instant",
+          "expr": "count by (wmanager_run) (topk by (host) (1, max by (host, wmanager_run) (last_over_time({service_name=\"wmanager\", job=~\"update|retry|provision\", host=~\"$host\"} |~ `^\\{\"wmanager_run\"` | json | __error__=\"\" | label_format ts=`{{ __timestamp__ | unixEpoch }}` | keep host, wmanager_run, ts | unwrap ts [24h]))))",
+          "queryType": "range",
           "editorMode": "code",
           "legendFormat": "{{wmanager_run}}"
         }
@@ -357,7 +382,8 @@
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
-          ]
+          ],
+          "values": false
         },
         "legend": {
           "displayMode": "table",
@@ -430,8 +456,8 @@
     },
     {
       "type": "table",
-      "title": "Failed group jobs (24 h)",
-      "description": "Error lines of group jobs (wmanager-Jobs), by computer and job (task label: group/name).",
+      "title": "Failed group jobs, and errors of the hourly run (24 h)",
+      "description": "Error lines of the hourly task (wmanager-Jobs): a job by its task label (group/name); without one, the group scripts and the management source of that run.",
       "targets": [
         {
           "refId": "A",
@@ -453,7 +479,7 @@
             },
             "renameByName": {
               "host": "Computer",
-              "task": "Job",
+              "task": "Job (empty: scripts, source)",
               "Value": "Error lines"
             }
           }

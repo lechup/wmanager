@@ -1,31 +1,36 @@
 # Alert rules for the lines wmanager sends to Loki, in the Loki ruler format (README: Grafana dashboard and alerts).
-# Grafana Cloud: Alerts & IRM > Alert rules > New alert rule, one per rule with its expr; or load the file into the
-# Loki ruler of the stack: lokitool rules load wmanager-alerts.yaml (address, user and a token with rules:write).
-# The log lines are English on every computer, so these patterns hold whatever the computers' language.
+# Load them into the Loki ruler of the stack (lokitool rules load wmanager-alerts.yaml, with a token that has
+# rules:write), or make a Grafana alert rule from each expr: then set "Alert state if no data" to Normal, since a
+# healthy result is empty. The log lines are English on every computer, so these patterns hold whatever the
+# computers' language (tests/ci/check-grafana.sh builds its lines from lang/en).
 groups:
   - name: wmanager
+    # The lines change hourly at most; every 15 minutes is enough and keeps the 14-day scan cheap
+    interval: 15m
     rules:
-      # An update or provisioning with errors (packages, scripts, the management source...)
+      # Errors of an update or provisioning, or of the hourly run's group scripts and source (no task label)
       - alert: WmanagerRunErrors
-        expr: sum by (host) (count_over_time({service_name="wmanager", job=~"update|retry|provision", level="error"}[1d])) > 0
+        expr: sum by (host) (count_over_time({service_name="wmanager", level="error", task=""}[1d])) > 0
         labels:
           severity: warning
         annotations:
-          summary: 'wmanager: {{ $labels.host }} had errors in an update or provisioning'
+          summary: 'wmanager: {{ $labels.host }} had errors (update, provisioning, group scripts or the source)'
           description: '{{ $value }} error lines in the last day; in Grafana: {service_name="wmanager", host="{{ $labels.host }}", level="error"}'
 
       # A group job that failed (the task label is group/name)
       - alert: WmanagerJobErrors
-        expr: sum by (host, task) (count_over_time({service_name="wmanager", job="jobs", level="error"}[1d])) > 0
+        expr: sum by (host, task) (count_over_time({service_name="wmanager", job="jobs", level="error", task!=""}[1d])) > 0
         labels:
           severity: warning
         annotations:
           summary: 'wmanager: job {{ $labels.task }} failed on {{ $labels.host }}'
 
-      # A computer that ran in the last 14 days but not in the last 3: switched off, or wmanager stuck
-      # (Healthchecks says the same per computer when it is set up)
+      # A computer with lines in the last 14 days but none in the last 3: switched off, or wmanager stuck. Computers
+      # that update once a week and run no daily job look silent too: use 8d for them. A computer silent longer than
+      # the logs are kept (14 days on Grafana Cloud's free plan) drops out and the alert ends: Healthchecks keeps it.
       - alert: WmanagerSilent
-        expr: sum by (host) (count_over_time({service_name="wmanager", job=~"update|retry|provision"}[14d])) unless sum by (host) (count_over_time({service_name="wmanager", job=~"update|retry|provision"}[3d]))
+        expr: sum by (host) (count_over_time({service_name="wmanager"}[14d])) unless sum by (host) (count_over_time({service_name="wmanager"}[3d]))
+        for: 1h
         labels:
           severity: info
         annotations:
@@ -40,18 +45,27 @@ groups:
         annotations:
           summary: 'wmanager: {{ $labels.host }} rejected the management source'
 
-      # A self-update that didn't install: the computer stays on the version it has
+      # The wmanager version the source names didn't install (download, checksum, the release, the handover), or the
+      # signing certificate couldn't be switched during a key change: the computer stays where it was
       - alert: WmanagerSelfUpdateFailed
-        expr: sum by (host) (count_over_time({service_name="wmanager", level="error"} |~ "did not install itself|couldn't be changed" [1d])) > 0
+        expr: sum by (host) (count_over_time({service_name="wmanager", level=~"warn|error"} |~ "Cannot download wmanager |the downloaded file has SHA256|Cannot prepare wmanager |did not install itself|signing certificate couldn't be changed" [1d])) > 0
         labels:
           severity: warning
         annotations:
           summary: 'wmanager: {{ $labels.host }} could not switch its wmanager version or signing certificate'
 
-      # The signing certificate of the source expires within 60 days (or has expired)
+      # The signing certificate of the source expires within 60 days
       - alert: WmanagerCertificateExpiring
-        expr: count(sum by (host) (count_over_time({service_name="wmanager", level="warn"} |~ "The signing certificate (expires|expired) on" [1d]))) > 0
+        expr: count(sum by (host) (count_over_time({service_name="wmanager", level="warn"} |= "The signing certificate expires on" [1d]))) > 0
         labels:
           severity: warning
         annotations:
-          summary: 'wmanager: the signing certificate expires soon ({{ $value }} computers say so); tools/wm.ps1 rotate-key'
+          summary: 'wmanager: the signing certificate expires within 60 days ({{ $value }} computers say so): pwsh tools/wm.ps1 <company> rotate-key'
+
+      # It has expired: only a source signed with a timestamp (WM_TSA) is still accepted
+      - alert: WmanagerCertificateExpired
+        expr: count(sum by (host) (count_over_time({service_name="wmanager", level="warn"} |= "The signing certificate expired on" [1d]))) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: 'wmanager: the signing certificate has expired ({{ $value }} computers say so); a source signed without a timestamp is rejected'
