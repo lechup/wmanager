@@ -2,8 +2,9 @@
 # CI: checks examples/selfhosted end to end with Docker: init, two companies, docker compose up (certificates of
 # Caddy's own instead of Let's Encrypt), then the logins and the tenants as the computers and tools/wm.ps1 meet them
 # (a write token only sends, a read token only reads and can't delete, a company sees only its own lines, a wrong login
-# and other paths are refused), and Grafana: the data source of each company reads its tenant only, the dashboard and the alert
-# rules are provisioned.
+# and other paths are refused), the management sources (each company's computers read only theirs, with its header,
+# GET only, no listing, no way out with ..), and Grafana: the data source of each company reads its tenant only, the
+# dashboard and the alert rules are provisioned.
 #
 # Usage: tests/ci/check-selfhosted.sh            (needs docker with compose, curl, openssl and python3)
 set -euo pipefail
@@ -39,6 +40,16 @@ globex_user=$(user globex.txt); globex_write=$(token globex.txt); globex_read=$(
 [[ $acme_user == 1001 && $globex_user == 1002 && -n $acme_write && -n $acme_read && $acme_write != "$acme_read" ]] ||
     { cat acme.txt globex.txt; echo "ERROR: add-company didn't give the tenants and tokens" >&2; exit 1; }
 grep -q "$acme_write" caddy/push-users && { echo "ERROR: a token is kept in the clear" >&2; exit 1; }
+header() { sed -n "s/^  AuthHeader //p" "$1"; }
+acme_header=$(header acme.txt); globex_header=$(header globex.txt)
+[[ $acme_header == Basic\ * && $globex_header == Basic\ * && $acme_header != "$globex_header" ]] ||
+    { echo "ERROR: add-company didn't give the source logins" >&2; exit 1; }
+[[ $(./selfhosted.sh address acme) == $'source https://loki.localhost/source/acme\nfolder sources/acme' ]] ||
+    { ./selfhosted.sh address acme; echo "ERROR: address doesn't say where acme's source is" >&2; exit 1; }
+# What tools/wm.ps1 sync would have sent (rsync into the folder "address" names)
+printf '@{ Serial = 7 }\r\n' > sources/acme/manifest.psd1
+mkdir -p sources/acme/groups/all && printf 'Write-Output 1\r\n' > sources/acme/groups/all/job.ps1
+printf '@{ Serial = 3 }\r\n' > sources/globex/manifest.psd1
 
 docker compose -p "$project" up -d
 loki() { curl -sk --resolve "loki.localhost:$https_port:127.0.0.1" "$@"; }
@@ -77,6 +88,20 @@ code() { loki -o /dev/null -w '%{http_code}' "$@"; }
 sleep 2
 [[ $(hosts "$acme_user:$acme_read") == office-acme ]] && ok 'acme reads only its own computers (tools/wm.ps1 status)' || fail "acme reads $(hosts "$acme_user:$acme_read")"
 [[ $(hosts "$globex_user:$globex_read") == office-globex ]] && ok 'globex reads only its own' || fail "globex reads $(hosts "$globex_user:$globex_read")"
+
+# --- The management sources, as the computers read them (Management.Source and AuthHeader) ---------------------
+src="https://loki.localhost:$https_port/source"
+[[ $(loki -H "Authorization: $acme_header" "$src/acme/manifest.psd1") == $'@{ Serial = 7 }\r' ]] &&
+    ok "acme's computers read its source, byte for byte" || fail "acme's source with its header"
+[[ $(code -H "Authorization: $acme_header" "$src/acme/groups/all/job.ps1") == 200 ]] && ok 'and the files under it' || fail 'a file in a subfolder'
+[[ $(code "$src/acme/manifest.psd1") == 401 ]] && ok 'not without the header' || fail 'the source without a login'
+[[ $(code -H "Authorization: $globex_header" "$src/acme/manifest.psd1") == 401 ]] && ok "not with globex's header" || fail "globex reads acme's source"
+[[ $(code -H "Authorization: $acme_header" "$src/globex/manifest.psd1") == 401 ]] && ok "acme's header doesn't read globex's" || fail "acme reads globex's source"
+[[ $(code --path-as-is -H "Authorization: $acme_header" "$src/acme/../globex/manifest.psd1") != 200 ]] && ok 'no way out of the folder with ..' || fail 'acme reaches globex with ..'
+[[ $(code -H "Authorization: $acme_header" "$src/acme/") == 404 ]] && ok 'no folder listing' || fail 'a folder is listed'
+[[ $(code -H "Authorization: $acme_header" -X PUT --data x "$src/acme/manifest.psd1") == 404 ]] && ok 'reading only (GET)' || fail 'the source takes PUT'
+[[ $(code -H "Authorization: $acme_header" "$src/nobody/manifest.psd1") == 404 ]] && ok 'no other company' || fail 'an unknown company answers'
+[[ $(code -u "$acme_user:$acme_read" "$src/acme/manifest.psd1") == 401 ]] && ok "Loki's read token is not the source login" || fail 'the Loki token reads the source'
 
 # --- Grafana ---------------------------------------------------------------------------------------------------
 password=$(sed -n 's/^GRAFANA_ADMIN_PASSWORD=//p' .env)

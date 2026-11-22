@@ -695,6 +695,83 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             Get-Content -LiteralPath (Join-Path $folder 'choco-reqs.txt') | Should -Not -Contain 'not-signed-yet'
         }
 
+        It 'sends to the server of examples/selfhosted: selfhosted.sh says where over ssh, the configuration gets its address' {
+            $dir = Add-Company 'acme' -Source -Config (@(
+                '@{'
+                '    Management = @{'
+                "        Source     = 'https://raw.githubusercontent.com/me/wmanager-acme/main'"
+                "        SourceId   = 'test-source-0001'"
+                "        AuthHeader = 'token github_pat_old'"
+                '    }'
+                '}') -join "`n")
+            Write-Manifest (Join-Path $dir 'source')
+            # The server: the kit's selfhosted.sh as it is, a company added (the files add-company makes, no Docker here),
+            # in a folder whose name needs quoting in a shell
+            $kit = Join-Path $TestDrive "server/it's/examples/selfhosted"
+            New-Item -ItemType Directory -Force -Path (Join-Path $kit 'caddy/sources'), (Join-Path $kit 'sources/acme') | Out-Null
+            Copy-Item -LiteralPath (Join-Path $script:root 'examples/selfhosted/selfhosted.sh') -Destination $kit
+            Set-Content -LiteralPath (Join-Path $kit '.env') -Value 'LOKI_DOMAIN=logs.example.test'
+            Set-Content -LiteralPath (Join-Path $kit 'caddy/tenants') -Value 'other 1001'
+            # ssh runs the command here, the options and the host left out; rsync reaches its other end through it too
+            $log = Join-Path $TestDrive 'ssh.log'
+            $ssh = Join-Path (Join-Path $TestDrive 'fake-bin') 'ssh'
+            Set-Content -LiteralPath $ssh -Value @(
+                '#!/bin/sh'
+                "printf '%s\n' `"`$*`" >> '$log'"
+                'while [ $# -gt 0 ]; do'
+                '    case $1 in --) shift; break ;; -l|-p|-o|-i|-F) shift 2 ;; -*) shift ;; *) break ;; esac'
+                'done'
+                'shift'
+                'exec sh -c "$*"')
+            & chmod +x $ssh
+            try {
+                # A company the server doesn't have: nothing saved
+                $r = Invoke-Typed @('s', "me@server:$kit") @('acme', 'target')
+                $r.Text | Should -Match 'no company acme here'
+                $r.Text | Should -Match "the server didn't say where the source of acme goes"
+                Test-Path -LiteralPath (Join-Path $dir 'publish.psd1') | Should -BeFalse
+                $r = Invoke-Typed @('s', 'no-path-here') @('acme', 'target')
+                $r.Text | Should -Match 'give it as user@host:/path'
+
+                Set-Content -LiteralPath (Join-Path $kit 'caddy/tenants') -Value @('other 1001', 'acme 1002')
+                $r = Invoke-Typed @('s', "me@server:$kit/") @('acme', 'target')
+                $r.Text | Should -Match 'acme has no place for its source yet: \./selfhosted\.sh source acme'
+                Set-Content -LiteralPath (Join-Path $kit 'caddy/sources/acme.caddy') -Value '# its login'
+
+                $r = Invoke-Typed @('s', "me@server:$kit", 'y', 'token github_pat_x', 'Basic YWNtZTp0b2tlbg==', 'y') @('acme', 'target')
+                $r.Text | Should -Match 'The computers read it from https://logs\.example\.test/source/acme, with the AuthHeader'
+                $r.Text | Should -Match 'That is not it'
+                $r.Text | Should -Match 'keep reading https://raw\.githubusercontent\.com/me/wmanager-acme/main'
+                (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'publish.psd1')).Target | Should -Be "me@server:$kit/sources/acme"
+                $m = (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'config/provision.config.psd1')).Management
+                $m.Source | Should -Be 'https://logs.example.test/source/acme'
+                $m.AuthHeader | Should -Be 'Basic YWNtZTp0b2tlbg=='
+                $m.SourceId | Should -Be 'test-source-0001'
+                # Sent there with rsync, manifest last
+                $r.Text | Should -Match 'with rsync, manifest\.psd1 last'
+                Test-Path -LiteralPath (Join-Path $kit 'sources/acme/groups/accounting/scripts/10-power-plan.ps1') | Should -BeTrue
+                (Get-FileHash (Join-Path $kit 'sources/acme/manifest.psd1')).Hash | Should -Be (Get-FileHash (Join-Path $dir 'source/manifest.psd1')).Hash
+                # ssh got the host after --, never as an option
+                (Get-Content -LiteralPath $log)[0] | Should -BeLike '-- me@server *selfhosted.sh'' address acme'
+
+                # Again: the configuration has it already, nothing asked about it
+                $r = Invoke-Typed @('s', "me@server:$kit", 'n') @('acme', 'target')
+                $r.Text | Should -Not -Match 'Put that address'
+                # A sync reads the server's manifest (the same one) and sends again
+                $r = Invoke-Tool acme sync
+                $r.Text | Should -Match 'Sent \d+ files to me@server:'
+
+                # A server that can't be reached: rsync's reason shown, not taken for a first send
+                Set-Content -LiteralPath $ssh -Value @('#!/bin/sh', 'echo "ssh: connect to host server port 22: Connection refused" >&2', 'exit 255')
+                $r = Invoke-Tool acme sync
+                $r.Code | Should -Be 1
+                $r.Text | Should -Match 'Connection refused'
+                $r.Text | Should -Match "can't reach me@server:"
+            } finally {
+                Remove-Item -LiteralPath $ssh -Force
+            }
+        }
+
         It 'refuses a folder that is missing, holds another source or a newer manifest' {
             $dir = Add-Company 'acme' -Source -Config '@{}'
             Write-Manifest (Join-Path $dir 'source')

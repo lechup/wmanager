@@ -1,6 +1,8 @@
-# What selfhosted.sh writes: settings with the Grafana password, the companies' logins (hashes), their data sources
+# What selfhosted.sh writes: settings with the Grafana password, the companies' logins (hashes), their data sources,
+# and the management sources tools/wm.ps1 sends
 .env
 caddy/
 grafana/dashboards/
 grafana/provisioning/datasources/
 grafana/provisioning/alerting/
+sources/

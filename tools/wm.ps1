@@ -23,7 +23,8 @@
 #   pwsh tools/wm.ps1 <company> publish        those changes, then check and sign them (tools/publish.sh) and send
 #                                              them where the computers read it; -Yes: without asking, for scripts
 #   pwsh tools/wm.ps1 <company> sync           send the signed source where the computers read it, and check they can
-#   pwsh tools/wm.ps1 <company> target         where that is: a Git repository (gh can create it) or a folder
+#   pwsh tools/wm.ps1 <company> target         where that is: a Git repository (gh can create it), a folder, or the
+#                                              wmanager server of examples/selfhosted
 #   pwsh tools/wm.ps1 <company> backup [<f>]   the company as an archive
 #   pwsh tools/wm.ps1 <company> rotate-key     a new signing key: the computers get its certificate first, then the
 #                                              switch (run it again); or call it off
@@ -1116,9 +1117,87 @@ function Get-RawGitHubUrl {
     return $null
 }
 
+# A word for a POSIX shell on the other end of ssh: in single quotes; a leading ~/ is the home folder, where ssh and
+# rsync start anyway, so it goes (inside quotes the shell wouldn't expand it)
+function ConvertTo-ShellWord {
+    param([string]$Text)
+    if ($Text.StartsWith('~/')) { $Text = $Text.Substring(2) }
+    return "'" + $Text.Replace("'", "'\''") + "'"
+}
+
+# What the server of examples/selfhosted says about the company (selfhosted.sh address, over ssh): the address the
+# computers read its source from, and the folder there that sync fills
+function Get-ServerAddress {
+    param([string]$Server, [string]$Kit, [string]$Name)
+    $command = "$(ConvertTo-ShellWord "$Kit/selfhosted.sh") address $Name"
+    Write-Host "  Asking $Server (ssh)..."
+    $out = @(& ssh -- $Server $command)
+    if ($LASTEXITCODE -ne 0) {
+        throw "the server didn't say where the source of $Name goes (ssh code $LASTEXITCODE, the reason is above): is examples/selfhosted in $Kit there, with ./selfhosted.sh add-company $Name (or source $Name)?"
+    }
+    $url = ($out | Where-Object { $_ -match '^source https://\S+$' } | Select-Object -First 1) -replace '^source ', ''
+    $folder = ($out | Where-Object { $_ -match '^folder sources/[a-z0-9-]+$' } | Select-Object -First 1) -replace '^folder ', ''
+    if (-not $url -or -not $folder) { throw "the server's answer isn't selfhosted.sh's: $($out -join ' | ')" }
+    return [pscustomobject]@{ Url = $url; Folder = $folder }
+}
+
+# Management.Source and AuthHeader of the company's configuration, in its text (the comments and other settings kept)
+function Set-ConfigSource {
+    param($Company, [string]$Source, [string]$AuthHeader)
+    $text = [IO.File]::ReadAllText($Company.Config)
+    $text = Set-WmConfigText $text 'Source' (ConvertTo-WmPsdString $Source)
+    $text = Set-WmConfigText $text 'AuthHeader' (ConvertTo-WmPsdString $AuthHeader)
+    Write-WmConfigFile -Path $Company.Config -Text $text
+}
+
+# The server of examples/selfhosted: selfhosted.sh says where the source goes (sync sends it there with rsync over ssh)
+# and the address the computers read it from, which it offers to put in the configuration with the header selfhosted.sh
+# printed. $false: nothing saved.
+function Set-ServerTarget {
+    param($Company)
+    foreach ($tool in @('ssh', 'rsync')) {
+        if (-not (Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue)) {
+            throw "$tool not found (sudo apt install $(if ($tool -eq 'ssh') { 'openssh-client' } else { 'rsync' }))"
+        }
+    }
+    Write-Host '  The server and the folder of examples/selfhosted on it, e.g. admin@logs.example.com:/srv/wmanager/examples/selfhosted'
+    $answer = [string](Read-Line '  As user@host:/path (Enter = back)')
+    if (-not $answer) { return $false }
+    if ($answer -notmatch '^([^\s/:-][^\s/:]*):(\S+)$') { throw "give it as user@host:/path, without spaces ('$answer')" }
+    $server = $Matches[1]; $kit = $Matches[2].TrimEnd('/')
+    $there = Get-ServerAddress $server $kit $Company.Name
+    $target = "${server}:$kit/$($there.Folder)"
+    Save-PublishTarget $Company $target
+    Write-Host "  Saved: sync sends the signed source to $target with rsync, manifest.psd1 last."
+    Write-Host "  The computers read it from $($there.Url), with the AuthHeader selfhosted.sh printed for $($Company.Name)."
+    $now = Get-ConfigSource $Company
+    if ($now.Source -eq $there.Url) { return $true }
+    if (-not [IO.File]::Exists($Company.Config)) {
+        Write-Host "  Put them in its configuration: pwsh tools/wm.ps1 $($Company.Name) config"
+        return $true
+    }
+    if (-not (Read-WmYesNo "  Put that address and header in the configuration (Management.Source, AuthHeader)?" $true)) {
+        Write-Host "  Later: pwsh tools/wm.ps1 $($Company.Name) config"
+        return $true
+    }
+    while ($true) {
+        $header = Read-Secret '  The AuthHeader selfhosted.sh printed (Basic ..., not shown; Enter = later)'
+        if (-not $header) { Write-Host "  Later: pwsh tools/wm.ps1 $($Company.Name) config"; return $true }
+        if ($header -match '^Basic [A-Za-z0-9+/]+={0,2}$') { break }
+        Write-Host '  That is not it: the whole line after "AuthHeader", "Basic" and the rest.' -ForegroundColor Yellow
+    }
+    Set-ConfigSource $Company $there.Url $header
+    Write-Host "  The configuration reads the source from $($there.Url) now."
+    if ($now.Source) {
+        Write-Warn "computers set up with the configuration before keep reading $($now.Source): they read the server once they get this one (run.cmd with it); until then they don't get what is sent there"
+    }
+    return $true
+}
+
 # Asks where the computers read the source from and gets it ready: a Git repository of its own (made here if needed,
-# with a private GitHub repository by gh, or a remote you give) or a folder. Keeps the answer in <company>/publish.psd1.
-# Nothing is sent before the source is signed: then it offers to send it (Sync-Company).
+# with a private GitHub repository by gh, or a remote you give), a folder, or the server of examples/selfhosted. Keeps
+# the answer in <company>/publish.psd1. Nothing is sent before the source is signed: then it offers to send it
+# (Sync-Company).
 function Set-PublishTarget {
     param($Company)
     Assert-Source $Company
@@ -1128,14 +1207,17 @@ function Set-PublishTarget {
     if ($now) { Write-Host "  Now: $now" }
     Write-Host '  g) a Git repository (private), pushed to its remote: GitHub, GitLab, a server of your own'
     Write-Host '  f) a folder: a share mounted here (e.g. /mnt/server/wmanager/acme) or user@host:/path (rsync over ssh)'
+    Write-Host '  s) the wmanager server of examples/selfhosted (rsync over ssh; the computers read it with its login)'
     while ($true) {
         $answer = [string](Read-Line 'Choose (Enter = leave it as it is)')
         if (-not $answer) { return }
-        if (@('g', 'f') -contains $answer) { break }
-        Write-Host '  g, f or Enter.' -ForegroundColor Yellow
+        if (@('g', 'f', 's') -contains $answer) { break }
+        Write-Host '  g, f, s or Enter.' -ForegroundColor Yellow
     }
     $src = $Company.Source
-    if ($answer -eq 'f') {
+    if ($answer -eq 's') {
+        if (-not (Set-ServerTarget $Company)) { return }
+    } elseif ($answer -eq 'f') {
         $folder = [string](Read-Line 'The folder (a path here, or user@host:/path)')
         if (-not $folder) { return }
         if (-not (Test-RemoteFolder $folder)) {
@@ -1227,9 +1309,15 @@ function Read-TargetManifest {
     $file = Join-Path ([IO.Path]::GetTempPath()) ('wmanager-target-' + [guid]::NewGuid().ToString('N') + '.psd1')
     try {
         if (Test-RemoteFolder $Target) {
-            $code = Invoke-Native 'rsync' @('-q', (Join-Target $Target 'manifest.psd1'), $file)
-            if ($code -eq 23) { return $null }   # no such file: the first time
-            if ($code -ne 0) { throw "can't reach $Target (rsync code $code, the reason is above)" }
+            # No manifest there yet (the first time) is no error, in any language: --ignore-missing-args, then whether
+            # it came. rsync's words are shown for a real failure; ssh asks for a password on the terminal, not here.
+            $said = @(& rsync -q --ignore-missing-args (Join-Target $Target 'manifest.psd1') $file 2>&1 | ForEach-Object { "$_" })
+            $code = $LASTEXITCODE
+            if ($code -ne 0) {
+                $said | ForEach-Object { Write-Host "  $_" }
+                throw "can't reach $Target (rsync code $code, the reason is above)"
+            }
+            if (-not [IO.File]::Exists($file)) { return $null }
         } else {
             $there = Join-Path $Target 'manifest.psd1'
             if (-not [IO.File]::Exists($there)) { return $null }
