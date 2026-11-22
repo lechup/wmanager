@@ -30,7 +30,7 @@ jobs:
           apt-get install -y -q --no-install-recommends osslsigncode openssl shellcheck git ca-certificates
           osslsigncode --version
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Check shell scripts
         run: |
@@ -40,7 +40,7 @@ jobs:
       - name: Build and sign test sources
         run: tests/ci/build-sources.sh ci-sources
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: management-sources
           path: ci-sources
@@ -51,9 +51,9 @@ jobs:
     needs: sign
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: management-sources
           path: ${{ runner.temp }}/sources
@@ -76,7 +76,7 @@ jobs:
     name: Grafana dashboard and alerts (Loki and Grafana in Docker)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Lines like the computers send into a real Loki: every query of the dashboard and of the alert rules runs and
       # finds what it should, Loki's ruler loads the rules, Grafana imports the dashboard
@@ -87,7 +87,7 @@ jobs:
     name: Configuration wizard (PowerShell 7, Linux)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # tools/wm.ps1 signs a new company's source; its test is skipped where osslsigncode can't sign PowerShell files
       - name: Install osslsigncode
