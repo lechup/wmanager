@@ -2,6 +2,7 @@
 # - sign: builds and signs test management sources on Linux with tools/publish.sh (osslsigncode, throwaway key)
 # - windows: Windows PowerShell 5.1: parses every script, runs the Pester tests, then the integration tests
 #   (the osslsigncode signature on Windows, the checks of a new version, group scripts, jobs, the hourly task).
+# - grafana: the dashboard and the alert rules of examples/grafana against a real Loki and Grafana (Docker)
 # - wizard-linux: the tests of the configuration wizard, the languages, the group tool and the companies helper
 #   (tools/wm.ps1) in PowerShell 7 on Linux (init.ps1 and lib/Lang.ps1 run there too)
 # It is Windows Server, not Windows 11 Home/Pro: debloat, privacy, notifications and Restore-Backup.ps1 still
@@ -70,6 +71,17 @@ jobs:
         env:
           WM_CI_SOURCES: ${{ runner.temp }}\sources
         run: .\tests\ci\Invoke-Tests.ps1 -Kind Integration
+
+  grafana:
+    name: Grafana dashboard and alerts (Loki and Grafana in Docker)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Lines like the computers send into a real Loki: every query of the dashboard and of the alert rules runs and
+      # finds what it should, Loki's ruler loads the rules, Grafana imports the dashboard
+      - name: Check examples/grafana
+        run: tests/ci/check-grafana.sh
 
   wizard-linux:
     name: Configuration wizard (PowerShell 7, Linux)

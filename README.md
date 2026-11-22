@@ -84,6 +84,7 @@ changing anything.
 | `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts, jobs and the wmanager version, switch on library items; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `wm.ps1`, a menu over all of them for several companies (see [Several companies](#several-companies)); `build-release.sh` (see [Releases](#releases)) |
 | `configs\<company>\` | Optional, on the USB drive: the configuration of each company; `run.cmd` asks which one (see [Several companies](#several-companies)) |
 | `library/` | Ready group scripts and jobs to switch on with `tools/groups.ps1 enable` (see [Library](#library-of-ready-scripts-and-jobs)) |
+| `examples/grafana/` | A Grafana dashboard and Loki alert rules for the computers' lines (see [Grafana dashboard and alerts](#grafana-dashboard-and-alerts)) |
 | `examples/management/` | Template of a management source (group map, lists, an example script, the daily system report from the library) |
 | `tests\` | Pester tests (list parser, management source checks, app removal, configuration wizard), integration tests, CI scripts, test virtual machines (`tests/vm/`) |
 | `.github/workflows/tests.yml` | CI on a GitHub-hosted Windows runner (see [Tests](#tests)) |
@@ -663,6 +664,35 @@ The log file and Loki are in English; the console and the user's notifications i
 2. Administration → Cloud access policies: create a policy with only the `logs:write` scope and generate a token.
 3. Put `LokiUrl`, `LokiUser` and `LokiToken` in `provision.config.psd1`.
 
+### Grafana dashboard and alerts
+
+`examples/grafana/` has a dashboard and alert rules for the lines wmanager sends (they are English on every computer,
+so the same patterns read all of them):
+
+- `wmanager-dashboard.json`: Dashboards > New > Import, upload the file and choose the Loki data source the computers
+  send to (in Grafana Cloud `grafanacloud-<stack>-logs`). Computers that reported and those with errors in the last
+  24 hours, silent computers (lines in the last 14 days, none in the last 3), the computers whose last run trusts the
+  next certificate during a key change, the last run of each computer (the wmanager version that finished it, when,
+  warnings, errors), the versions in use (each computer once, by its last run), error lines over time, failed group
+  jobs and errors of the hourly run, and the errors and warnings themselves; a Computer filter at the top. The last
+  runs, versions and key change come from the run records of wmanager v0.3.0 and later.
+- `wmanager-alerts.yaml`: alert rules in the Loki ruler format, evaluated every 15 minutes: errors of an update,
+  provisioning or the hourly run's group scripts and source; a failed group job (by name); a silent computer; a
+  management source the computer rejected; a wmanager version or signing certificate that didn't switch (a download
+  that keeps failing included); a signing certificate that expires within 60 days, and one that has expired. Load them
+  into the Loki ruler of the stack (`lokitool rules load wmanager-alerts.yaml`, with a token that has `rules:write`),
+  or make a Grafana alert rule from each `expr` (Alerts & IRM > Alert rules > New alert rule, the Loki data source)
+  and set "Alert state if no data" to Normal: a healthy result is empty. Send them where you want (contact points).
+
+"Silent" means no line for 3 days. A computer that updates once a week and runs no daily job (the example source has
+the daily system report) looks silent between its updates: use `8d` in the rule and the panel for it. A computer
+silent longer than the logs are kept (14 days on Grafana Cloud's free plan) drops out of both; Healthchecks keeps it.
+
+CI checks both against a real Loki and Grafana (`tests/ci/check-grafana.sh`): lines like the computers send, built
+from the English messages in `lang/en` (a reworded message that a rule reads fails there) and the run record's fields;
+every query runs, each rule fires for the computers it should and no other, the panels count the right computers and
+show the last run, the ruler loads the rules, Grafana imports the dashboard.
+
 ### Healthchecks.io setup
 
 1. Create a project and generate a **Ping key** in its settings.
@@ -718,7 +748,8 @@ The integration tests (`tests\Managed.Integration.Tests.ps1`) change the compute
    another signer; a key change: the next certificate is trusted, forgotten when the source stops naming it, and
    becomes the computer's own when the source comes signed with it, while a source signed with a key the computer was
    never told about is rejected.
-3. Linux, PowerShell 7: the tests of the configuration wizard (`init.ps1` also runs there), the languages,
+3. Linux, Docker: the Grafana dashboard and the alert rules against a real Loki and Grafana.
+4. Linux, PowerShell 7: the tests of the configuration wizard (`init.ps1` also runs there), the languages,
    `tools/groups.ps1` and `tools/wm.ps1` (a new company signed with osslsigncode, when the runner's version can sign
    PowerShell files).
 
