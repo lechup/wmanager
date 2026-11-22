@@ -1,7 +1,8 @@
 # wmanager: Grafana and Loki of your own (README: Hosting Grafana and Loki yourself). On a server with Docker, in
 # this folder (with ../grafana next to it, as in the repository):
 #   ./selfhosted.sh init                  the names, the e-mail for the certificates, the Grafana password
-#   ./selfhosted.sh add-company <name>    a Loki tenant for the company, its logins, a Grafana data source and alerts
+#   ./selfhosted.sh add-company <name>    a Loki tenant for the company, its logins, a Grafana data source and alerts,
+#                                         a place for its management source
 #   docker compose up -d
 # Caddy gets the certificates (Let's Encrypt) and checks the logins; Loki keeps each company apart (a tenant each).
 services:
@@ -19,6 +20,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy:/etc/caddy/companies:ro
+      - ./sources:/srv/sources:ro        # the companies' management sources (tools/wm.ps1 sync sends them here)
       - caddy-data:/data
   loki:
     image: grafana/loki:3.3.2

@@ -1,6 +1,7 @@
 # wmanager: Caddy in front of Loki and Grafana (docker-compose.yml). A company's login is its Loki tenant number:
 # the computers send with its write token (LokiUser and LokiToken of provision.config.psd1), tools/wm.ps1 status reads
-# with its read token. selfhosted.sh add-company writes the logins (hashes only) into caddy/.
+# with its read token; the computers read the management source with its source login (Management.AuthHeader).
+# selfhosted.sh add-company and source write the logins (hashes only) into caddy/.
 {
 	email {$ACME_EMAIL}
 	{$CADDY_GLOBAL}
@@ -33,6 +34,8 @@
 			header_up X-Scope-OrgID {http.auth.user.id}
 		}
 	}
+	# The companies' management sources: /source/<company>/, each with its login (selfhosted.sh source)
+	import /etc/caddy/companies/sources/*.caddy
 	handle {
 		respond 404
 	}

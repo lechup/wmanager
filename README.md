@@ -550,7 +550,10 @@ pwsh tools/wm.ps1 restore ~/wmanager-backups/globex-20261120-101500.tar.gz
     names the address for `Management.Source` (`https://raw.githubusercontent.com/<owner>/<repo>/<branch>`, with a
     fine-grained read-only token in `Management.AuthHeader`);
   - a folder: a share mounted on your computer (it must exist: a share that isn't mounted isn't filled on your
-    disk), or `user@host:/path` (rsync over ssh).
+    disk), or `user@host:/path` (rsync over ssh);
+  - the wmanager server of `examples/selfhosted` (see [Hosting Grafana and Loki yourself](#hosting-grafana-and-loki-yourself)):
+    rsync over ssh into the company's folder there, read by the computers at `https://<logs name>/source/<company>`
+    with its login; the helper asks the server for both and offers to put them in the configuration.
 
   Only a signed source goes out, with no changes since its signature (the computers would reject them). After
   signing, `publish` (and the menu) offers to send it: a commit listing the files and a push (git must keep the line
@@ -700,7 +703,8 @@ show the last run, the ruler loads the rules, Grafana imports the dashboard.
 `examples/selfhosted/` runs Loki, Grafana and Caddy with Docker on a server of your own, for any number of companies.
 Caddy gets the certificates (Let's Encrypt) and checks the logins; Loki keeps each company apart (a tenant each) and
 the logs 90 days (`retention_period` in `loki.yaml`); Grafana gets a data source and the alert rules of each company
-and the dashboard, ready. A small server (2 GB of memory) is enough for dozens of computers; the logs are a few MB a
+and the dashboard, ready. The same server can hold each company's management source, which the helper sends there,
+instead of a private GitHub repository. A small server (2 GB of memory) is enough for dozens of computers; the logs are a few MB a
 day per computer.
 
 On the server, with Docker, the `examples` folder of the repository (or the release) and two names pointing to it:
@@ -708,7 +712,7 @@ On the server, with Docker, the `examples` folder of the repository (or the rele
 ```bash
 cd examples/selfhosted
 ./selfhosted.sh init                  # the names (e.g. logs.example.com, grafana.example.com), the e-mail for the certificates
-./selfhosted.sh add-company acme      # prints LokiUrl, LokiUser and LokiToken for acme, and a read-only token
+./selfhosted.sh add-company acme      # prints LokiUrl, LokiUser, LokiToken, a read-only token, and Source and AuthHeader
 docker compose up -d                  # after another add-company: docker compose restart caddy grafana
 ```
 
@@ -717,17 +721,31 @@ docker compose up -d                  # after another add-company: docker compos
   `pwsh tools/wm.ps1 acme monitoring` (the Grafana Cloud question) for `status`. A write token only sends and a read
   token only reads; a company reads only its own lines. The server keeps only the tokens' hashes: `add-company` shows
   them once.
+- **The management source** of a company is `sources/<company>` on the server, served at
+  `https://<logs name>/source/<company>/` to its computers with a login of its own: the `Source` and `AuthHeader`
+  (`Basic ...`) that `add-company` prints, for `Management.Source` and `Management.AuthHeader`. Only GET, no folder
+  listing, and one company's header doesn't read another's source. On your computer, `pwsh tools/wm.ps1 acme target`,
+  `s`, with the server and the kit's folder there (e.g. `admin@logs.example.com:/srv/wmanager/examples/selfhosted`):
+  the helper asks `selfhosted.sh address acme` over ssh where it goes, then `sync` and `publish` send it there with
+  rsync, and it offers to put the address and header in the configuration. Computers set up before with another
+  address keep reading that one until they get the new configuration (`run.cmd` with it). For a company added before
+  this, `./selfhosted.sh source acme` makes its place; the login isn't replaced (the computers have its header).
 - **Grafana** is at `https://<grafana name>`, user `admin`, the password in `.env`. The alert rules (one set per
   company, named `<company>: ...`) go to its contact points: fill in the SMTP lines of `.env` for e-mail, or add
   another contact point (Alerting > Contact points).
 - **Healthchecks** can run on the same server as well (its own image): `HealthchecksBaseUrl` in the configuration
   names its ping address for the computers, `HealthchecksApiUrl` in the company's `monitoring.psd1` its API for
   `status`.
-- **Back up** the Docker volumes (`loki-data`, `grafana-data`) and the folder (`.env`, `caddy/`) if the logs matter.
+- **Back up** the Docker volumes (`loki-data`, `grafana-data`) and the folder (`.env`, `caddy/`; `sources/` is a copy
+  of what you sign, which `sync` sends again) if the logs matter.
+- **A kit set up before** the management sources: `./selfhosted.sh init` again (it keeps `.env`) makes their folders,
+  then `docker compose up -d` (Caddy gets the new folder).
 
 CI runs the kit end to end (`tests/ci/check-selfhosted.sh`): init, two companies, `docker compose up` with Caddy's own
 certificates, the logins and tenants (a read token doesn't send or delete, a write token doesn't read, a company
-doesn't see another's lines), and Grafana's data sources, dashboard and alert rules.
+doesn't see another's lines), the management sources (each read with its own header only, GET only, no listing, no
+way out with `..`), and Grafana's data sources, dashboard and alert rules. The helper's side (`target`, `s`, then
+`sync` with rsync over ssh) is in `tests/Wm.Tests.ps1`.
 
 ### Healthchecks.io setup
 
