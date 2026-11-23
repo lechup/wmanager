@@ -40,7 +40,7 @@ cp -r "$root/tests/fixtures/management/." "$src/"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 # Does the source's manifest have a timestamp?
-stamped() { osslsigncode verify -CAfile "$2/cert.pem" -ignore-crl -in "$1/manifest.psd1" 2>&1 | grep -q 'Timestamp time:'; }
+stamped() { osslsigncode verify -CAfile "$2/cert.pem" -ignore-cdp -in "$1/manifest.psd1" 2>&1 | grep -q 'Timestamp time:'; }
 
 "$root/tools/publish.sh" "$src" "$keys"
 stamped "$src" "$keys" || die "v1 has no timestamp: neither DigiCert nor Sectigo answered?"

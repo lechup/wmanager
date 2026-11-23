@@ -187,8 +187,10 @@ $(printf '  %s\n' "${missed[@]}")"
 fi
 unset pw
 
-# The signature as the computers check it, with its timestamp (without the revocation lists: nothing more to fetch)
-out=$(osslsigncode verify -CAfile "$keydir/cert.pem" -ignore-crl -in "$tmp/signed.psd1" 2>&1) || die "the signature does not verify:
+# The signature checked, and the timestamp there. Windows checks the timestamp itself; the revocation lists of the
+# timestamp server aren't fetched (-ignore-cdp, which osslsigncode 2.8 of Ubuntu 24.04 has too), so nothing more
+# has to answer.
+out=$(osslsigncode verify -CAfile "$keydir/cert.pem" -ignore-cdp -in "$tmp/signed.psd1" 2>&1) || die "the signature does not verify:
 $out"
 [[ -z $stamped ]] || grep -q 'Timestamp time:' <<< "$out" || die "the signature has no timestamp from $stamped:
 $out"
