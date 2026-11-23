@@ -388,13 +388,13 @@ Notes:
   "manifest last".
 - The token is stored on every computer (readable only by administrators) and must not expire before you update the
   config on all of them; give it a long expiry and only read access to the source.
-- The certificate is valid for 10 years. `publish.sh` adds an RFC 3161 timestamp to the signature (from DigiCert, or
-  Sectigo when DigiCert doesn't answer; the server gets only a hash of the signature), and a timestamped signature
-  stays valid after the certificate expires. When no server answers (no internet) it signs without one and warns:
-  such a signature stops being valid when the certificate expires (then computers reject the source, also their
-  saved copy), and the next signature made with the internet has one again. `WM_TSA="<url> [<url>...]"` uses other
-  servers, `WM_TSA=none` signs without one. New versions still need a valid certificate: replace it before it
-  expires (`publish.sh` and the computers warn 60 days ahead).
+- The certificate is valid for 20 years (one made before 2026-11: 10 years). `publish.sh` adds an RFC 3161 timestamp
+  to the signature (from DigiCert, or Sectigo when DigiCert doesn't answer; the server gets only a hash of the
+  signature), and a timestamped signature stays valid after the certificate expires. When no server answers (no
+  internet) it signs without one and warns: such a signature stops being valid when the certificate expires (then
+  computers reject the source, also their saved copy), and the next signature made with the internet has one again.
+  `WM_TSA="<url> [<url>...]"` uses other servers, `WM_TSA=none` signs without one. New versions still need a valid
+  certificate: replace it before it expires (`publish.sh` and the computers warn 60 days ahead).
 - The `wmanager-Jobs` task is registered at provisioning when `Management.Source` is set; if you add a management
   source to an existing computer, run provisioning again.
 - Script and job output goes through the console code page (e.g. 852 on Polish Windows): characters outside it come
@@ -799,7 +799,8 @@ The integration tests (`tests\Managed.Integration.Tests.ps1`) change the compute
    from `examples/management` and `tests/fixtures/management` and signs them with `tools/publish.sh` and a throwaway key
    (timestamped by DigiCert or Sectigo; without a server that answers it signs without one and warns, `WM_TSA=none`
    doesn't ask one), and one more with a certificate that expired yesterday, timestamped by a test server while it
-   was valid.
+   was valid; `tools/new-signing-cert.sh` makes a key with a passphrase and a certificate valid for 20 years, and
+   `publish.sh` signs with that key (a wrong passphrase signs nothing).
 2. Windows Server 2025, Windows PowerShell 5.1: every `.ps1`/`.psd1` parsed (and checked for a BOM), the Pester tests,
    then the integration tests: Windows accepts the osslsigncode signature and its timestamp, keeps a timestamped
    signature of an expired certificate valid and rejects one without a timestamp, rejects an older manifest, a

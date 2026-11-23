@@ -7,7 +7,7 @@
 #   key.pem                 private key, protected with a passphrase; never leaves this computer
 #   cert.pem                certificate for tools/publish.sh
 #   wmanager-signing.cer    public part; goes next to provision.config.psd1 (Management.Certificate)
-# The certificate is valid for 10 years and allows code signing only (not a CA), so even a leaked key
+# The certificate is valid for 20 years and allows code signing only (not a CA), so even a leaked key
 # can't be used to issue certificates for websites. Requires openssl.
 set -euo pipefail
 
@@ -26,7 +26,7 @@ echo "Enter the passphrase that will protect the key (you will be asked twice)."
 # it wrote, so the next run can start again instead of refusing an empty key.pem
 cleanup() { rm -f "$dir/key.pem" "$dir/cert.pem" "$dir/wmanager-signing.cer"; }
 trap 'cleanup; exit 130' INT TERM
-if ! openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -subj "/CN=wmanager signing" \
+if ! openssl req -x509 -newkey rsa:3072 -sha256 -days 7300 -subj "/CN=wmanager signing" \
         -addext "basicConstraints=critical,CA:FALSE" \
         -addext "keyUsage=critical,digitalSignature" \
         -addext "extendedKeyUsage=codeSigning" \

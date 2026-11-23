@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # CI: builds signed test management sources for tests/Managed.Integration.Tests.ps1, with tools/publish.sh
 # and a throwaway key, and checks the timestamps of publish.sh: from the default servers, none and a warning when no
-# server answers, none with WM_TSA=none.
+# server answers, none with WM_TSA=none; and tools/new-signing-cert.sh: a key with a passphrase, a certificate valid
+# for 20 years, publish.sh signing with it.
 #
 # Usage: tests/ci/build-sources.sh <output-folder>          (needs openssl, osslsigncode and the internet)
 # Output:
@@ -65,6 +66,21 @@ echo "publish.sh: timestamped by default, a warning without a server, none with 
 WM_TSA=http://timestamp.sectigo.com "$root/tools/publish.sh" "$chk" "$keys"
 stamped "$chk" "$keys" || die "no timestamp from Sectigo"
 cp -r "$chk" "$out/sectigo"
+
+# --- tools/new-signing-cert.sh, and a key with a passphrase -----------------------------------------------------
+# Without a terminal (setsid) openssl reads the passphrase from stdin, as publish.sh does
+mine=$work/mine
+printf 'ci-passphrase\nci-passphrase\n' | setsid -w "$root/tools/new-signing-cert.sh" "$mine" >/dev/null 2>&1 ||
+    die "new-signing-cert.sh made no key"
+grep -q ENCRYPTED "$mine/key.pem" || die "new-signing-cert.sh left the key without a passphrase"
+openssl x509 -in "$mine/cert.pem" -noout -checkend $((19 * 365 * 86400)) >/dev/null &&
+    ! openssl x509 -in "$mine/cert.pem" -noout -checkend $((21 * 365 * 86400)) >/dev/null ||
+    die "the certificate of new-signing-cert.sh isn't valid for 20 years: $(openssl x509 -in "$mine/cert.pem" -noout -enddate)"
+printf 'ci-passphrase\n' | WM_TSA=none setsid -w "$root/tools/publish.sh" "$chk" "$mine" >/dev/null 2>&1 ||
+    die "publish.sh didn't sign with the key and its passphrase"
+printf 'wrong\n' | WM_TSA=none setsid -w "$root/tools/publish.sh" "$chk" "$mine" >/dev/null 2>&1 &&
+    die "publish.sh signed with a wrong passphrase"
+echo "new-signing-cert.sh: a key with a passphrase, a certificate for 20 years; publish.sh signs with it."
 
 # --- A certificate that expired -------------------------------------------------------------------------------
 # Expired yesterday; osslsigncode's own timestamp server, at a time the certificate was valid, stands in for
