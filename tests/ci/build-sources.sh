@@ -7,6 +7,7 @@
 # Output:
 #   wmanager-signing.cer   the test certificate
 #   v1/, v2/               the same source, timestamped; v2 changes groups/ci/scripts/10-marker.ps1 (higher Serial)
+#   sectigo/               v1 again (higher Serial), timestamped by Sectigo, the second server
 #   expired-signing.cer    a certificate that expired yesterday
 #   ci-tsa.cer             the certificate of a test timestamp server (osslsigncode's own)
 #   expired/               v1 signed with the expired certificate, timestamped by the test server while it was valid
@@ -60,6 +61,10 @@ stamped "$chk" "$keys" && die "a timestamp with WM_TSA=none"
 said=$(WM_TSA='ftp://timestamp.example' "$root/tools/publish.sh" "$chk" "$keys" 2>&1) && die "publish.sh took WM_TSA=ftp://..."
 grep -q 'is not a timestamp server address' <<< "$said" || { echo "$said"; die "a wrong WM_TSA, not said"; }
 echo "publish.sh: timestamped by default, a warning without a server, none with WM_TSA=none."
+# The second server, for Windows to check too (publish.sh uses it when DigiCert doesn't answer)
+WM_TSA=http://timestamp.sectigo.com "$root/tools/publish.sh" "$chk" "$keys"
+stamped "$chk" "$keys" || die "no timestamp from Sectigo"
+cp -r "$chk" "$out/sectigo"
 
 # --- A certificate that expired -------------------------------------------------------------------------------
 # Expired yesterday; osslsigncode's own timestamp server, at a time the certificate was valid, stands in for
@@ -123,4 +128,4 @@ cp -r "$rot" "$out/rotcancel"
 "$root/tools/publish.sh" "$rot" "$next"
 cp -r "$rot" "$out/rot2"
 
-echo "Test sources in $out: v1 ($(cat "$out/v1/source-id.txt")), v2, other ($(cat "$out/other/source-id.txt")), rot1, rotcancel, rot2, expired, expired-nots."
+echo "Test sources in $out: v1 ($(cat "$out/v1/source-id.txt")), v2, other ($(cat "$out/other/source-id.txt")), rot1, rotcancel, rot2, sectigo, expired, expired-nots."

@@ -69,6 +69,11 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         # publish.sh timestamps it (DigiCert, or Sectigo), and Windows takes that timestamp
         Write-Host "Timestamp: $($sig.TimeStamperCertificate.Subject)"
         $sig.TimeStamperCertificate | Should -Not -BeNullOrEmpty
+        # The second server's timestamp too
+        $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $src 'sectigo\manifest.psd1')
+        Write-Host "Sectigo: $($sig.Status) $($sig.TimeStamperCertificate.Subject)"
+        $sig.Status | Should -Be 'Valid'
+        $sig.TimeStamperCertificate.Subject | Should -Match 'Sectigo'
     }
 
     It 'accepts the first version, resolves the groups and merges the lists' {
