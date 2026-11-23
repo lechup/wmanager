@@ -13,6 +13,7 @@
     'init.stopped_missing_settings' = 'Oprit: adăugați setările lipsă (vedeți provision.config.example.psd1) sau începeți de la fișierul exemplu.'
     'init.example_lacks_settings'   = 'Fișierului exemplu îi lipsesc setările: {0}.'
     'init.setting_not_once'         = 'Fișierul de configurare nu conține exact o setare {0} (găsite: {1}); adăugați-o manual.'
+    'init.secrets_layout'           = 'Tabelul Secrets din configurație nu are o intrare pe rând (Nume = ''valoare''); modificați-l manual.'
 
     'init.section_update'           = 'Actualizări software'
     'init.update_time'              = 'Ora actualizării (HH:mm), de preferință când computerele sunt de obicei pornite'

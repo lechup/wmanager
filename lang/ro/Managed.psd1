@@ -80,4 +80,13 @@
     'managed.cert_next_removed'          = 'Sursa nu mai indică următorul certificat de semnare {0}; nu mai este de încredere.'
     'managed.cert_next_invalid'          = 'Următorul certificat de semnare al sursei nu poate fi folosit: {0}'
     'managed.cert_change_failed'         = 'Certificatul de semnare nu a putut fi schimbat: {0}. Această rulare îl păstrează pe cel actual; următoarea încearcă din nou.'
+
+    # Secrets for scripts and jobs (Secrets in the configuration, # wmanager-secrets: in a script)
+    'managed.secret_name_bad'            = 'wmanager-secrets: ''{0}'' nu este un nume de secret (litere, cifre și _, începând cu o literă, cel mult 64)'
+    'managed.secrets_not_table'          = 'Secrets trebuie să fie un tabel de nume și valori (vezi provision.config.example.psd1)'
+    'managed.secrets_bad_name'           = 'Secrets: ''{0}'' nu este un nume de secret (litere, cifre și _, începând cu o literă, cel mult 64)'
+    'managed.secrets_bad_value'          = 'Secrets: valoarea lui {0} trebuie să fie text pe un singur rând'
+    'managed.secret_missing'             = 'configurația acestui computer nu are secretul {0} (Secrets în provision.config.psd1)'
+    'managed.script_not_run'             = '{0}: nu a rulat: {1}; {2}.'
+    'managed.job_not_run'                = 'Lucrarea {0}: nu a rulat: {1}.'
 }

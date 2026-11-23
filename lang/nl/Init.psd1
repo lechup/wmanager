@@ -13,6 +13,7 @@
     'init.stopped_missing_settings' = 'Gestopt: voeg de ontbrekende instellingen toe (zie provision.config.example.psd1) of begin met het voorbeeldbestand.'
     'init.example_lacks_settings'   = 'In het voorbeeldbestand ontbreken de instellingen: {0}.'
     'init.setting_not_once'         = 'Het configuratiebestand bevat niet precies één instelling {0} (gevonden: {1}); voeg deze handmatig toe.'
+    'init.secrets_layout'           = 'De tabel Secrets van de configuratie heeft niet één item per regel (Naam = ''waarde''); wijzig hem met de hand.'
 
     'init.section_update'           = 'Software-updates'
     'init.update_time'              = 'Tijdstip van de update (HH:mm), bij voorkeur wanneer de computers meestal aan staan'

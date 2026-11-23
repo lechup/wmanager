@@ -141,6 +141,58 @@ function Get-WmGroupJobs {
     return ,$result
 }
 
+# ---------------------------------------------------------------------------
+# Secrets for scripts and jobs: Secrets = @{ Name = 'value' } in the company's configuration (on the computer only
+# administrators read it). A script or job names the ones it needs in a comment line
+#   # wmanager-secrets: ShareUser, SharePassword
+# and gets only those, as $env:WMANAGER_SECRET_SHAREUSER... (lib\Managed.ps1).
+# ---------------------------------------------------------------------------
+
+# A secret's name: letters, digits and _, starting with a letter, at most 64 characters
+function Test-WmSecretName {
+    param([string]$Name)
+    return ($Name -cmatch '^[A-Za-z][A-Za-z0-9_]{0,63}$')
+}
+
+# The secrets a script or job names in its "# wmanager-secrets:" lines (anywhere in the file), each once, as
+# written. Throws on a name that isn't one.
+function Get-WmScriptSecretNames {
+    param([AllowEmptyString()][string]$Text)
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($Text -split "\r?\n")) {
+        if ($line -notmatch '^\s*#\s*wmanager-secrets\s*:(.*)$') { continue }
+        foreach ($n in @($Matches[1].Trim() -split '[,\s]+' | Where-Object { $_ })) {
+            if (-not (Test-WmSecretName $n)) { throw (New-WmError 'managed.secret_name_bad' @($n)) }
+            if (-not ($names | Where-Object { $_ -ieq $n })) { $names.Add($n) }
+        }
+    }
+    return ,$names.ToArray()
+}
+
+# The Secrets of a configuration, checked: an empty table without the setting. Throws when it isn't a table, a name
+# isn't one, or a value isn't text on one line.
+function Get-WmSecrets {
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    $s = $Config['Secrets']
+    if ($null -eq $s) { return @{} }
+    if (-not ($s -is [hashtable])) { throw (New-WmError 'managed.secrets_not_table') }
+    foreach ($k in @($s.Keys)) {
+        if (-not (Test-WmSecretName ([string]$k))) { throw (New-WmError 'managed.secrets_bad_name' @($k)) }
+        $v = $s[$k]
+        if (-not ($v -is [string]) -or $v -eq '' -or $v -match '[\r\n]') { throw (New-WmError 'managed.secrets_bad_value' @($k)) }
+    }
+    return $s
+}
+
+# The text with every value replaced by ***, the longest first: what a script prints doesn't put a secret into the
+# log or Loki
+function Hide-WmSecrets {
+    param([AllowEmptyString()][string]$Text, [AllowEmptyCollection()][string[]]$Values = @())
+    if (-not $Text) { return $Text }
+    foreach ($v in @($Values | Where-Object { $_ } | Sort-Object Length -Descending)) { $Text = $Text.Replace($v, '***') }
+    return $Text
+}
+
 # Which list a path of the source is: '' for the common choco-reqs.txt, the group for groups/<group>/choco-reqs.txt,
 # $null for any other file
 function Get-WmListOwner {

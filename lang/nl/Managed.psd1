@@ -80,4 +80,13 @@
     'managed.cert_next_removed'          = 'De bron noemt het volgende ondertekeningscertificaat {0} niet meer; het wordt niet meer vertrouwd.'
     'managed.cert_next_invalid'          = 'Het volgende ondertekeningscertificaat van de bron is niet bruikbaar: {0}'
     'managed.cert_change_failed'         = 'Het ondertekeningscertificaat kon niet worden gewisseld: {0}. Deze run houdt het huidige; de volgende probeert het opnieuw.'
+
+    # Secrets for scripts and jobs (Secrets in the configuration, # wmanager-secrets: in a script)
+    'managed.secret_name_bad'            = 'wmanager-secrets: ''{0}'' is geen naam van een geheim (letters, cijfers en _, beginnend met een letter, hoogstens 64)'
+    'managed.secrets_not_table'          = 'Secrets moet een tabel met namen en waarden zijn (zie provision.config.example.psd1)'
+    'managed.secrets_bad_name'           = 'Secrets: ''{0}'' is geen naam van een geheim (letters, cijfers en _, beginnend met een letter, hoogstens 64)'
+    'managed.secrets_bad_value'          = 'Secrets: de waarde van {0} moet tekst op één regel zijn'
+    'managed.secret_missing'             = 'de configuratie van deze computer heeft geen geheim {0} (Secrets in provision.config.psd1)'
+    'managed.script_not_run'             = '{0}: niet uitgevoerd: {1}; {2}.'
+    'managed.job_not_run'                = 'Opdracht {0}: niet uitgevoerd: {1}.'
 }

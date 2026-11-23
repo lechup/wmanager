@@ -57,6 +57,95 @@ function Write-WmConfigFile {
     [IO.File]::WriteAllText($Path, $crlf, (New-Object System.Text.UTF8Encoding($true)))
 }
 
+# The configuration text read as Import-PowerShellDataFile reads a file (data only), without writing it anywhere
+function ConvertFrom-WmConfigText {
+    param([Parameter(Mandatory = $true)][string]$Text)
+    $tokens = $null
+    $errs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$errs)
+    if (@($errs).Count -gt 0) { throw $errs[0].Message }
+    $table = $ast.Find({ $args[0] -is [System.Management.Automation.Language.HashtableAst] }, $false)
+    if (-not $table) { throw 'no @{ ... } in the configuration' }
+    return $table.SafeGetValue()
+}
+
+# --- Secrets = @{ ... } (tools/wm.ps1 <company> secret) ----------------------------------------------------------
+# Changed as text too, one entry per line ("Name = 'value'"); a table written otherwise is left to be changed by hand.
+
+# Where the table is in $Lines: Start (its "Secrets = @{" line), End (its "}" line; the same line for "@{}"), or $null
+# when there is none
+function Find-WmConfigSecrets {
+    param([AllowEmptyCollection()][string[]]$Lines)
+    $starts = @(for ($i = 0; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^\s*Secrets\s*=') { $i } })
+    if ($starts.Count -eq 0) { return $null }
+    if ($starts.Count -gt 1) { throw (New-WmError 'init.setting_not_once' @('Secrets', $starts.Count)) }
+    $s = $starts[0]
+    if ($Lines[$s] -match '^\s*Secrets\s*=\s*@\{\s*\}\s*(#.*)?$') { return [pscustomobject]@{ Start = $s; End = $s } }
+    if ($Lines[$s] -notmatch '^\s*Secrets\s*=\s*@\{\s*(#.*)?$') { throw (New-WmError 'init.secrets_layout') }
+    for ($e = $s + 1; $e -lt $Lines.Count; $e++) {
+        if ($Lines[$e] -match '^\s*\}\s*(#.*)?$') { return [pscustomobject]@{ Start = $s; End = $e } }
+        if ($Lines[$e] -notmatch '^\s*(#.*)?$' -and $Lines[$e] -notmatch "^\s*[A-Za-z][A-Za-z0-9_]*\s*=\s*'(?:[^']|'')*'\s*(#.*)?$") {
+            throw (New-WmError 'init.secrets_layout')
+        }
+    }
+    throw (New-WmError 'init.secrets_layout')
+}
+
+# The configuration text with Secrets.<Name> = <Value>: the entry replaced (whatever the letter case of its name), or
+# added to the table, or a table added before the configuration's closing brace. The name and value are the caller's
+# to check (Test-WmSecretName in lib\Groups.ps1; text on one line).
+function Set-WmConfigSecretText {
+    param([Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Value)
+    $nl = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.AddRange([string[]]($Text -split "\r?\n"))
+    $entry = $Name + ' = ' + (ConvertTo-WmPsdString $Value)
+    $b = Find-WmConfigSecrets $lines.ToArray()
+    if (-not $b) {
+        $last = -1
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) { if ($lines[$i] -match '^\}\s*$') { $last = $i; break } }
+        if ($last -lt 0) { throw (New-WmError 'init.secrets_layout') }
+        $lines.InsertRange($last, [string[]]@(
+            '',
+            '    # Secrets for the scripts and jobs of the groups (docs/groups.md): pwsh tools/wm.ps1 <company> secret <name>',
+            '    Secrets = @{',
+            "        $entry",
+            '    }'))
+        return ($lines -join $nl)
+    }
+    $indent = [regex]::Match($lines[$b.Start], '^\s*').Value
+    if ($b.End -eq $b.Start) {
+        $lines[$b.Start] = "${indent}Secrets = @{"
+        $lines.InsertRange($b.Start + 1, [string[]]@("$indent    $entry", "$indent}"))
+        return ($lines -join $nl)
+    }
+    for ($i = $b.Start + 1; $i -lt $b.End; $i++) {
+        if ($lines[$i] -match '^(\s*)([A-Za-z][A-Za-z0-9_]*)\s*=' -and $Matches[2] -ieq $Name) {
+            $lines[$i] = $Matches[1] + $entry
+            return ($lines -join $nl)
+        }
+    }
+    $lines.Insert($b.End, "$indent    $entry")
+    return ($lines -join $nl)
+}
+
+# The configuration text without Secrets.<Name> (any letter case), or $null when it has no such secret
+function Remove-WmConfigSecretText {
+    param([Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Name)
+    $nl = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.AddRange([string[]]($Text -split "\r?\n"))
+    $b = Find-WmConfigSecrets $lines.ToArray()
+    if (-not $b) { return $null }
+    for ($i = $b.Start + 1; $i -lt $b.End; $i++) {
+        if ($lines[$i] -match '^\s*([A-Za-z][A-Za-z0-9_]*)\s*=' -and $Matches[1] -ieq $Name) {
+            $lines.RemoveAt($i)
+            return ($lines -join $nl)
+        }
+    }
+    return $null
+}
+
 # --- Checking the answers ---------------------------------------------------------------------------------------
 
 function Test-WmUpdateTime {

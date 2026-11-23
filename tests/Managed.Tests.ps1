@@ -219,6 +219,44 @@ Describe 'Test-WmManagementConfig and Write-WmCertificateExpiry' {
     }
 }
 
+Describe 'Add-WmScriptSecrets' {
+    BeforeAll {
+        $file = Join-Path $TestDrive 'share.ps1'
+        $secrets = @{ ShareUser = 'office'; SharePassword = 'p4ss'; Other = 'x' }
+    }
+    It 'gives a script only the secrets it names, as WMANAGER_SECRET_ and the name in capitals' {
+        [IO.File]::WriteAllText($file, "# wmanager-secrets: shareuser, SharePassword`r`nWrite-Output 1`r`n")
+        $vars = @{ WMANAGER_GROUP = 'all' }
+        Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $file
+        $vars['WMANAGER_SECRET_SHAREUSER'] | Should -BeExactly 'office'
+        $vars['WMANAGER_SECRET_SHAREPASSWORD'] | Should -BeExactly 'p4ss'
+        $vars.Count | Should -Be 3
+    }
+    It 'adds nothing for a script that names none' {
+        [IO.File]::WriteAllText($file, "Write-Output 1`r`n")
+        $vars = @{}
+        Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $file
+        $vars.Count | Should -Be 0
+    }
+    It 'refuses a script whose secret the configuration lacks, or with a name that is not one' {
+        [IO.File]::WriteAllText($file, "# wmanager-secrets: ShareUser, Missing`r`n")
+        { Add-WmScriptSecrets -Environment @{} -Secrets $secrets -File $file } | Should -Throw '*has no secret Missing*'
+        [IO.File]::WriteAllText($file, "# wmanager-secrets: 1st`r`n")
+        { Add-WmScriptSecrets -Environment @{} -Secrets $secrets -File $file } | Should -Throw "*'1st' is not a secret's name*"
+    }
+}
+
+Describe 'Test-WmManagementConfig and the secrets' {
+    It 'stops provisioning on Secrets the computers could not use' {
+        Mock Get-WmSigningCertificate { [pscustomobject]@{ Subject = 'CN=t'; Thumbprint = 'AB12'; NotAfter = (Get-Date).AddDays(400) } }
+        Mock Write-WmLog { }
+        $cfg = @{ Management = @{ Source = 'https://example.test/acme'; SourceId = $sid }; Secrets = @{ A = '' } }
+        { Test-WmManagementConfig -Config $cfg -ConfigDir 'C:\cfg' } | Should -Throw '*value of A*'
+        $cfg.Secrets = @{ A = 'x' }
+        { Test-WmManagementConfig -Config $cfg -ConfigDir 'C:\cfg' } | Should -Not -Throw
+    }
+}
+
 Describe 'Get-WmRequirements without a management source' {
     It 'returns a flat list, not a list nested in an array' {
         Mock Get-WmRequirementsText { "vlc`n7zip" }

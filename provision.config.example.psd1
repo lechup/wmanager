@@ -29,6 +29,14 @@
         JobTimeoutMinutes = 10
     }
 
+    # Secrets for the group scripts and jobs (e.g. a share's login), kept here rather than in the source. A script
+    # names the ones it needs in a line "# wmanager-secrets: ShareUser, SharePassword" and gets only those, as
+    # $env:WMANAGER_SECRET_SHAREUSER...; the log and Loki show *** for their values. Add them with
+    # pwsh tools/wm.ps1 <company> secret <name> (the value isn't shown). Like the tokens, plain text in this file:
+    # on the computer only administrators read it. See docs/groups.md, "Secrets for scripts".
+    Secrets = @{
+    }
+
     # --- Chocolatey -----------------------------------------------------------
     ChocolateyInstallUrl = 'https://community.chocolatey.org/install.ps1'
 

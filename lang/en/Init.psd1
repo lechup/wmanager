@@ -13,6 +13,7 @@
     'init.stopped_missing_settings' = 'Stopped: add the missing settings (see provision.config.example.psd1) or start from the example file.'
     'init.example_lacks_settings'   = 'The example file lacks the settings: {0}.'
     'init.setting_not_once'         = 'The configuration file does not have exactly one setting {0} (found: {1}); add it by hand.'
+    'init.secrets_layout'           = 'The Secrets table of the configuration isn''t one entry per line (Name = ''value''); change it by hand.'
 
     'init.section_update'           = 'Software updates'
     'init.update_time'              = 'Update time (HH:mm), best when the computers are usually on'

@@ -200,6 +200,50 @@ Describe 'check' {
     }
 }
 
+Describe 'secrets for scripts' {
+    BeforeAll {
+        . (Join-Path (Join-Path $script:root 'lib') 'Lang.ps1')
+        . (Join-Path (Join-Path $script:root 'lib') 'Groups.ps1')
+        Initialize-WmLanguage -Lang 'en' -Root $script:root
+    }
+
+    It 'reads the names a script gives in its wmanager-secrets lines, each once' {
+        $text = "# A script`r`n# wmanager-secrets: ShareUser, SharePassword`r`n`$x = 1`r`n    #wmanager-secrets:sharepassword WifiKey`r`n"
+        $names = Get-WmScriptSecretNames $text
+        $names | Should -Be @('ShareUser', 'SharePassword', 'WifiKey')
+        Get-WmScriptSecretNames "Write-Output '# wmanager-secrets: Nope'" | Should -BeNullOrEmpty
+        (Get-WmScriptSecretNames '').Count | Should -Be 0
+        { Get-WmScriptSecretNames '# wmanager-secrets: 9lives' } | Should -Throw "*'9lives' is not a secret's name*"
+        { Get-WmScriptSecretNames '# wmanager-secrets: Share-User' } | Should -Throw '*Share-User*'
+    }
+
+    It 'checks the Secrets of a configuration' {
+        (Get-WmSecrets @{}).Count | Should -Be 0
+        (Get-WmSecrets @{ Secrets = @{ A = 'x'; B_2 = "it's" } }).B_2 | Should -Be "it's"
+        { Get-WmSecrets @{ Secrets = 'x' } } | Should -Throw '*must be a table*'
+        { Get-WmSecrets @{ Secrets = @{ '1a' = 'x' } } } | Should -Throw "*'1a' is not a secret's name*"
+        { Get-WmSecrets @{ Secrets = @{ A = '' } } } | Should -Throw '*value of A*'
+        { Get-WmSecrets @{ Secrets = @{ A = "two`nlines" } } } | Should -Throw '*value of A*'
+        { Get-WmSecrets @{ Secrets = @{ A = 5 } } } | Should -Throw '*value of A*'
+    }
+
+    It 'hides the values in what a script prints, the longest first' {
+        Hide-WmSecrets 'user office, password office-2026!' @('office', 'office-2026!') | Should -Be 'user ***, password ***'
+        Hide-WmSecrets 'nothing secret' @() | Should -Be 'nothing secret'
+        Hide-WmSecrets '' @('x') | Should -Be ''
+    }
+
+    It 'check refuses a script or job with a name that is not one' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/all/scripts/30-share.ps1') "# wmanager-secrets: ShareUser, 2nd`r`nWrite-Output 1`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match "ERROR: groups/all/scripts/30-share\.ps1: wmanager-secrets: '2nd' is not a secret's name"
+        Set-Text (Get-Path $src 'groups/all/scripts/30-share.ps1') "# wmanager-secrets: ShareUser, Second`r`nWrite-Output 1`r`n" -Bom
+        (Invoke-Tool $src check).Code | Should -Be 0
+    }
+}
+
 Describe 'add-computer and remove-computer' {
     It 'adds a computer after the last entry, aligned, and keeps comments, BOM and line endings' {
         $src = New-Source

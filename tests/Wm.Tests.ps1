@@ -420,6 +420,65 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
         (Invoke-Typed @('1')).Code | Should -Be 0
     }
 
+    Context 'secrets' {
+        It 'adds, lists and removes the secrets of the scripts, never showing a value' {
+            $dir = Add-Company 'acme' -Source -Config ([IO.File]::ReadAllText((Join-Path $script:root 'provision.config.example.psd1')))
+            $share = Join-Path $dir 'source/groups/all/scripts/30-share.ps1'
+            New-Item -ItemType File -Force -Path $share -Value "# wmanager-secrets: ShareUser, SharePassword`r`nWrite-Output 1`r`n" | Out-Null
+            $job = Join-Path $dir 'source/groups/all/jobs/daily/wifi.ps1'
+            Set-Content -LiteralPath $job -Value @('# wmanager-secrets: SharePassword', 'Write-Output 1')
+
+            $r = Invoke-Tool acme secret
+            $r.Text | Should -Match 'ShareUser is named by groups/all/scripts/30-share\.ps1 but isn''t in the configuration'
+            $r.Text | Should -Match 'SharePassword is named by groups/all/jobs/daily/wifi\.ps1, groups/all/scripts/30-share\.ps1'
+            (Invoke-Tool list).Text | Should -Match 'acme .*secrets SharePassword, ShareUser missing'
+
+            $r = Invoke-Typed @("p4ss'w‘rd") @('acme', 'secret', 'SharePassword')
+            $r.Code | Should -Be 0
+            $r.Text | Should -Match 'SharePassword added in'
+            $r.Text | Should -Not -Match 'p4ss'
+            $r = Invoke-Typed @('office') @('acme', 'secret', 'shareuser')
+            $r.Text | Should -Match 'shareuser added'
+            $r = Invoke-Typed @('Office') @('acme', 'secret', 'ShareUser')
+            $r.Text | Should -Match 'ShareUser changed'
+            $c = Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'config/provision.config.psd1')
+            $c.Secrets.SharePassword | Should -BeExactly "p4ss'w‘rd"
+            $c.Secrets.ShareUser | Should -BeExactly 'Office'
+            $c.Management.Certificate | Should -Be 'wmanager-signing.cer'
+            (Invoke-Tool list).Text | Should -Not -Match 'missing'
+            $r = Invoke-Tool acme secret
+            $r.Text | Should -Match 'SharePassword\s+used by groups/all/jobs/daily/wifi\.ps1, groups/all/scripts/30-share\.ps1'
+            $r.Text | Should -Not -Match 'p4ss|Office'
+
+            # Enter: nothing changes; a name that isn't one; remove
+            (Invoke-Typed @('') @('acme', 'secret', 'ShareUser')).Text | Should -Match 'Nothing changed'
+            $r = Invoke-Tool acme secret 'share-user'
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match "'share-user' is not a secret's name"
+            $r = Invoke-Tool acme secret ShareUser remove
+            $r.Text | Should -Match 'ShareUser removed'
+            $r.Text | Should -Match "groups/all/scripts/30-share\.ps1 name ShareUser: they won't run"
+            (Import-PowerShellDataFile -LiteralPath (Join-Path $dir 'config/provision.config.psd1')).Secrets.Keys | Should -Be @('SharePassword')
+            (Invoke-Tool acme secret ShareUser remove).Text | Should -Match 'has no secret ShareUser'
+        }
+
+        It 'warns at publish of a script whose secret the configuration lacks' {
+            $dir = Add-Company 'acme' -Source -Config $script:managed
+            Add-FakeKey $dir
+            New-Item -ItemType File -Force -Path (Join-Path $dir 'source/groups/all/scripts/30-share.ps1') -Value "# wmanager-secrets: SharePassword`r`nWrite-Output 1`r`n" | Out-Null
+            $r = Invoke-Typed @('n') @('acme', 'publish')
+            $r.Text | Should -Match 'groups/all/scripts/30-share\.ps1 name the secret SharePassword, which acme''s configuration doesn''t have'
+            $r.Text | Should -Match 'Not signed'
+        }
+
+        It 'refuses a secret for a company without a configuration' {
+            $null = Add-Company 'acme' -Source
+            $r = Invoke-Typed @('x') @('acme', 'secret', 'A')
+            $r.Code | Should -Be 1
+            $r.Text | Should -Match 'acme has no configuration yet'
+        }
+    }
+
     Context 'status' {
         BeforeAll {
             # A stand-in for the Healthchecks API and Loki on this computer, with what real computers send: Loki lines

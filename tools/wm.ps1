@@ -29,6 +29,9 @@
 #   pwsh tools/wm.ps1 <company> rotate-key     a new signing key: the computers get its certificate first, then the
 #                                              switch (run it again); or call it off
 #   pwsh tools/wm.ps1 <company> config         the configuration wizard (init.ps1) for its provision.config.psd1
+#   pwsh tools/wm.ps1 <company> secret         the secrets its scripts name (# wmanager-secrets:) and its
+#                                              configuration has (names only); secret <name>: add or change one
+#                                              (typed without being shown), secret <name> remove
 #   pwsh tools/wm.ps1 <company> <command> ...  a tools/groups.ps1 command on its source, e.g.
 #                                              add-computer OFFICE-07 accounting, enable power all, set-version v0.2.0
 #
@@ -343,6 +346,13 @@ function Get-CompanyState {
         if (-not $hasKey) { $parts.Add('no signing key') }
     }
     if (-not [IO.File]::Exists($Company.Config)) { $parts.Add('no configuration yet') }
+    else {
+        try {
+            $missing = @((Get-MissingSecrets $Company).Keys)
+            if ($missing.Count -eq 1) { $parts.Add("secret $($missing[0]) missing") }
+            elseif ($missing.Count -gt 1) { $parts.Add("secrets $($missing -join ', ') missing") }
+        } catch { $parts.Add('Secrets unreadable') }
+    }
     if ([IO.File]::Exists((Join-Path $Company.Dir 'key-change.psd1'))) { $parts.Add('key change in progress') }
     return ($parts -join ', ')
 }
@@ -400,6 +410,13 @@ function Publish-Company {
     $target = Get-PublishTarget $Company
     $sign = $true
     $changed = $true
+    # A script naming a secret the configuration lacks doesn't run on the computers: say so, it is no reason not to sign
+    try {
+        $missing = Get-MissingSecrets $Company
+        foreach ($n in $missing.Keys) {
+            Write-Warn "$($missing[$n] -join ', ') name the secret $n, which $($Company.Name)'s configuration doesn't have: they won't run (pwsh tools/wm.ps1 $($Company.Name) secret $n, then run.cmd with it)"
+        }
+    } catch { Write-Warn "the secrets of the configuration can't be read: $(Format-WmErrorText $_ -English)" }
     if (-not $Confirmed) {
         $changes = Get-SourceChanges $Company
         Show-SourceChanges $Company $changes
@@ -638,7 +655,7 @@ function Copy-ToUsb {
     Write-Host ''
     if ($chooses) { Write-Host "Done. On the computer, run.cmd from $Folder asks which company the computer is for." }
     else { Write-Host "Done. On the computer: run.cmd -ConfigPath <this folder>\configs\<company>\provision.config.psd1" }
-    Write-Host 'The configurations hold the tokens (Loki, Healthchecks, the source): keep the drive under control.'
+    Write-Host 'The configurations hold the tokens (Loki, Healthchecks, the source) and the secrets of the scripts: keep the drive under control.'
 }
 
 # ---------------------------------------------------------------------------
@@ -658,10 +675,17 @@ function Test-ServiceUrl {
     return ($Url -match '^https://[^/]' -or $Url -match '^http://(127\.0\.0\.1|localhost)(:\d+)?(/|$)')
 }
 
-# A secret typed at the terminal without showing it (piped input: as it comes)
+# A secret typed at the terminal without showing it. Piped input: as it comes, but not printed back as Read-Host
+# would, so a secret passed by a script doesn't end up in its output either.
 function Read-Secret {
     param([string]$Prompt)
-    if ([Console]::IsInputRedirected) { return [string](Read-Line $Prompt) }
+    if ([Console]::IsInputRedirected) {
+        Write-Host "${Prompt}: " -NoNewline
+        $line = [Console]::In.ReadLine()
+        Write-Host ''
+        if ($null -eq $line) { return '' }
+        return $line.Trim()
+    }
     $secure = Read-Host $Prompt -AsSecureString
     return ([Net.NetworkCredential]::new('', $secure).Password).Trim()
 }
@@ -1291,6 +1315,123 @@ function Set-PublishTarget {
     } elseif (Read-WmYesNo '  Send the signed source there now?' $true) {
         $null = Sync-Company $Company
     }
+}
+
+# --- Secrets for scripts: Secrets = @{ ... } in the company's configuration (docs/groups.md) ----------------------
+# A script or job names the ones it needs ("# wmanager-secrets: ShareUser, SharePassword") and the computer gives it
+# those from its configuration. Values are typed without being shown and are never printed here.
+
+# The secrets the company's signed scripts and jobs name: name -> the files that name it (a line with a name that
+# isn't one is left out here; groups.ps1 check reports it)
+function Get-SourceSecretNeeds {
+    param($Company)
+    $needs = [ordered]@{}
+    if (-not [IO.Directory]::Exists($Company.Source)) { return $needs }
+    foreach ($rel in @(Get-SignedFiles $Company.Source | Sort-Object)) {
+        if ($rel -notmatch '^groups/[^/]+/(scripts|jobs)/.*\.ps1$') { continue }
+        try { $names = Get-WmScriptSecretNames ([IO.File]::ReadAllText((Join-Path $Company.Source $rel))) } catch { continue }
+        foreach ($n in $names) {
+            $key = @($needs.Keys | Where-Object { $_ -ieq $n }) | Select-Object -First 1
+            if (-not $key) { $key = $n; $needs[$key] = New-Object System.Collections.Generic.List[string] }
+            $needs[$key].Add($rel)
+        }
+    }
+    return $needs
+}
+
+# The names of the secrets in the company's configuration (never the values)
+function Get-ConfigSecretNames {
+    param($Company)
+    if (-not [IO.File]::Exists($Company.Config)) { return @() }
+    return @((Get-WmSecrets (Import-PowerShellDataFile -LiteralPath $Company.Config)).Keys | Sort-Object)
+}
+
+# Secrets the scripts name that the configuration doesn't have: name -> files
+function Get-MissingSecrets {
+    param($Company)
+    $have = @(Get-ConfigSecretNames $Company)
+    $missing = [ordered]@{}
+    $needs = Get-SourceSecretNeeds $Company
+    foreach ($n in $needs.Keys) { if (-not ($have | Where-Object { $_ -ieq $n })) { $missing[$n] = $needs[$n] } }
+    return $missing
+}
+
+function Show-Secrets {
+    param($Company)
+    $have = @(Get-ConfigSecretNames $Company)
+    $needs = Get-SourceSecretNeeds $Company
+    if ($have.Count -eq 0 -and $needs.Count -eq 0) {
+        Write-Host "  No secrets. A script names the ones it needs in a line '# wmanager-secrets: ShareUser, SharePassword';"
+        Write-Host "  add each: pwsh tools/wm.ps1 $($Company.Name) secret <name>"
+        return
+    }
+    foreach ($n in $have) {
+        $key = @($needs.Keys | Where-Object { $_ -ieq $n }) | Select-Object -First 1
+        $use = if ($key) { 'used by ' + ($needs[$key] -join ', ') } else { 'no script names it' }
+        Write-Host ('  {0,-24} {1}' -f $n, $use)
+    }
+    $missing = Get-MissingSecrets $Company
+    foreach ($n in $missing.Keys) {
+        Write-Warn "$n is named by $($missing[$n] -join ', ') but isn't in the configuration (those don't run): pwsh tools/wm.ps1 $($Company.Name) secret $n"
+    }
+}
+
+# The configuration with the text changed, read back first the way the computers read it
+function Save-ConfigSecretText {
+    param($Company, [string]$Text)
+    $data = ConvertFrom-WmConfigText $Text
+    $null = Get-WmSecrets $data
+    Write-WmConfigFile -Path $Company.Config -Text $Text
+    return $data
+}
+
+# Adds or changes a secret: the value is typed without being shown (and so stays out of the shell's history)
+function Set-Secret {
+    param($Company, [string]$Name)
+    if (-not (Test-WmSecretName $Name)) { throw "'$Name' is not a secret's name: letters, digits and _, starting with a letter, at most 64" }
+    if (-not [IO.File]::Exists($Company.Config)) { throw "$($Company.Name) has no configuration yet: pwsh tools/wm.ps1 $($Company.Name) config" }
+    $had = @(Get-ConfigSecretNames $Company | Where-Object { $_ -ieq $Name }).Count -gt 0
+    $value = Read-Secret "  The value of $Name (not shown; spaces at the ends are dropped; Enter = leave it)"
+    if (-not $value) { Write-Host '  Nothing changed.'; return $false }
+    $text = Set-WmConfigSecretText ([IO.File]::ReadAllText($Company.Config)) $Name $value
+    $data = Save-ConfigSecretText $Company $text
+    if ([string]$data.Secrets[$Name] -cne $value) { throw "the configuration doesn't read back $Name as typed; check $($Company.Config)" }
+    Write-Host "  $Name $(if ($had) { 'changed' } else { 'added' }) in $($Company.Config)."
+    Write-SecretsNext $Company
+    return $true
+}
+
+function Remove-Secret {
+    param($Company, [string]$Name)
+    if (-not [IO.File]::Exists($Company.Config)) { throw "$($Company.Name) has no configuration yet" }
+    $text = Remove-WmConfigSecretText ([IO.File]::ReadAllText($Company.Config)) $Name
+    if ($null -eq $text) { throw "$($Company.Name)'s configuration has no secret $Name" }
+    $null = Save-ConfigSecretText $Company $text
+    Write-Host "  $Name removed from $($Company.Config)."
+    $missing = Get-MissingSecrets $Company
+    $key = @($missing.Keys | Where-Object { $_ -ieq $Name }) | Select-Object -First 1
+    if ($key) { Write-Warn "$($missing[$key] -join ', ') name ${Name}: they won't run on computers with this configuration" }
+    Write-SecretsNext $Company
+}
+
+function Write-SecretsNext {
+    param($Company)
+    Write-Host '  The computers get it with this configuration: run.cmd with it (pwsh tools/wm.ps1 usb <folder>); the ones set up'
+    Write-Host '  before keep the secrets they had. Like the tokens, it is plain text in the file: keep the drive under control.'
+}
+
+# The menu step: the list, then a name to add, change or remove
+function Edit-SecretsStep {
+    param($Company)
+    Show-Secrets $Company
+    $name = [string](Read-Line 'Secret to add or change (Enter = back)')
+    if (-not $name) { return }
+    if (@(Get-ConfigSecretNames $Company | Where-Object { $_ -ieq $name }).Count -gt 0) {
+        $what = [string](Read-Line "  $name is there: c) change its value, r) remove it (Enter = back)")
+        if ($what -eq 'r') { Remove-Secret $Company $name; return }
+        if ($what -ne 'c') { return }
+    }
+    $null = Set-Secret $Company $name
 }
 
 # Management.Source and AuthHeader of the company's configuration
@@ -2072,6 +2213,7 @@ function Invoke-CompanyMenu {
         Write-Host ' 16) where the computers read the source from (Git repository or folder)'
         Write-Host ' 17) a backup of this company (an archive of its source, key and configuration)'
         Write-Host ' 18) change the signing key, with a time when the computers trust both'
+        Write-Host ' 19) secrets for scripts (passwords in the configuration, not in the source)'
         Write-Host '  b) back'
         $answer = Read-Line 'Choose'
         if ($null -eq $answer -or $answer -eq 'b' -or $answer -eq 'q') { return }
@@ -2102,6 +2244,7 @@ function Invoke-CompanyMenu {
                 '15' { Set-Monitoring $Company }
                 '16' { Set-PublishTarget $Company }
                 '18' { Invoke-KeyChange $Company }
+                '19' { Edit-SecretsStep $Company }
                 '17' {
                     $folder = [string](Read-Line "Folder for the archive (Enter = $($script:BackupRoot))")
                     $null = Backup-Company $Company $folder
@@ -2220,6 +2363,12 @@ try {
             Show-ComputerStatus $company
         } elseif ($Second -eq 'monitoring') {
             Set-Monitoring $company
+        } elseif ($Second -eq 'secret') {
+            $words = @($Rest | Where-Object { $_ })
+            if ($words.Count -eq 0) { Show-Secrets $company }
+            elseif ($words.Count -eq 1) { $null = Set-Secret $company $words[0] }
+            elseif ($words.Count -eq 2 -and $words[1] -eq 'remove') { Remove-Secret $company $words[0] }
+            else { throw "usage: pwsh tools/wm.ps1 $($company.Name) secret [<name> [remove]]" }
         } else {
             $named = @{}
             if ($Url) { $named['Url'] = $Url }

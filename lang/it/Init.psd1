@@ -13,6 +13,7 @@
     'init.stopped_missing_settings' = 'Interrotto: aggiungi le impostazioni mancanti (vedi provision.config.example.psd1) o parti dal file di esempio.'
     'init.example_lacks_settings'   = 'Nel file di esempio mancano le impostazioni: {0}.'
     'init.setting_not_once'         = 'Il file di configurazione non contiene esattamente un''impostazione {0} (trovate: {1}); aggiungila a mano.'
+    'init.secrets_layout'           = 'La tabella Secrets della configurazione non ha una voce per riga (Nome = ''valore''); modificala a mano.'
 
     'init.section_update'           = 'Aggiornamenti software'
     'init.update_time'              = 'Ora dell''aggiornamento (HH:mm), meglio quando i computer sono di solito accesi'
