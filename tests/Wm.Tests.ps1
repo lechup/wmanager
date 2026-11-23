@@ -32,6 +32,9 @@ BeforeAll {
     $script:tool = Join-Path (Join-Path $script:root 'tools') 'wm.ps1'
     $script:savedCompanies = $env:WMANAGER_COMPANIES
     $script:savedEditor = $env:EDITOR
+    # A test signature needs no timestamp: publish.sh asks no server (tests/ci/build-sources.sh checks timestamps)
+    $script:savedTsa = $env:WM_TSA
+    $env:WM_TSA = 'none'
 
     # Runs the tool in this process; its messages go through Write-Host (stream 6)
     function Invoke-Tool {
@@ -120,6 +123,7 @@ BeforeAll {
 AfterAll {
     $env:WMANAGER_COMPANIES = $script:savedCompanies
     $env:EDITOR = $script:savedEditor
+    $env:WM_TSA = $script:savedTsa
 }
 
 Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
