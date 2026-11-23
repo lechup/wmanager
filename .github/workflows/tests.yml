@@ -1,7 +1,9 @@
 # Tests on a throwaway GitHub-hosted Windows runner (free for public repositories):
-# - sign: builds and signs test management sources on Linux with tools/publish.sh (osslsigncode, throwaway key)
+# - sign: builds and signs test management sources on Linux with tools/publish.sh (osslsigncode, throwaway key,
+#   timestamped by DigiCert or Sectigo) and checks its timestamps
 # - windows: Windows PowerShell 5.1: parses every script, runs the Pester tests, then the integration tests
-#   (the osslsigncode signature on Windows, the checks of a new version, group scripts, jobs, the hourly task).
+#   (the osslsigncode signature and its timestamp on Windows, also of an expired certificate, the checks of a new
+#   version, group scripts, jobs, the hourly task).
 # - grafana: the dashboard and the alert rules of examples/grafana against a real Loki and Grafana, and the
 #   self-hosting kit of examples/selfhosted end to end (Docker)
 # - wizard-linux: the tests of the configuration wizard, the languages, the group tool and the companies helper

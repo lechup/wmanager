@@ -3,8 +3,10 @@
 #
 # Usage: tools/publish.sh <management-folder> [key-folder]
 #   key-folder holds key.pem and cert.pem from tools/new-signing-cert.sh (default: ~/.wmanager-signing).
-#   WM_TSA=<RFC 3161 timestamp server URL> also adds a timestamp, so the signature stays valid after the
-#   certificate expires (e.g. WM_TSA=http://timestamp.digicert.com).
+#   The signature gets an RFC 3161 timestamp, so it stays valid after the certificate expires: from
+#   http://timestamp.digicert.com, or http://timestamp.sectigo.com when that one doesn't answer (the server gets only
+#   a hash of the signature). WM_TSA="<url> [<url>...]" uses other servers, WM_TSA=none signs without one. When no
+#   server answers (no internet) it signs without one and warns.
 #
 # Before signing it checks the content with tools/groups.ps1 check (needs pwsh) and refuses a source the computers
 # would reject. The manifest lists every file of the folder with its SHA256, except manifest.psd1 and hidden files
@@ -12,7 +14,7 @@
 # will push (tracked files and new files that aren't ignored), so it matches what the computers download.
 # On the first run it creates source-id.txt, the identifier of this source (Management.SourceId in the config).
 # Run it after every change, then commit and push, or copy the folder to the server or share (manifest.psd1 last).
-# Requires osslsigncode (apt install osslsigncode), openssl and sha256sum; pwsh for the check.
+# Requires osslsigncode (apt install osslsigncode), openssl, sha256sum and timeout; pwsh for the check.
 set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -23,6 +25,13 @@ tools=$(cd "$(dirname "$0")" && pwd)
 dir=$1
 keydir=${2:-$HOME/.wmanager-signing}
 command -v osslsigncode >/dev/null || die "osslsigncode not found (sudo apt install osslsigncode)"
+# The timestamp servers, tried in turn
+tsa=${WM_TSA:-http://timestamp.digicert.com http://timestamp.sectigo.com}
+[[ $tsa == none ]] && tsa=''
+read -ra tsa_urls <<< "$tsa"
+for url in "${tsa_urls[@]}"; do
+    [[ $url =~ ^https?://[^[:space:]]+$ ]] || die "WM_TSA: '$url' is not a timestamp server address (http://...), nor none"
+done
 [[ -d $dir ]] || die "folder $dir not found"
 [[ -f $keydir/key.pem && -f $keydir/cert.pem ]] || die "no key.pem and cert.pem in $keydir (create them with tools/new-signing-cert.sh)"
 keydir=$(cd "$keydir" && pwd)
@@ -134,28 +143,60 @@ fi
 } > "$tmp/manifest.psd1"
 
 # --- Signature ------------------------------------------------------------------------
-sign_args=(-certs "$keydir/cert.pem" -key "$keydir/key.pem" -h sha256 -n wmanager)
-[[ -n ${WM_TSA:-} ]] && sign_args+=(-t "$WM_TSA")
-sign_args+=(-in "$tmp/manifest.psd1" -out "$tmp/signed.psd1")
+# With an RFC 3161 timestamp Windows checks the certificate at the time of the timestamp, so the signature outlives
+# the certificate. Each server gets 30 seconds (osslsigncode would wait minutes for one that doesn't answer). When
+# none answers it signs without one: a manifest is signed again at every change, and the next signature made with
+# the internet has one again.
+encrypted=0
 if grep -q 'ENCRYPTED' "$keydir/key.pem"; then
     read -rsp "Signing key passphrase: " pw
     echo >&2
-    out=$(osslsigncode sign "${sign_args[@]}" -readpass <(printf '%s' "$pw") 2>&1) || die "signing failed:
-$out"
-    unset pw
-else
-    out=$(osslsigncode sign "${sign_args[@]}" 2>&1) || die "signing failed:
-$out"
+    encrypted=1
 fi
+# osslsigncode sign with these more arguments; its output in $out
+sign() {
+    local args=(-certs "$keydir/cert.pem" -key "$keydir/key.pem" -h sha256 -n wmanager "$@"
+                -in "$tmp/manifest.psd1" -out "$tmp/signed.psd1")
+    rm -f "$tmp/signed.psd1"
+    if (( encrypted )); then
+        out=$(timeout 30 osslsigncode sign "${args[@]}" -readpass <(printf '%s' "$pw") 2>&1)
+    else
+        out=$(timeout 30 osslsigncode sign "${args[@]}" 2>&1)
+    fi
+}
+stamped=''
+missed=()
+for url in "${tsa_urls[@]}"; do
+    code=0
+    sign -ts "$url" || code=$?
+    if (( code == 0 )); then stamped=$url; break; fi
+    if (( code == 124 )); then
+        missed+=("$url: no answer within 30 seconds")
+    else
+        reason=$(printf '%s\n' "$out" | grep -m1 . || true)
+        missed+=("$url: ${reason:-failed}")
+    fi
+done
+if [[ -z $stamped ]]; then
+    sign || die "signing failed:
+$out"
+    if (( ${#tsa_urls[@]} > 0 )); then
+        warn "no timestamp server answered, so this signature has none and stops being valid when the certificate expires ($(openssl x509 -in "$keydir/cert.pem" -noout -enddate | cut -d= -f2)); the next signature made with the internet has one:
+$(printf '  %s\n' "${missed[@]}")"
+    fi
+fi
+unset pw
 
-verify_args=(-CAfile "$keydir/cert.pem" -in "$tmp/signed.psd1")
-[[ -n ${WM_TSA:-} ]] && verify_args+=(-TSA-CAfile /etc/ssl/certs/ca-certificates.crt)
-out=$(osslsigncode verify "${verify_args[@]}" 2>&1) || die "the signature does not verify:
+# The signature as the computers check it, with its timestamp (without the revocation lists: nothing more to fetch)
+out=$(osslsigncode verify -CAfile "$keydir/cert.pem" -ignore-crl -in "$tmp/signed.psd1" 2>&1) || die "the signature does not verify:
+$out"
+[[ -z $stamped ]] || grep -q 'Timestamp time:' <<< "$out" || die "the signature has no timestamp from $stamped:
 $out"
 
 mv "$tmp/signed.psd1" manifest.psd1
 thumb=$(openssl x509 -in "$keydir/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
-echo "Signed manifest $serial (${#rels[@]} files), source $source_id, certificate $thumb."
+echo "Signed manifest $serial (${#rels[@]} files), source $source_id, certificate $thumb, $(
+    [[ -n $stamped ]] && echo "timestamp from $stamped" || echo 'no timestamp')."
 # WM_PUBLISH_SENT_BY_CALLER: tools/wm.ps1 sends it next
 if [[ -n ${WM_PUBLISH_SENT_BY_CALLER:-} ]]; then
     :

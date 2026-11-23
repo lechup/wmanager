@@ -1,5 +1,5 @@
-﻿# Integration tests of the management source on real Windows: the osslsigncode signature, the checks of a new
-# version, group scripts, jobs, the Loki batch and the hourly task. They CHANGE the computer (root store,
+﻿# Integration tests of the management source on real Windows: the osslsigncode signature and its timestamp (also of
+# a certificate that expired), the checks of a new version, group scripts, jobs, the Loki batch and the hourly task. They CHANGE the computer (root store,
 # C:\ProgramData\wmanager, C:\wm-ci, scheduled tasks), so they run only when WM_CI_SOURCES points to the
 # sources built by tests/ci/build-sources.sh: on a throwaway CI runner (.github/workflows/tests.yml).
 #   tests\ci\Invoke-Tests.ps1 -Kind Integration
@@ -66,6 +66,9 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Write-Host "Signature: $($sig.Status) $($sig.StatusMessage)"
         $sig.Status | Should -Be 'Valid'
         $sig.SignerCertificate.Thumbprint | Should -Be $thumb
+        # publish.sh timestamps it (DigiCert, or Sectigo), and Windows takes that timestamp
+        Write-Host "Timestamp: $($sig.TimeStamperCertificate.Subject)"
+        $sig.TimeStamperCertificate | Should -Not -BeNullOrEmpty
     }
 
     It 'accepts the first version, resolves the groups and merges the lists' {
@@ -245,6 +248,34 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         (@(Get-WmBuffer | ForEach-Object Line) -join "`n") | Should -Match 'Rejected the new version from the management source: invalid manifest signature|another certificate'
         Get-PinnedThumbprint | Should -Be $thumb
         Reset-WmKeys
+    }
+
+    It 'keeps a timestamped signature valid after its certificate expired, and rejects one without' {
+        $expired = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (Join-Path $src 'expired-signing.cer')
+        $tsa = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (Join-Path $src 'ci-tsa.cer')
+        $expired.NotAfter | Should -BeLessThan (Get-Date)
+        # The test timestamp server stands for DigiCert's, whose root Windows trusts
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $store.Add($tsa)
+        $store.Close()
+        try {
+            Install-WmSigningCertificate -Certificate $expired
+            $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $src 'expired\manifest.psd1')
+            Write-Host "Expired, timestamped: $($sig.Status) $($sig.StatusMessage)"
+            $sig.Status | Should -Be 'Valid'
+            $sig.TimeStamperCertificate.Thumbprint | Should -Be $tsa.Thumbprint
+            { Test-WmManifestSignature -Path (Join-Path $src 'expired\manifest.psd1') -Thumbprint $expired.Thumbprint } | Should -Not -Throw
+            $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $src 'expired-nots\manifest.psd1')
+            Write-Host "Expired, no timestamp: $($sig.Status) $($sig.StatusMessage)"
+            $sig.Status | Should -Not -Be 'Valid'
+            { Test-WmManifestSignature -Path (Join-Path $src 'expired-nots\manifest.psd1') -Thumbprint $expired.Thumbprint } | Should -Throw
+        } finally {
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $store.Remove($tsa)
+            $store.Close()
+            Reset-WmKeys
+        }
     }
 
     It 'removes the signing certificate again, and forgets a next one (Restore-Backup)' {
