@@ -30,6 +30,7 @@ pwsh tools/wm.ps1 globex publish                             # those changes, th
 pwsh tools/wm.ps1 globex target                              # where the computers read it: Git repository or folder
 pwsh tools/wm.ps1 globex sync                                # send the signed source there again, and check it
 pwsh tools/wm.ps1 globex config                              # the wizard for its provision.config.psd1
+pwsh tools/wm.ps1 globex secret SharePassword                # a secret for its scripts, typed without being shown
 pwsh tools/wm.ps1 usb /media/you/USB/wmanager                # wmanager and every company's configuration
 pwsh tools/wm.ps1 globex rotate-key                          # a new signing key, in two steps
 pwsh tools/wm.ps1 backup                                     # every company as an archive, in ~/wmanager-backups
@@ -110,6 +111,10 @@ pwsh tools/wm.ps1 restore ~/wmanager-backups/globex-20261120-101500.tar.gz
   change off. Where the change stands is kept in `<company>/key-change.psd1`, so a step that stopped (a mistyped
   passphrase, a push that failed) is carried on by running it again. See
   [How a computer checks the source](groups.md#how-a-computer-checks-the-source).
+- **`secret`** keeps the passwords the company's scripts need in its configuration, not in its source: `secret <name>`
+  adds or changes one (typed without being shown), `secret` lists the names with the scripts that use them and the ones
+  missing, `secret <name> remove` takes one out. The computers get them with the configuration (the USB drive). See
+  [Secrets for scripts](groups.md#secrets-for-scripts).
 - **A company you already have** moves in by its folders: create `~/wmanager-companies/acme` and move (or link) its
   source to `source`, its key folder to `keys` and its configuration folder to `config`.
 

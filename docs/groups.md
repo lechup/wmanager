@@ -66,6 +66,43 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   folders are replaced with every new version of the source, so don't run programs or services from them: copy what
   has to stay (e.g. an agent) elsewhere first. Save files as UTF-8 with BOM (otherwise 5.1 garbles letters outside ASCII).
 
+### Secrets for scripts
+
+A password a script needs (a share's login, a Wi-Fi key, an agent's enrolment key) doesn't go into the script: the
+source is signed, not encrypted, so whoever reads the source (its repository, server or the computers' copy) would
+read the password. It goes into the company's configuration instead, next to the tokens:
+
+```powershell
+Secrets = @{
+    ShareUser     = 'office'
+    SharePassword = '...'
+}
+```
+
+`pwsh tools/wm.ps1 <company> secret SharePassword` adds or changes one (the value is typed without being shown, so it
+doesn't stay in the shell's history either), `secret` alone lists the names (never the values) with the scripts that
+use them, and `secret <name> remove` takes one out. The script names what it needs in a comment line, anywhere in the
+file, and gets only those, as environment variables:
+
+```powershell
+# wmanager-secrets: ShareUser, SharePassword
+$user = $env:WMANAGER_SECRET_SHAREUSER
+$password = $env:WMANAGER_SECRET_SHAREPASSWORD
+```
+
+- Names: letters, digits and `_`, starting with a letter (at most 64); the variable is the name in capitals.
+  `tools/groups.ps1 check` refuses a line with a name that isn't one.
+- A script or job naming a secret the computer's configuration doesn't have doesn't run: an error in the log (the
+  script is tried again like a failed one). `tools/wm.ps1` warns when you publish, and its list of companies says
+  `secret <name> missing`.
+- Whatever a script or job prints, the log and Loki show `***` instead of a secret's value.
+- The configuration reaches a computer only with `run.cmd` (computers don't fetch it), so a new or changed secret
+  needs the new configuration on each computer: put the USB drive together again (`pwsh tools/wm.ps1 usb <folder>`).
+- Like the tokens, the values are plain text in `provision.config.psd1`: on the computer only administrators and
+  SYSTEM read it, but on the USB drive and in the company's folder anyone who has them does. A secret a computer can
+  use is also readable by that computer's administrators; give each company its own logins, with only the rights the
+  scripts need.
+
 ## How a computer checks the source
 
 `manifest.psd1` lists every file with its SHA256 and carries an Authenticode signature. A computer uses a new version

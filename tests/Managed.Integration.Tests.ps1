@@ -16,6 +16,8 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         $src = $env:WM_CI_SOURCES
         $id = (Get-Content -LiteralPath (Join-Path $src 'v1\source-id.txt') -Raw).Trim()
         $marker = 'C:\wm-ci\marker.txt'
+        $secretFile = 'C:\wm-ci\secret.txt'
+        $secretValue = 'ci-Secret-4711'
         $failMarker = 'C:\wm-ci\fail.txt'
 
         Initialize-WmRoot
@@ -29,6 +31,8 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
                                 ScriptTimeoutMinutes = 5; JobTimeoutMinutes = 5 }
                 # Nothing listens there: the batch stays in logs\outbox, where the test reads it
                 LokiUrl = 'https://127.0.0.1:9'; LokiUser = '1'; LokiToken = 'x'
+                # groups/ci/scripts/30-secret.ps1 names it
+                Secrets = @{ CiShare = $secretValue; Unused = 'not-for-this-script' }
             }
         }
         # A new run of wmanager: the content is resolved again
@@ -83,7 +87,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         $c.Groups | Should -Be @('all', 'ci')
         ($c.Requirements | Where-Object Name -eq '7zip').Pinned | Should -BeTrue      # the ci entry replaces the common one
         ($c.Requirements | Where-Object Name -eq 'vlc') | Should -Not -BeNullOrEmpty
-        @($c.Scripts | ForEach-Object Path) | Should -Be @('groups/ci/scripts/10-marker.ps1', 'groups/ci/scripts/20-fail.ps1')
+        @($c.Scripts | ForEach-Object Path) | Should -Be @('groups/ci/scripts/10-marker.ps1', 'groups/ci/scripts/20-fail.ps1', 'groups/ci/scripts/30-secret.ps1')
         @($c.Jobs | ForEach-Object Name) | Should -Contain 'ci/ping'
         @($c.Jobs | ForEach-Object Name) | Should -Contain 'all/system-report'
     }
@@ -102,6 +106,42 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Reset-WmRun
         Invoke-WmGroupScripts -Config (New-TestConfig (Join-Path $src 'v1')) -RetryFailedAfterHours 20
         @(Get-Content -LiteralPath $failMarker).Count | Should -Be 2
+    }
+
+    It 'gives a script the secret it names, keeps the value out of the log and Loki, and without it runs nothing' {
+        # 30-secret.ps1 ran with the other scripts above: it wrote the value it got, and printed it on both streams
+        [IO.File]::ReadAllText($secretFile) | Should -BeExactly $secretValue
+        $lines = @(Get-WmBuffer | ForEach-Object Line) -join "`n"
+        $lines | Should -Match 'secret: \*\*\*'
+        $lines | Should -Match 'on stderr too: \*\*\*'
+        $lines | Should -Not -Match $secretValue
+        [IO.File]::ReadAllText($script:WmLogFile) | Should -Not -Match $secretValue
+
+        # A configuration without it: the script doesn't run and an error says why (the state put back afterwards)
+        $saved = @{}
+        foreach ($f in @($script:WmScriptsState, $script:WmScriptsFailed)) {
+            $saved[$f] = if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllBytes($f) } else { $null }
+        }
+        try {
+            $done = Read-WmTabState $script:WmScriptsState
+            $done.Remove('groups/ci/scripts/30-secret.ps1')
+            Save-WmTabState -Path $script:WmScriptsState -Map $done
+            Remove-Item -LiteralPath $secretFile
+            $cfg = New-TestConfig (Join-Path $src 'v1')
+            $cfg.Remove('Secrets')
+            Reset-WmRun
+            Clear-WmBuffer
+            Invoke-WmGroupScripts -Config $cfg -RetryFailedAfterHours 20
+            Test-Path -LiteralPath $secretFile | Should -BeFalse
+            $errors = @(Get-WmBuffer | Where-Object { $_.Level -eq 'error' } | ForEach-Object Line) -join "`n"
+            $errors | Should -Match "groups/ci/scripts/30-secret\.ps1: didn't run: the configuration of this computer has no secret CiShare"
+            (Read-WmTabState $script:WmScriptsFailed)['groups/ci/scripts/30-secret.ps1'] | Should -Not -BeNullOrEmpty
+        } finally {
+            foreach ($f in @($saved.Keys)) {
+                if ($null -ne $saved[$f]) { [IO.File]::WriteAllBytes($f, $saved[$f]) } else { Remove-Item -LiteralPath $f -ErrorAction SilentlyContinue }
+            }
+            Clear-WmBuffer
+        }
     }
 
     It 'runs the due jobs and puts their lines into Loki unchanged, with a task label' {
@@ -185,6 +225,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         @(
             '@{'
             "    Management = @{ Source = '$(Join-Path $src 'v2')'; SourceId = '$id'; Certificate = 'wmanager-signing.cer' }"
+            "    Secrets = @{ CiShare = '$secretValue' }"
             '}'
         ) | Set-Content -LiteralPath $configFile -Encoding UTF8
         try {

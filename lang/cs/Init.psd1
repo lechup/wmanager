@@ -13,6 +13,7 @@
     'init.stopped_missing_settings' = 'Přerušeno: doplňte chybějící nastavení (viz provision.config.example.psd1) nebo začněte z ukázkového souboru.'
     'init.example_lacks_settings'   = 'V ukázkovém souboru chybí nastavení: {0}.'
     'init.setting_not_once'         = 'Konfigurační soubor neobsahuje nastavení {0} právě jednou (nalezeno: {1}); doplňte ho ručně.'
+    'init.secrets_layout'           = 'Tabulka Secrets v konfiguraci nemá jednu položku na řádek (Název = ''hodnota''); upravte ji ručně.'
 
     'init.section_update'           = 'Aktualizace softwaru'
     'init.update_time'              = 'Čas aktualizace (HH:mm), nejlépe když jsou počítače obvykle zapnuté'

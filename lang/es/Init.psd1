@@ -13,6 +13,7 @@
     'init.stopped_missing_settings' = 'Detenido: añade las opciones que faltan (consulta provision.config.example.psd1) o empieza desde el archivo de ejemplo.'
     'init.example_lacks_settings'   = 'Al archivo de ejemplo le faltan las opciones: {0}.'
     'init.setting_not_once'         = 'El archivo de configuración no tiene exactamente una opción {0} (encontradas: {1}); añádela a mano.'
+    'init.secrets_layout'           = 'La tabla Secrets de la configuración no tiene una entrada por línea (Nombre = ''valor''); cámbiela a mano.'
 
     'init.section_update'           = 'Actualizaciones de software'
     'init.update_time'              = 'Hora de la actualización (HH:mm), mejor cuando los equipos suelen estar encendidos'

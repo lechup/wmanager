@@ -80,4 +80,13 @@
     'managed.cert_next_removed'          = 'La fuente ya no indica el próximo certificado de firma {0}; deja de ser de confianza.'
     'managed.cert_next_invalid'          = 'El próximo certificado de firma de la fuente no se puede usar: {0}'
     'managed.cert_change_failed'         = 'No se pudo cambiar el certificado de firma: {0}. Esta ejecución mantiene el actual; la siguiente lo vuelve a intentar.'
+
+    # Secrets for scripts and jobs (Secrets in the configuration, # wmanager-secrets: in a script)
+    'managed.secret_name_bad'            = 'wmanager-secrets: ''{0}'' no es un nombre de secreto (letras, dígitos y _, empezando por una letra, 64 como máximo)'
+    'managed.secrets_not_table'          = 'Secrets debe ser una tabla de nombres y valores (véase provision.config.example.psd1)'
+    'managed.secrets_bad_name'           = 'Secrets: ''{0}'' no es un nombre de secreto (letras, dígitos y _, empezando por una letra, 64 como máximo)'
+    'managed.secrets_bad_value'          = 'Secrets: el valor de {0} debe ser texto en una sola línea'
+    'managed.secret_missing'             = 'la configuración de este equipo no tiene el secreto {0} (Secrets en provision.config.psd1)'
+    'managed.script_not_run'             = '{0}: no se ejecutó: {1}; {2}.'
+    'managed.job_not_run'                = 'Trabajo {0}: no se ejecutó: {1}.'
 }

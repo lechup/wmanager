@@ -80,4 +80,13 @@
     'managed.cert_next_removed'          = 'Zdroj už neuvádí příští podpisový certifikát {0}; přestává být důvěryhodný.'
     'managed.cert_next_invalid'          = 'Příští podpisový certifikát zdroje nelze použít: {0}'
     'managed.cert_change_failed'         = 'Podpisový certifikát se nepodařilo vyměnit: {0}. Tento běh ponechává stávající; příští to zkusí znovu.'
+
+    # Secrets for scripts and jobs (Secrets in the configuration, # wmanager-secrets: in a script)
+    'managed.secret_name_bad'            = 'wmanager-secrets: ''{0}'' není název tajemství (písmena, číslice a _, na začátku písmeno, nejvýše 64)'
+    'managed.secrets_not_table'          = 'Secrets musí být tabulka názvů a hodnot (viz provision.config.example.psd1)'
+    'managed.secrets_bad_name'           = 'Secrets: ''{0}'' není název tajemství (písmena, číslice a _, na začátku písmeno, nejvýše 64)'
+    'managed.secrets_bad_value'          = 'Secrets: hodnota {0} musí být text na jednom řádku'
+    'managed.secret_missing'             = 'konfigurace tohoto počítače nemá tajemství {0} (Secrets v provision.config.psd1)'
+    'managed.script_not_run'             = '{0}: nespuštěn: {1}; {2}.'
+    'managed.job_not_run'                = 'Úkol {0}: nespuštěn: {1}.'
 }

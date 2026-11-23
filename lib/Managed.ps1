@@ -504,12 +504,14 @@ function Get-WmRequirements {
     return ,$items
 }
 
-# Checked before provisioning changes anything: settings and the certificate next to the config ($ConfigDir).
-# The log file isn't open yet, so it doesn't warn of the certificate's expiry: reading the source does, in the log.
+# Checked before provisioning changes anything: settings, the secrets for scripts and the certificate next to the
+# config ($ConfigDir). The log file isn't open yet, so it doesn't warn of the certificate's expiry: reading the
+# source does, in the log.
 function Test-WmManagementConfig {
     param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$ConfigDir)
     $settings = Get-WmManagementSettings $Config
     if (-not $settings) { return }
+    $null = Get-WmSecrets $Config
     $cert = Get-WmSigningCertificate -Config $Config -Dir $ConfigDir
     Write-WmLog -Key 'managed.source_info' -Arguments @($settings.Source, $settings.SourceId, $cert.Subject, $cert.Thumbprint)
 }
@@ -605,6 +607,22 @@ function Get-WmScriptEnvironment {
     }
 }
 
+# Adds the secrets the script or job $File names (# wmanager-secrets:) to its $Environment, as
+# WMANAGER_SECRET_<NAME>; only those, so a program it starts doesn't get the others. Throws when the configuration
+# doesn't have one (the script doesn't run then).
+function Add-WmScriptSecrets {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Environment,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][hashtable]$Secrets,
+        [Parameter(Mandatory = $true)][string]$File
+    )
+    foreach ($n in (Get-WmScriptSecretNames ([IO.File]::ReadAllText($File)))) {
+        $key = @($Secrets.Keys | Where-Object { $_ -ieq $n }) | Select-Object -First 1
+        if (-not $key) { throw (New-WmError 'managed.secret_missing' @($n)) }
+        $Environment['WMANAGER_SECRET_' + $n.ToUpperInvariant()] = [string]$Secrets[$key]
+    }
+}
+
 # Runs the scripts of this computer's groups whose content changed since their last successful run
 # (the hourly wmanager-Jobs task and the scheduled update, both as SYSTEM). Exit code 0 = done, 3010 = done and a
 # restart is needed; anything else (or the timeout) is an error and the script runs again later: with
@@ -629,6 +647,8 @@ function Invoke-WmGroupScripts {
 
     $timeout = [int]$settings.ScriptTimeoutMinutes
     if ($timeout -le 0) { $timeout = 15 }
+    $secrets = Get-WmSecrets $Config
+    $mask = [string[]]@($secrets.Values)
     $now = [DateTime]::UtcNow
     foreach ($s in $scripts) {
         if ($done[$s.Path] -eq $s.Hash) {
@@ -646,15 +666,22 @@ function Invoke-WmGroupScripts {
         }
         $file = Join-Path $script:WmManagedDir ($s.Path -replace '/', '\')
         Write-WmLog -Key 'managed.script_starting' -Arguments @($s.Path)
-        $r = Invoke-WmScriptProcess -File $file -Environment (Get-WmScriptEnvironment $s.Group $s.Path) -TimeoutMinutes $timeout
-        Write-WmScriptOutput $r.Output
-        if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput $r.Errors -Prefix '  ! ' }
+        $vars = Get-WmScriptEnvironment $s.Group $s.Path
+        $notRun = $null
+        try { Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $file } catch { $notRun = Get-WmErrorText $_ }
+        $r = $null
+        if (-not $notRun) {
+            $r = Invoke-WmScriptProcess -File $file -Environment $vars -TimeoutMinutes $timeout
+            Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask)
+            if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '  ! ' }
+        }
 
-        if ($null -eq $r.ExitCode -or ($r.ExitCode -ne 0 -and $r.ExitCode -ne 3010)) {
+        if ($notRun -or $null -eq $r.ExitCode -or ($r.ExitCode -ne 0 -and $r.ExitCode -ne 3010)) {
             $failed[$s.Path] = '{0}|{1}' -f $s.Hash, [DateTime]::UtcNow.ToString('o')
             $retry = New-WmText 'managed.retry_next_update'
             if ($RetryFailedAfterHours -gt 0) { $retry = New-WmText 'managed.retry_after_hours' @($RetryFailedAfterHours) }
-            if ($null -eq $r.ExitCode) { Write-WmLog -Key 'managed.script_timeout' -Arguments @($s.Path, $timeout, $retry) -Level error }
+            if ($notRun) { Write-WmLog -Key 'managed.script_not_run' -Arguments @($s.Path, $notRun, $retry) -Level error }
+            elseif ($null -eq $r.ExitCode) { Write-WmLog -Key 'managed.script_timeout' -Arguments @($s.Path, $timeout, $retry) -Level error }
             else { Write-WmLog -Key 'managed.script_exit_code' -Arguments @($s.Path, $r.ExitCode, $retry) -Level error }
         } else {
             $done[$s.Path] = $s.Hash
@@ -687,6 +714,8 @@ function Invoke-WmGroupJobs {
 
     $timeout = [int]$settings.JobTimeoutMinutes
     if ($timeout -le 0) { $timeout = 10 }
+    $secrets = Get-WmSecrets $Config
+    $mask = [string[]]@($secrets.Values)
     # One time for the whole run: a long job doesn't shift the ones after it
     $now = [DateTime]::UtcNow
     foreach ($j in $jobs) {
@@ -702,9 +731,14 @@ function Invoke-WmGroupJobs {
         $vars = Get-WmScriptEnvironment $j.Group $j.Path
         $vars['WMANAGER_JOB'] = $j.Name
         $file = Join-Path $script:WmManagedDir ($j.Path -replace '/', '\')
+        try { Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $file }
+        catch {
+            Write-WmLog -Key 'managed.job_not_run' -Arguments @($j.Name, (Get-WmErrorText $_)) -Level error -Task $j.Name
+            continue
+        }
         $r = Invoke-WmScriptProcess -File $file -Environment $vars -TimeoutMinutes $timeout
-        Write-WmScriptOutput $r.Output -Task $j.Name -Raw -MaxLength 60000
-        if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput $r.Errors -Prefix '! ' -Task $j.Name }
+        Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask) -Task $j.Name -Raw -MaxLength 60000
+        if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '! ' -Task $j.Name }
 
         if ($null -eq $r.ExitCode) {
             Write-WmLog -Key 'managed.job_timeout' -Arguments @($j.Name, $timeout) -Level error -Task $j.Name

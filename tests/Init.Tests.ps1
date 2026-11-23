@@ -110,6 +110,51 @@ Describe 'Get-WmSigningCertificateProblem' {
     }
 }
 
+Describe 'Secrets in the configuration text' {
+    It 'adds a secret to the empty table of the example, keeping the rest' {
+        $t = Set-WmConfigSecretText $script:example 'SharePassword' "it's ‘quoted’"
+        $c = Import-TestConfig $t
+        $c.Secrets.SharePassword | Should -Be "it's ‘quoted’"
+        $c.Management.Certificate | Should -Be 'wmanager-signing.cer'
+        $t.Replace("        SharePassword = 'it''s ‘‘quoted’’'`r`n", '') | Should -Be $script:example
+    }
+
+    It 'changes one whatever the letter case, and keeps the comments and the other entries' {
+        $t = "@{`r`n    Secrets = @{   # for the scripts`r`n        # the share`r`n        ShareUser = 'a'`r`n        Wifi = 'b'`r`n    }`r`n}`r`n"
+        $t2 = Set-WmConfigSecretText $t 'shareuser' 'c'
+        $t2 | Should -Be "@{`r`n    Secrets = @{   # for the scripts`r`n        # the share`r`n        shareuser = 'c'`r`n        Wifi = 'b'`r`n    }`r`n}`r`n"
+        (Import-TestConfig $t2).Secrets.Wifi | Should -Be 'b'
+    }
+
+    It 'makes the table when there is none, or when it is written on one line' {
+        $c = Import-TestConfig (Set-WmConfigSecretText "@{`n    LokiUrl = ''`n}`n" 'A' 'x')
+        $c.Secrets.A | Should -Be 'x'
+        $c.LokiUrl | Should -Be ''
+        (Import-TestConfig (Set-WmConfigSecretText "@{`n    Secrets = @{}`n}`n" 'A' 'y')).Secrets.A | Should -Be 'y'
+    }
+
+    It 'removes one, and says when there is none' {
+        $t = Set-WmConfigSecretText (Set-WmConfigSecretText $script:example 'A' 'x') 'B' 'y'
+        $c = Import-TestConfig (Remove-WmConfigSecretText $t 'a')
+        $c.Secrets.ContainsKey('A') | Should -BeFalse
+        $c.Secrets.B | Should -Be 'y'
+        Remove-WmConfigSecretText $t 'C' | Should -BeNullOrEmpty
+        Remove-WmConfigSecretText "@{`n}`n" 'A' | Should -BeNullOrEmpty
+    }
+
+    It 'leaves a table written otherwise to be changed by hand' {
+        { Set-WmConfigSecretText "@{`n    Secrets = @{ A = 'x'; B = 'y' }`n}`n" 'C' 'z' } | Should -Throw '*one entry per line*'
+        { Set-WmConfigSecretText "@{`n    Secrets = @{`n        A = `"x`"`n    }`n}`n" 'C' 'z' } | Should -Throw '*one entry per line*'
+        { Set-WmConfigSecretText "@{`n    Secrets = @{`n    }`n    Secrets = @{`n    }`n}`n" 'C' 'z' } | Should -Throw '*Secrets*'
+    }
+
+    It 'reads a configuration text as a data file, without running it' {
+        (ConvertFrom-WmConfigText "@{ A = 'x'; B = @{ C = 1 } }").B.C | Should -Be 1
+        { ConvertFrom-WmConfigText "@{ A = (Get-Date) }" } | Should -Throw
+        { ConvertFrom-WmConfigText "@{ A = 'x'" } | Should -Throw
+    }
+}
+
 Describe 'Write-WmConfigFile' {
     It 'writes UTF-8 with a BOM and CRLF line ends' {
         $file = Join-Path $TestDrive 'out.psd1'

@@ -434,6 +434,8 @@ function Invoke-Check {
             foreach ($n in (Find-Ps7Syntax $ast)) {
                 Write-Problem error "$p, line $($n.Extent.StartLineNumber): '$($n.Extent.Text.Split([char]10)[0].Trim())' is PowerShell 7 syntax; the computers run Windows PowerShell 5.1"
             }
+            # The secrets it names: the computers wouldn't run it with a name that isn't one
+            try { $null = Get-WmScriptSecretNames $file.Text } catch { Write-Problem error "${p}: $(Format-WmErrorText $_ -English)" }
         }
         if ($p -match '^groups/[^/]+/scripts/.+/.+\.ps1$') {
             Write-Problem warning "$p is not run: scripts go directly in groups/<group>/scripts/"

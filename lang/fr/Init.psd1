@@ -13,6 +13,7 @@
     'init.stopped_missing_settings' = 'Interrompu : ajoutez les paramètres manquants (voir provision.config.example.psd1) ou partez du fichier d''exemple.'
     'init.example_lacks_settings'   = 'Il manque des paramètres dans le fichier d''exemple : {0}.'
     'init.setting_not_once'         = 'Le fichier de configuration ne contient pas exactement un paramètre {0} (nombre trouvé : {1}) ; ajoutez-le à la main.'
+    'init.secrets_layout'           = 'La table Secrets de la configuration n''a pas une entrée par ligne (Nom = ''valeur'') ; modifiez-la à la main.'
 
     'init.section_update'           = 'Mises à jour des logiciels'
     'init.update_time'              = 'Heure de mise à jour (HH:mm), idéalement quand les ordinateurs sont habituellement allumés'
