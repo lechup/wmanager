@@ -61,6 +61,16 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   ```
   {service_name="wmanager", task="all/system-report"} | json | kind="disk"
   ```
+- **Sign-in scripts:** `groups/<group>/logon/*.ps1` run at every sign-in, as the user who signs in, not as SYSTEM:
+  for what belongs to the user's session, such as a network drive (a drive SYSTEM maps is SYSTEM's alone). The
+  `wmanager-Logon` task (SYSTEM) starts half a minute after a sign-in and runs them in the user's session, hidden,
+  group by group and by name, at most 5 minutes each, from the verified copy of the source (the last one the computer
+  took; it never fetches at sign-in). Keep them short and safe to repeat: do a thing only when it isn't done yet.
+  Exit code `0` = done, anything else is an error in the log (`logs\logon-YYYY-MM-DD.log`, and Loki with
+  `job="logon"`); the next sign-in runs them again anyway. They see the user's own environment plus
+  `WMANAGER_GROUP` and `WMANAGER_COMPUTER`, but not the group's folder (the computer's copy of the source is private).
+  `tools/groups.ps1 <folder> new-logon <group> <name>` makes one from a template (`tools/wm.ps1`: menu item 20), with
+  a network drive as the example, see [Network drives](#network-drives).
 - **For both:** the working folder is the system TEMP. Use `$PSScriptRoot` or `WMANAGER_GROUP_DIR` (the group's folder)
   for the group's files; other variables: `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, and `WMANAGER_JOB` for jobs. The group
   folders are replaced with every new version of the source, so don't run programs or services from them: copy what
@@ -102,6 +112,43 @@ $password = $env:WMANAGER_SECRET_SHAREPASSWORD
   SYSTEM read it, but on the USB drive and in the company's folder anyone who has them does. A secret a computer can
   use is also readable by that computer's administrators; give each company its own logins, with only the rights the
   scripts need.
+- A [sign-in script](#network-drives) gets the secrets it names the same way, in the environment of its own process
+  only (nothing is written to disk). But it runs as the user, and **the user can read what their own processes
+  hold**: a secret given to a sign-in script is as good as given to every user of its group's computers. Use it only
+  for a login that reaches nothing more than the script needs, such as one share.
+
+### Network drives
+
+A drive that SYSTEM maps is SYSTEM's alone (Windows keeps each sign-in's network connections apart), so a group
+script can't give users a drive; a sign-in script can. Two ways:
+
+- **Each person's own login** (no secret anywhere): the script maps the drive with what Windows remembers for the
+  user; the first time, when there is nothing yet, it opens the share, Windows asks for the login, and the person
+  ticks "Remember my credentials". From the next sign-in the drive is there.
+
+  ```powershell
+  $ErrorActionPreference = 'Stop'
+  $drive = 'Z:'; $share = '\\nas\documents'
+  if (-not (Test-Path "$drive\")) {
+      net.exe use $drive $share /persistent:yes 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) { Start-Process explorer.exe $share }
+  }
+  exit 0
+  ```
+
+- **One login for everyone** from the [secrets](#secrets-for-scripts) (every user of the group's computers can read
+  it, see above): `New-SmbMapping` takes it without putting it on a command line, which the process list shows.
+
+  ```powershell
+  # wmanager-secrets: ShareUser, SharePassword
+  $ErrorActionPreference = 'Stop'
+  $drive = 'Z:'; $share = '\\nas\documents'
+  if (-not (Test-Path "$drive\")) {
+      $null = New-SmbMapping -LocalPath $drive -RemotePath $share -Persistent $true `
+          -UserName $env:WMANAGER_SECRET_SHAREUSER -Password $env:WMANAGER_SECRET_SHAREPASSWORD
+  }
+  exit 0
+  ```
 
 ## How a computer checks the source
 

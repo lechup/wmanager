@@ -7,4 +7,5 @@
     'task.notify_failed'    = 'Nie udało się uruchomić powiadomienia: {0}'
     'task.every_day'        = 'codziennie'
     'task.days_list'        = '{0}'
+    'task.logon_registered' = 'Zarejestrowano zadanie wmanager-Logon: skrypty logowania grup.'
 }

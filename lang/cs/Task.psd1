@@ -7,4 +7,5 @@
     'task.notify_failed'    = 'Nepodařilo se spustit oznámení: {0}'
     'task.every_day'        = 'denně'
     'task.days_list'        = '{0}'
+    'task.logon_registered' = 'Zaregistrována úloha wmanager-Logon: přihlašovací skripty skupin.'
 }

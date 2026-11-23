@@ -380,6 +380,53 @@ Describe 'new-script and new-job' {
     }
 }
 
+Describe 'sign-in scripts' {
+    It 'new-logon makes a numbered sign-in script that parses and names no secret' {
+        $src = New-Source
+        (Invoke-Tool $src new-logon accounting network-drive).Code | Should -Be 0
+        $path = Get-Path $src 'groups/accounting/logon/10-network-drive.ps1'
+        Test-Bom $path | Should -BeTrue
+        $text = Read-Text $path
+        Test-OnlyCrLf $text | Should -BeTrue
+        $text | Should -Match 'Sign-in script of group accounting'
+        $errs = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errs)
+        @($errs).Count | Should -Be 0
+        . (Join-Path (Join-Path $script:root 'lib') 'Lang.ps1')
+        . (Join-Path (Join-Path $script:root 'lib') 'Groups.ps1')
+        (Get-WmScriptSecretNames $text).Count | Should -Be 0
+        (Invoke-Tool $src new-logon accounting printers).Code | Should -Be 0
+        Test-Path -LiteralPath (Get-Path $src 'groups/accounting/logon/20-printers.ps1') | Should -BeTrue
+        (Invoke-Tool $src check).Code | Should -Be 0
+    }
+
+    It 'show lists them for a computer and counts them per group' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/accounting/logon/10-drive.ps1') "exit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/logon/20-printer.ps1') "exit 0`r`n" -Bom
+        $r = Invoke-Tool $src show office-01
+        $r.Text | Should -Match 'Sign-in scripts, in this order'
+        $r.Text | Should -Match '(?s)groups/all/logon/20-printer\.ps1.*groups/accounting/logon/10-drive\.ps1'
+        (Invoke-Tool $src show office-99).Text | Should -Not -Match '10-drive'
+        (Invoke-Tool $src show).Text | Should -Match 'accounting\s+2 computers\s+packages: 1\s+scripts: 1\s+jobs: 0\s+sign-in: 1'
+    }
+
+    It 'check reads them like scripts: syntax, secrets, and a subfolder that is not run' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/all/logon/10-bad.ps1') "if (`$x {`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'ERROR: groups/all/logon/10-bad\.ps1, line'
+        Set-Text (Get-Path $src 'groups/all/logon/10-bad.ps1') "# wmanager-secrets: 1x`r`nexit 0`r`n" -Bom
+        (Invoke-Tool $src check).Text | Should -Match "groups/all/logon/10-bad\.ps1: wmanager-secrets: '1x'"
+        Remove-Item -LiteralPath (Get-Path $src 'groups/all/logon/10-bad.ps1')
+        Set-Text (Get-Path $src 'groups/all/logon/sub/10-deep.ps1') "exit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'groups/all/logon/sub/10-deep\.ps1 is not run: sign-in scripts go directly in groups/<group>/logon/'
+    }
+}
+
 # The tests give -Url as a path and -Zip as the file, so they don't go to GitHub
 Describe 'set-version and unset-version' {
     It 'writes version.psd1 for every computer and for a group, and show and check read it' {

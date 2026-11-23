@@ -88,6 +88,7 @@ changing anything.
 | `Provision.ps1` | Main script |
 | `Update-Packages.ps1` | Scheduled update, daily by default (`wmanager-Update` task), and retry at sign-in (`wmanager-Retry`) |
 | `Invoke-Jobs.ps1` | Group jobs, every hour (`wmanager-Jobs`, only with a management source) |
+| `Invoke-Logon.ps1` | The groups' sign-in scripts, as the user who signs in (`wmanager-Logon`, only with a management source) |
 | `Notify-User.ps1` | Restart notification and a one-time prompt to set the default browser (`wmanager-Notify`) |
 | `Restore-Backup.ps1` | Undoes the registry changes made by provisioning (see [Backup and restore](docs/provisioning.md#backup-and-restore)) |
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |

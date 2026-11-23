@@ -1,11 +1,29 @@
-﻿# Task Scheduler tasks: scheduled update (every day by default), retry at sign-in, notification, group jobs.
+﻿# Task Scheduler tasks: scheduled update (every day by default), retry at sign-in, notification, group jobs, the
+# groups' sign-in scripts.
 
 $script:WmTaskPath   = '\wmanager\'
 $script:WmTaskUpdate = 'wmanager-Update'
 $script:WmTaskRetry  = 'wmanager-Retry'
 $script:WmTaskNotify = 'wmanager-Notify'
 $script:WmTaskJobs   = 'wmanager-Jobs'
+$script:WmTaskLogon  = 'wmanager-Logon'
 $script:WmAllDays    = @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+
+# The sign-in scripts of the groups (Invoke-Logon.ps1): SYSTEM at every sign-in of any user, half a minute later
+# (the desktop and the network come up first); it runs them in the user's session itself. Sign-ins close together
+# queue up.
+function Register-WmLogonTask {
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $logon = Join-Path $script:WmRoot 'Invoke-Logon.ps1'
+    $a = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$logon`""
+    $t = New-ScheduledTaskTrigger -AtLogOn
+    $t.Delay = 'PT30S'
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances Queue
+    $system = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskLogon -Action $a -Trigger $t `
+        -Settings $s -Principal $system -Description 'wmanager: sign-in scripts of the groups, run as the user who signs in' -Force -ErrorAction Stop | Out-Null
+}
 
 function Get-WmUsersGroupName {
     # The Users group name depends on the system language (e.g. "Użytkownicy"), so resolve it from the SID
@@ -87,9 +105,15 @@ function Register-WmTasks {
                 -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
         Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Action $a4 -Trigger $t4 `
             -Settings $s4 -Principal $system -Description 'wmanager: group scripts and jobs from the management source (hourly)' -Force -ErrorAction Stop | Out-Null
-    } elseif (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Confirm:$false -ErrorAction Stop
-        Write-WmLog -Key 'task.jobs_removed'
+        # 5. The groups' sign-in scripts, at every sign-in
+        Register-WmLogonTask
+    } else {
+        foreach ($name in @($script:WmTaskJobs, $script:WmTaskLogon)) {
+            if (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $name -ErrorAction SilentlyContinue) {
+                Unregister-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $name -Confirm:$false -ErrorAction Stop
+                if ($name -eq $script:WmTaskJobs) { Write-WmLog -Key 'task.jobs_removed' }
+            }
+        }
     }
 
     $days = Format-WmUpdateDays (Get-WmUpdateDays $Config)
@@ -102,6 +126,12 @@ function Update-WmTaskSchedule {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -ErrorAction SilentlyContinue
     if (-not $task) { return }
+    # A computer that updated itself from a version without sign-in scripts gets their task here
+    if ((Get-WmManagementSettings $Config) -and
+            -not (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskLogon -ErrorAction SilentlyContinue)) {
+        Register-WmLogonTask
+        Write-WmLog -Key 'task.logon_registered'
+    }
     $want = New-WmUpdateTrigger $Config
     $have = $task.Triggers | Select-Object -First 1
     $wantTime = ([datetime]$want.StartBoundary).ToString('HH:mm')

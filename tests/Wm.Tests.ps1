@@ -471,6 +471,12 @@ Describe 'tools/wm.ps1' -Skip:$notPwsh7 {
             $r.Text | Should -Match 'Not signed'
         }
 
+        It 'counts the secrets the sign-in scripts name too' {
+            $dir = Add-Company 'acme' -Source -Config ([IO.File]::ReadAllText((Join-Path $script:root 'provision.config.example.psd1')))
+            New-Item -ItemType File -Force -Path (Join-Path $dir 'source/groups/all/logon/10-drive.ps1') -Value "# wmanager-secrets: ShareUser`r`nexit 0`r`n" | Out-Null
+            (Invoke-Tool acme secret).Text | Should -Match 'ShareUser is named by groups/all/logon/10-drive\.ps1'
+        }
+
         It 'refuses a secret for a company without a configuration' {
             $null = Add-Company 'acme' -Source
             $r = Invoke-Typed @('x') @('acme', 'secret', 'A')

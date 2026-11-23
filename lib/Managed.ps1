@@ -9,6 +9,7 @@
 #   groups/<group>/choco-reqs.txt          extra packages for the group (optional)
 #   groups/<group>/scripts/*.ps1           run as SYSTEM (hourly task and scheduled update), again whenever their content changes
 #   groups/<group>/jobs/<when>/*.ps1       run as SYSTEM on a schedule: hourly, daily or weekly (Invoke-Jobs.ps1)
+#   groups/<group>/logon/*.ps1             run at every sign-in as the user who signs in (Invoke-Logon.ps1)
 #   groups/<group>/...                     any other files the scripts use
 #
 # The manifest lists every file with its SHA256. A computer accepts a manifest only when its Authenticode
@@ -474,6 +475,7 @@ function Resolve-WmManagedContent {
         Requirements = $content.Requirements
         Scripts      = $content.Scripts
         Jobs         = $content.Jobs
+        LogonScripts = $content.LogonScripts
         Wmanager     = $content.Wmanager
     }
 }
@@ -749,4 +751,113 @@ function Invoke-WmGroupJobs {
         }
     }
     try { Save-WmTabState -Path $script:WmJobsState -Map $state } catch { }
+}
+
+# ---------------------------------------------------------------------------
+# Sign-in scripts (groups/<group>/logon/*.ps1): at every sign-in, as the user who signed in
+# ---------------------------------------------------------------------------
+# The wmanager-Logon task (SYSTEM, at every sign-in, Invoke-Logon.ps1) runs them in the user's session
+# (lib\UserSession.ps1), hidden, with the secrets they name in that process's environment only, and logs their output
+# (secrets as ***). They read the verified copy without the lock, which the scheduled update may hold for long: the
+# manifest's signature as always, then the hash of each file. The copy itself is private, so each script runs from
+# state\logon, a copy the users can read but only administrators change. A sign-in is served once (its LogonId).
+
+$script:WmLogonDir = Join-Path $script:WmStateDir 'logon'
+$script:WmLogonServed = Join-Path $script:WmStateDir 'logon-served.txt'
+$script:WmLogonTimeoutMinutes = 5
+
+# This computer's sign-in scripts in the verified copy, read only; none without a verified copy
+function Get-WmLogonContent {
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    $settings = Get-WmManagementSettings $Config
+    if (-not $settings) { return @() }
+    $cert = Get-WmSigningCertificate -Config $Config -Dir $script:WmRoot
+    $trusted = @($cert.Thumbprint)
+    $next = Get-WmNextCertificate
+    if ($next) { $trusted += $next.Thumbprint }
+    $manifest = Get-WmManagedManifest -Thumbprint $trusted -SourceId ([string]$settings.SourceId)
+    if (-not $manifest) { return @() }
+    $snap = Read-WmManagedSnapshot -Dir $script:WmManagedDir -Manifest $manifest
+    $groups = Get-WmComputerGroups -Map $snap.Map -ComputerName $script:WmHostName
+    return (Get-WmGroupLogonScripts -Files $manifest.Files -Groups $groups)
+}
+
+# Copies of the scripts in state\logon, each checked against the hash the manifest gives it (from the bytes written,
+# so nothing changes between the check and the copy). Returns path in the source -> copy; a script that doesn't match
+# is logged and left out. Copies of scripts no longer there are removed.
+function Copy-WmLogonScripts {
+    param([AllowEmptyCollection()][object[]]$Scripts)
+    New-Item -ItemType Directory -Force -Path $script:WmLogonDir | Out-Null
+    $copies = @{}
+    $names = @{}
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        foreach ($s in $Scripts) {
+            $name = ($s.Path -replace '^groups/', '') -replace '/logon/', '-' -replace '/', '-'
+            try {
+                $bytes = [IO.File]::ReadAllBytes((Join-Path $script:WmManagedDir ($s.Path -replace '/', '\')))
+                $hash = ([BitConverter]::ToString($sha.ComputeHash($bytes))) -replace '-', ''
+                if ($hash -ne ([string]$s.Hash).ToUpperInvariant()) { throw (New-WmError 'logon.file_changed') }
+                $dst = Join-Path $script:WmLogonDir $name
+                [IO.File]::WriteAllBytes($dst, $bytes)
+                $copies[$s.Path] = $dst
+                $names[$name] = $true
+            } catch {
+                Write-WmLog -Key 'logon.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
+            }
+        }
+    } finally {
+        $sha.Dispose()
+    }
+    foreach ($f in @(Get-ChildItem -LiteralPath $script:WmLogonDir -File -ErrorAction SilentlyContinue)) {
+        if (-not $names.ContainsKey($f.Name)) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
+    }
+    return $copies
+}
+
+# Runs the sign-in scripts for every user session not served yet. Exit code 0 = done, anything else (or the time
+# limit, 5 minutes) is an error in the log; the next sign-in runs them again anyway.
+function Invoke-WmLogonScripts {
+    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    $sessions = @(Get-WmUserSessions)
+    $served = Read-WmTabState $script:WmLogonServed
+    foreach ($k in @($served.Keys)) { if (-not ($sessions | Where-Object { $_.LogonId -eq $k })) { $served.Remove($k) } }
+    $new = @($sessions | Where-Object { -not $served.ContainsKey($_.LogonId) })
+    foreach ($u in $new) { $served[$u.LogonId] = [DateTime]::UtcNow.ToString('o') }
+    # Served before they run: a run that stops halfway doesn't repeat them for the same sign-in
+    Save-WmTabState -Path $script:WmLogonServed -Map $served
+    if ($new.Count -eq 0) { return }
+    $scripts = @(Get-WmLogonContent $Config)
+    if ($scripts.Count -eq 0) { return }
+
+    $secrets = Get-WmSecrets $Config
+    $mask = [string[]]@($secrets.Values)
+    $copies = Copy-WmLogonScripts $scripts
+    foreach ($u in $new) {
+        Write-WmLog -Key 'logon.user' -Arguments @($u.User, $u.SessionId, $scripts.Count)
+        foreach ($s in $scripts) {
+            if (-not $copies.ContainsKey($s.Path)) { continue }
+            $vars = @{ WMANAGER_GROUP = $s.Group; WMANAGER_COMPUTER = $script:WmHostName }
+            try { Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $copies[$s.Path] }
+            catch {
+                Write-WmLog -Key 'logon.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
+                continue
+            }
+            try {
+                $r = Invoke-WmUserScript -SessionId $u.SessionId -File $copies[$s.Path] -Environment $vars -TimeoutMinutes $script:WmLogonTimeoutMinutes
+            } catch {
+                Write-WmLog -Key 'logon.start_failed' -Arguments @($s.Name, $u.User, (Get-WmErrorText $_)) -Level error -Task $s.Name
+                continue
+            }
+            Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask) -Task $s.Name
+            if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '  ! ' -Task $s.Name }
+            if ($null -eq $r.ExitCode) {
+                Write-WmLog -Key 'logon.script_timeout' -Arguments @($s.Name, $script:WmLogonTimeoutMinutes) -Level error -Task $s.Name
+            } elseif ($r.ExitCode -ne 0) {
+                Write-WmLog -Key 'logon.script_exit_code' -Arguments @($s.Name, $r.ExitCode) -Level error -Task $s.Name
+            } else {
+                Write-WmLog -Key 'logon.script_done' -Arguments @($s.Name) -Task $s.Name
+            }
+        }
+    }
 }

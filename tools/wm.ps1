@@ -1328,7 +1328,7 @@ function Get-SourceSecretNeeds {
     $needs = [ordered]@{}
     if (-not [IO.Directory]::Exists($Company.Source)) { return $needs }
     foreach ($rel in @(Get-SignedFiles $Company.Source | Sort-Object)) {
-        if ($rel -notmatch '^groups/[^/]+/(scripts|jobs)/.*\.ps1$') { continue }
+        if ($rel -notmatch '^groups/[^/]+/(scripts|jobs|logon)/.*\.ps1$') { continue }
         try { $names = Get-WmScriptSecretNames ([IO.File]::ReadAllText((Join-Path $Company.Source $rel))) } catch { continue }
         foreach ($n in $names) {
             $key = @($needs.Keys | Where-Object { $_ -ieq $n }) | Select-Object -First 1
@@ -2033,19 +2033,20 @@ function Open-Editor {
 # A new script (runs once, and again when it changes) or job (hourly, daily or weekly) for a group: the file from
 # the tools/groups.ps1 template, opened in the editor, then the check of the source until it passes or you leave it
 function New-GroupFileStep {
-    param($Company, [ValidateSet('script', 'job')][string]$Kind)
+    param($Company, [ValidateSet('script', 'job', 'logon')][string]$Kind)
     $group = @(Read-Groups $Company 'For the group (a new name makes a new group)')
     if ($group.Count -ne 1) { return $false }
     $arguments = @($group[0])
-    $dir = Join-Path (Join-Path (Join-Path $Company.Source 'groups') $group[0]) 'scripts'
+    $dir = Join-Path (Join-Path (Join-Path $Company.Source 'groups') $group[0]) $(if ($Kind -eq 'logon') { 'logon' } else { 'scripts' })
     if ($Kind -eq 'job') {
         $every = [string](Read-Line 'How often: hourly, daily or weekly (Enter = daily)')
         if (-not $every) { $every = 'daily' }
         $arguments += $every
         $dir = Join-Path (Join-Path (Join-Path (Join-Path $Company.Source 'groups') $group[0]) 'jobs') $every
     }
-    $example = if ($Kind -eq 'script') { 'install-printer' } else { 'check-backup' }
-    $name = [string](Read-Line "Name of the $Kind, e.g. $example")
+    $example = @{ script = 'install-printer'; job = 'check-backup'; logon = 'network-drive' }[$Kind]
+    $what = @{ script = 'script'; job = 'job'; logon = 'sign-in script' }[$Kind]
+    $name = [string](Read-Line "Name of the $what, e.g. $example")
     if (-not $name) { return $false }
     $before = @(if ([IO.Directory]::Exists($dir)) { Get-ChildItem -LiteralPath $dir -File -Filter '*.ps1' | ForEach-Object FullName })
     if (-not (Invoke-Groups $Company "new-$Kind" ($arguments + $name))) { return $false }
@@ -2122,6 +2123,7 @@ function Get-GroupFiles {
     return @(foreach ($rel in @(Get-SignedFiles $Company.Source)) {
         if ($rel -imatch '^groups/[^/]+/scripts/[^/]+\.ps1$') { $kind = 'script' }
         elseif ($rel -imatch '^groups/[^/]+/jobs/(hourly|daily|weekly)/[^/]+\.ps1$') { $kind = 'job' }
+        elseif ($rel -imatch '^groups/[^/]+/logon/[^/]+\.ps1$') { $kind = 'logon' }
         else { continue }
         [pscustomobject]@{ Rel = $rel; Path = Join-Path $Company.Source $rel; Kind = $kind }
     })
@@ -2132,7 +2134,7 @@ function Edit-GroupFileStep {
     param($Company)
     Assert-Source $Company
     $files = @(Get-GroupFiles $Company)
-    if ($files.Count -eq 0) { Write-Host '  The groups have no scripts or jobs yet (7 and 8 make new ones).'; return $false }
+    if ($files.Count -eq 0) { Write-Host '  The groups have no scripts or jobs yet (7, 8 and 20 make new ones).'; return $false }
     $rel = Read-Choice @($files | ForEach-Object Rel) 'Which one (number; Enter = none)'
     if (-not $rel) { return $false }
     $file = $files | Where-Object { $_.Rel -ceq $rel } | Select-Object -First 1
@@ -2150,7 +2152,7 @@ function Edit-GroupFileStep {
         Edit-UntilChecked $Company $file.Path
         return $true
     }
-    if ($file.Kind -eq 'script') { Write-Host '  The computers keep what it did; it just won''t run again.' }
+    if ($file.Kind -ne 'job') { Write-Host '  The computers keep what it did; it just won''t run again.' }
     else { Write-Host '  The computers stop running it at their next update.' }
     if (-not (Read-WmYesNo "Remove $rel?" $false)) { return $false }
     Remove-Item -LiteralPath $file.Path
@@ -2214,6 +2216,7 @@ function Invoke-CompanyMenu {
         Write-Host ' 17) a backup of this company (an archive of its source, key and configuration)'
         Write-Host ' 18) change the signing key, with a time when the computers trust both'
         Write-Host ' 19) secrets for scripts (passwords in the configuration, not in the source)'
+        Write-Host ' 20) new sign-in script for a group: runs as the user at every sign-in (e.g. a network drive)'
         Write-Host '  b) back'
         $answer = Read-Line 'Choose'
         if ($null -eq $answer -or $answer -eq 'b' -or $answer -eq 'q') { return }
@@ -2245,6 +2248,7 @@ function Invoke-CompanyMenu {
                 '16' { Set-PublishTarget $Company }
                 '18' { Invoke-KeyChange $Company }
                 '19' { Edit-SecretsStep $Company }
+                '20' { $changed = New-GroupFileStep $Company 'logon' }
                 '17' {
                     $folder = [string](Read-Line "Folder for the archive (Enter = $($script:BackupRoot))")
                     $null = Backup-Company $Company $folder

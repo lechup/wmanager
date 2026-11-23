@@ -248,6 +248,86 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         (Get-ScheduledTaskInfo -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).NextRunTime | Should -Not -BeNullOrEmpty
     }
 
+    It 'registers the sign-in task: SYSTEM, at every sign-in, half a minute later, queued' {
+        $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskLogon
+        $trigger = $task.Triggers | Select-Object -First 1
+        $trigger.CimClass.CimClassName | Should -Be 'MSFT_TaskLogonTrigger'
+        $trigger.Delay | Should -Be 'PT30S'
+        [string]$trigger.UserId | Should -BeNullOrEmpty
+        $task.Principal.UserId | Should -Be 'SYSTEM'
+        $task.Settings.MultipleInstances | Should -Be 'Queue'
+        $task.Actions[0].Arguments | Should -BeLike '*Invoke-Logon.ps1*'
+        # Without a management source it goes, with wmanager-Jobs
+        Register-WmTasks -Config @{}
+        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskLogon -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        # A computer that updated itself from a version without it gets it at its scheduled update
+        Update-WmTaskSchedule -Config (New-TestConfig (Join-Path $src 'v2'))
+        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskLogon | Should -Not -BeNullOrEmpty
+        Register-WmTasks -Config (New-TestConfig (Join-Path $src 'v2'))
+    }
+
+    It 'compiles the session launcher in Windows PowerShell 5.1, and runs Invoke-Logon.ps1 from start to end' {
+        . (Join-Path $root 'lib\UserSession.ps1')
+        # Not SYSTEM here: no user token, so no sessions, and nothing to run
+        { $null = Get-WmUserSessions } | Should -Not -Throw
+        $configFile = Join-Path $root 'provision.config.psd1'
+        @(
+            '@{'
+            "    Management = @{ Source = '$(Join-Path $src 'v2')'; SourceId = '$id'; Certificate = 'wmanager-signing.cer' }"
+            '}'
+        ) | Set-Content -LiteralPath $configFile -Encoding UTF8
+        try {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root 'Invoke-Logon.ps1')
+            $LASTEXITCODE | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $configFile -Force
+        }
+    }
+
+    It 'runs a program from SYSTEM in the session of the signed-in user, with variables, output and exit code' {
+        $dir = 'C:\wm-ci\logon'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $result = Join-Path $dir 'result.txt'
+        Remove-Item -LiteralPath $result -ErrorAction SilentlyContinue
+        Set-Content -LiteralPath (Join-Path $dir 'user.ps1') -Value @(
+            '"user: $(whoami)"'
+            '"variable: $env:WMANAGER_SECRET_CI"'
+            '[Console]::Error.WriteLine("on stderr")'
+            'exit 7')
+        Set-Content -LiteralPath (Join-Path $dir 'probe.ps1') -Value @(
+            ". '$(Join-Path $root 'lib\UserSession.ps1')'"
+            "`$out = '$result'"
+            '$s = @(Get-WmUserSessions)'
+            '"sessions: $($s.Count)" | Set-Content $out'
+            'foreach ($x in $s) { "session $($x.SessionId) $($x.Domain)\$($x.User) $($x.LogonId)" | Add-Content $out }'
+            'if ($s.Count -gt 0) {'
+            "    `$r = Invoke-WmUserScript -SessionId `$s[0].SessionId -File '$(Join-Path $dir 'user.ps1')' -Environment @{ WMANAGER_SECRET_CI = 'ci-logon-4711' } -TimeoutMinutes 2"
+            '    "exit: $($r.ExitCode)" | Add-Content $out'
+            '    "output: $($r.Output.Trim() -replace ''\s*\r?\n\s*'', '' | '')" | Add-Content $out'
+            '    "errors: $($r.Errors.Trim())" | Add-Content $out'
+            '}'
+            '"end" | Add-Content $out')
+        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $action = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$(Join-Path $dir 'probe.ps1')`""
+        $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName 'wm-ci-logon-probe' -Action $action -Principal $principal -Force | Out-Null
+        try {
+            Start-ScheduledTask -TaskName 'wm-ci-logon-probe'
+            $deadline = (Get-Date).AddMinutes(3)
+            while ((Get-Date) -lt $deadline -and -not ((Test-Path -LiteralPath $result) -and (Get-Content -LiteralPath $result) -contains 'end')) { Start-Sleep -Seconds 2 }
+        } finally {
+            Unregister-ScheduledTask -TaskName 'wm-ci-logon-probe' -Confirm:$false
+        }
+        $text = (Get-Content -LiteralPath $result) -join "`n"
+        Write-Host $text
+        $text | Should -Match '(?m)^end$'
+        if ($text -match 'sessions: 0') { Set-ItResult -Skipped -Because 'nobody is signed in on this runner (the VM test covers it)'; return }
+        $text | Should -Match 'exit: 7'
+        $text | Should -Match 'variable: ci-logon-4711'
+        $text | Should -Match 'errors: on stderr'
+        $text | Should -Not -Match 'user: nt authority'
+    }
+
     It 'trusts the next certificate the source names, and forgets it when the source stops naming it' {
         Reset-WmKeys
         Reset-WmRun

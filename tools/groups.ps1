@@ -12,6 +12,7 @@
 #   pwsh tools/groups.ps1 <folder> remove-package <group|common> <package>
 #   pwsh tools/groups.ps1 <folder> new-script <group> <name>
 #   pwsh tools/groups.ps1 <folder> new-job <group> <hourly|daily|weekly> <name>
+#   pwsh tools/groups.ps1 <folder> new-logon <group> <name>
 #   pwsh tools/groups.ps1 <folder> set-version <version> [<group>] [-Url <address>] [-Zip <file>]
 #   pwsh tools/groups.ps1 <folder> unset-version [<group>]
 #   pwsh tools/groups.ps1 <folder> library
@@ -70,6 +71,7 @@ usage: pwsh tools/groups.ps1 <folder> <command> ...
   remove-package <group|common> <package>     remove a package from a list (computers don't uninstall it)
   new-script <group> <name>                   new script groups/<group>/scripts/<NN>-<name>.ps1 from a template
   new-job <group> <hourly|daily|weekly> <name>  new job groups/<group>/jobs/<when>/<name>.ps1 from a template
+  new-logon <group> <name>                    new sign-in script groups/<group>/logon/<NN>-<name>.ps1 from a template
   set-version <version> [<group>]             the wmanager release the computers (or a group's) switch to, e.g. v0.2.0
       [-Url <address>] [-Zip <file>]          where they fetch it (default: the GitHub release); a local copy to read
   unset-version [<group>]                     drop that version (the computers keep the one they have)
@@ -274,6 +276,7 @@ function Get-ComputerView {
         Packages = @($c.Requirements | Where-Object { $null -ne $_ })
         Scripts  = @($c.Scripts)
         Jobs     = @($c.Jobs)
+        Logon    = @($c.LogonScripts)
         Wmanager = $c.Wmanager
         Messages = $script:MergeMessages.ToArray()   # not @(...): PowerShell 7 fails on @() of a List[object]
     }
@@ -313,6 +316,10 @@ function Show-Computer {
     Write-Host 'Jobs:'
     if ($v.Jobs.Count -eq 0) { Write-Host '  (none)' }
     foreach ($j in $v.Jobs) { Write-Host ('  {0,-7} {1}   ({2})' -f $j.Every, $j.Name, $j.Path) }
+    Write-Host ''
+    Write-Host 'Sign-in scripts, in this order (at every sign-in, as the user who signs in):'
+    if ($v.Logon.Count -eq 0) { Write-Host '  (none)' }
+    foreach ($l in $v.Logon) { Write-Host "  $($l.Path)" }
     $notes = @($v.Messages | Where-Object { -not $_.Warning })
     if ($notes.Count -gt 0) {
         Write-Host ''
@@ -359,13 +366,14 @@ function Show-Overview {
         $jobs = Get-WmGroupJobs -Files $Files -Groups @($g)
         $sc = @($scripts).Count
         $jb = @($jobs).Count
+        $lg = @(Get-WmGroupLogonScripts -Files $Files -Groups @($g)).Count
         $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
         $extra = ''
         if (-not $hasFiles) {
             $extra = '   (no folder groups/' + $g + '/)'
             if (Test-WmGroupHasVersion $Versions $g) { $extra = '   (only its own wmanager version)' }
         }
-        Write-Host ('  {0,-15}  {1,-15}  packages: {2}  scripts: {3}  jobs: {4}{5}' -f $g, $members, $pk, $sc, $jb, $extra)
+        Write-Host ('  {0,-15}  {1,-15}  packages: {2}  scripts: {3}  jobs: {4}  sign-in: {5}{6}' -f $g, $members, $pk, $sc, $jb, $lg, $extra)
     }
 }
 
@@ -426,7 +434,7 @@ function Invoke-Check {
         if (-not $file.Bom -and $file.Text -match '[^\x00-\x7F]') {
             Write-Problem warning "$p has non-ASCII characters but no BOM; save it as UTF-8 with BOM (Windows PowerShell 5.1 reads it as ANSI)"
         }
-        if ($p -match '^groups/[^/]+/(scripts|jobs)/.*\.ps1$') {
+        if ($p -match '^groups/[^/]+/(scripts|jobs|logon)/.*\.ps1$') {
             $tokens = $null
             $errs = $null
             $ast = [System.Management.Automation.Language.Parser]::ParseInput($file.Text, [ref]$tokens, [ref]$errs)
@@ -439,6 +447,9 @@ function Invoke-Check {
         }
         if ($p -match '^groups/[^/]+/scripts/.+/.+\.ps1$') {
             Write-Problem warning "$p is not run: scripts go directly in groups/<group>/scripts/"
+        }
+        if ($p -match '^groups/[^/]+/logon/.+/.+\.ps1$') {
+            Write-Problem warning "$p is not run: sign-in scripts go directly in groups/<group>/logon/"
         }
         if ($p -match '^groups/[^/]+/jobs/.*\.ps1$' -and $p -notmatch '^groups/[^/]+/jobs/(hourly|daily|weekly)/[^/]+$') {
             Write-Problem warning "$p is not run: jobs go directly in jobs/hourly, jobs/daily or jobs/weekly"
@@ -501,7 +512,7 @@ function Invoke-Check {
         $seen = @{}
         foreach ($c in (@($computers) + '*')) {
             $v = Get-ComputerView -Files $Files -Map $map -Lists @{ '' = @() } -Computer $c
-            $paths = @(@($v.Scripts) + @($v.Jobs) | ForEach-Object { $_.Path } | Where-Object { $byPath.ContainsKey($_) })
+            $paths = @(@($v.Scripts) + @($v.Jobs) + @($v.Logon) | ForEach-Object { $_.Path } | Where-Object { $byPath.ContainsKey($_) })
             foreach ($name in @($paths | ForEach-Object { $byPath[$_] } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })) {
                 $twice = @($paths | Where-Object { $byPath[$_] -eq $name })
                 $key = $twice -join ' '
@@ -785,11 +796,41 @@ $ErrorActionPreference = 'Stop'
 exit 0
 '@
 
-# Scripts run in name order: the next number in tens after the last script of the group (10-x, 20-y...)
+$script:LogonTemplate = @'
+# Sign-in script of group {{GROUP}}. wmanager runs it at every sign-in, as the user who signs in (hidden, Windows
+# PowerShell 5.1, at most 5 minutes), so keep it short and safe to repeat: do a thing only when it isn't done yet.
+# Exit code 0 = done, anything else (or an exception) is an error in the log; the next sign-in runs it again anyway.
+# Its output goes to the log and Loki. Environment: the user's own, and WMANAGER_GROUP, WMANAGER_COMPUTER. It can't
+# read the group's folder (the computer's copy of the source is private).
+# A shared login: put a line "wmanager-secrets: ShareUser, SharePassword" after a # at the start of a line; they
+# come as $env:WMANAGER_SECRET_SHAREUSER and _SHAREPASSWORD (pwsh tools/wm.ps1 <company> secret <name>). The user it
+# runs as can read them, so give it a login that reaches only what the script needs (e.g. that one share).
+# Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
+$ErrorActionPreference = 'Stop'
+
+# TODO: what {{NAME}} does at sign-in. For example a network drive with each person's own login, which Windows
+# remembers: the first time the share opens and Windows asks for it (tick "Remember my credentials").
+# $drive = 'Z:'; $share = '\\nas\documents'
+# if (-not (Test-Path "$drive\")) {
+#     net.exe use $drive $share /persistent:yes 2>&1 | Out-Null
+#     if ($LASTEXITCODE -ne 0) { Start-Process explorer.exe $share }
+# }
+# The same with the shared login of the secrets (not on the command line, where the process list shows it):
+# if (-not (Test-Path "$drive\")) {
+#     $null = New-SmbMapping -LocalPath $drive -RemotePath $share -Persistent $true `
+#         -UserName $env:WMANAGER_SECRET_SHAREUSER -Password $env:WMANAGER_SECRET_SHAREPASSWORD
+# }
+
+Write-Output "{{NAME}}: done for $env:USERNAME."
+exit 0
+'@
+
+# Scripts run in name order: the next number in tens after the last script of the group (10-x, 20-y...) in its
+# folder (scripts, or logon for the sign-in scripts)
 function Get-NumberedName {
-    param([string]$Root, [string]$Group, [string]$Base)
+    param([string]$Root, [string]$Group, [string]$Base, [string]$Folder = 'scripts')
     $last = 0
-    $dir = Get-FullPath $Root "groups/$Group/scripts"
+    $dir = Get-FullPath $Root "groups/$Group/$Folder"
     if ([IO.Directory]::Exists($dir)) {
         foreach ($f in [IO.Directory]::GetFiles($dir, '*.ps1')) {
             if ([IO.Path]::GetFileName($f) -match '^([0-9]+)-') { $last = [Math]::Max($last, [int]$Matches[1]) }
@@ -810,6 +851,10 @@ function New-GroupFile {
         $dirRel = "groups/$Group/scripts"
         if ($base -notmatch '^[0-9]+-') { $base = Get-NumberedName $Root $Group $base }
         $text = $script:ScriptTemplate
+    } elseif ($Kind -eq 'logon') {
+        $dirRel = "groups/$Group/logon"
+        if ($base -notmatch '^[0-9]+-') { $base = Get-NumberedName $Root $Group $base 'logon' }
+        $text = $script:LogonTemplate
     } else {
         if (@('hourly', 'daily', 'weekly') -notcontains $Every) { throw "a job runs hourly, daily or weekly, not '$Every'" }
         $dirRel = "groups/$Group/jobs/$Every"
@@ -820,7 +865,7 @@ function New-GroupFile {
     if ([IO.File]::Exists($path)) { throw "$rel already exists" }
     # A job's Loki label is group/file name, number included, as Get-WmGroupJobs names it
     $label = $base
-    if ($Kind -eq 'script') { $label = $base -replace '^[0-9]+-', '' }
+    if ($Kind -ne 'job') { $label = $base -replace '^[0-9]+-', '' }
     $text = $text.Replace('{{GROUP}}', $Group).Replace('{{NAME}}', $label)
     $text = ($text -split '\r?\n') -join "`r`n"
     if (-not $text.EndsWith("`r`n")) { $text += "`r`n" }
@@ -1170,6 +1215,10 @@ try {
         'new-job' {
             if ($args1.Count -ne 3) { throw 'usage: new-job <group> <hourly|daily|weekly> <name>' }
             New-GroupFile -Root $root -Group $args1[0] -Kind 'job' -Every $args1[1] -Name $args1[2]
+        }
+        'new-logon' {
+            if ($args1.Count -ne 2) { throw 'usage: new-logon <group> <name>' }
+            New-GroupFile -Root $root -Group $args1[0] -Kind 'logon' -Name $args1[1]
         }
         'set-version' {
             if ($args1.Count -lt 1 -or $args1.Count -gt 2) { throw 'usage: set-version <version> [<group>] [-Url <address>] [-Zip <file>]' }

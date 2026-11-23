@@ -257,6 +257,108 @@ Describe 'Test-WmManagementConfig and the secrets' {
     }
 }
 
+Describe 'Invoke-WmLogonScripts' {
+    BeforeAll {
+        # lib\UserSession.ps1 (Windows API, SYSTEM) is replaced by mocks; these stand in so they can be mocked
+        function Get-WmUserSessions { }
+        function Invoke-WmUserScript { param([int]$SessionId, [string]$File, [hashtable]$Environment, [int]$TimeoutMinutes) }
+        $script:WmManagedDir = Join-Path $TestDrive 'managed'
+        $script:WmLogonDir = Join-Path $TestDrive 'logon'
+        $script:WmLogonServed = Join-Path $TestDrive 'logon-served.txt'
+        $cfg = @{ Management = @{ Source = 'https://example.test/acme'; SourceId = $sid }; Secrets = @{ ShareUser = 'office'; SharePassword = 'p4ss-W0rd' } }
+
+        # A sign-in script in the verified copy, as the manifest lists it
+        function Add-LogonScript {
+            param([string]$Rel, [string]$Text)
+            $file = Join-Path $script:WmManagedDir ($Rel -replace '/', '\')
+            New-Item -ItemType Directory -Force -Path (Split-Path $file -Parent) | Out-Null
+            [IO.File]::WriteAllText($file, $Text)
+            $parts = $Rel.Split('/')
+            return [pscustomobject]@{ Group = $parts[1]; Path = $Rel; Hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+                                      Name = $parts[1] + '/' + [IO.Path]::GetFileNameWithoutExtension($parts[3]) }
+        }
+        function New-Session { param([int]$Id, [string]$LogonId) [pscustomobject]@{ SessionId = $Id; User = "user$Id"; Domain = 'PC'; LogonId = $LogonId } }
+    }
+    BeforeEach {
+        Remove-Item -LiteralPath $script:WmLogonServed, $script:WmLogonDir, $script:WmManagedDir -Recurse -Force -ErrorAction SilentlyContinue
+        Mock Write-WmLog { }
+    }
+
+    It 'runs them once per sign-in, in the user''s session, with only the secrets each names, and hides those in the log' {
+        $drive = Add-LogonScript 'groups/all/logon/10-drive.ps1' "# wmanager-secrets: ShareUser, SharePassword`r`nexit 0`r`n"
+        $hello = Add-LogonScript 'groups/all/logon/20-hello.ps1' "exit 0`r`n"
+        Mock Get-WmLogonContent { @($drive, $hello) }
+        Mock Get-WmUserSessions { @(New-Session 1 '00000000000A1B2C') }
+        Mock Invoke-WmUserScript { [pscustomobject]@{ ExitCode = 0; Output = 'mapped as office with p4ss-W0rd'; Errors = '' } }
+        Invoke-WmLogonScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+        Should -Invoke Invoke-WmUserScript -Times 1 -Exactly -ParameterFilter {
+            $SessionId -eq 1 -and $File -like '*all-10-drive.ps1' -and $Environment['WMANAGER_SECRET_SHAREPASSWORD'] -eq 'p4ss-W0rd' -and
+            $Environment['WMANAGER_SECRET_SHAREUSER'] -eq 'office' -and $Environment['WMANAGER_GROUP'] -eq 'all' -and $TimeoutMinutes -eq 5 }
+        Should -Invoke Invoke-WmUserScript -Times 1 -Exactly -ParameterFilter { $File -like '*all-20-hello.ps1' -and $Environment.Count -eq 2 }
+        Should -Invoke Write-WmLog -Times 2 -Exactly -ParameterFilter { $Message -match 'mapped as \*\*\* with \*\*\*' }
+        Should -Invoke Write-WmLog -Times 0 -ParameterFilter { "$Message" -match 'p4ss|office' }
+        Should -Invoke Write-WmLog -Times 2 -Exactly -ParameterFilter { $Key -eq 'logon.script_done' }
+        # What the users' processes read: the verified file, in the folder only administrators change
+        [IO.File]::ReadAllText((Join-Path $script:WmLogonDir 'all-20-hello.ps1')) | Should -Be "exit 0`r`n"
+
+        # The same sign-in again: nothing more
+        Invoke-WmLogonScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+    }
+
+    It 'serves a new sign-in alongside one already served, and forgets the ones that ended' {
+        $hello = Add-LogonScript 'groups/all/logon/20-hello.ps1' "exit 0`r`n"
+        Mock Get-WmLogonContent { @($hello) }
+        Mock Invoke-WmUserScript { [pscustomobject]@{ ExitCode = 0; Output = ''; Errors = '' } }
+        Mock Get-WmUserSessions { @(New-Session 1 'AAAA') }
+        Invoke-WmLogonScripts -Config $cfg
+        Mock Get-WmUserSessions { @((New-Session 1 'AAAA'), (New-Session 2 'BBBB')) }
+        Invoke-WmLogonScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 1 -Exactly -ParameterFilter { $SessionId -eq 2 }
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+        Mock Get-WmUserSessions { @(New-Session 2 'BBBB') }
+        Invoke-WmLogonScripts -Config $cfg
+        @((Read-WmTabState $script:WmLogonServed).Keys) | Should -Be @('BBBB')
+        # Signed in again in session 1: a new sign-in, so they run again
+        Mock Get-WmUserSessions { @((New-Session 1 'CCCC'), (New-Session 2 'BBBB')) }
+        Invoke-WmLogonScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 3 -Exactly
+    }
+
+    It 'skips a script whose secret is missing or whose file is not the verified one, and logs exit codes and time limits' {
+        $missing = Add-LogonScript 'groups/all/logon/30-missing.ps1' "# wmanager-secrets: Nope`r`nexit 0`r`n"
+        $changed = Add-LogonScript 'groups/all/logon/40-changed.ps1' "exit 0`r`n"
+        [IO.File]::WriteAllText((Join-Path $script:WmManagedDir 'groups\all\logon\40-changed.ps1'), "exit 5`r`n")
+        $fails = Add-LogonScript 'groups/all/logon/50-fails.ps1' "exit 3`r`n"
+        $hangs = Add-LogonScript 'groups/all/logon/60-hangs.ps1' "Start-Sleep 600`r`n"
+        Mock Get-WmLogonContent { @($missing, $changed, $fails, $hangs) }
+        Mock Get-WmUserSessions { @(New-Session 1 'AAAA') }
+        Mock Invoke-WmUserScript {
+            if ($File -like '*50-fails.ps1') { [pscustomobject]@{ ExitCode = 3; Output = ''; Errors = 'boom' } }
+            else { [pscustomobject]@{ ExitCode = $null; Output = ''; Errors = '' } }
+        }
+        Invoke-WmLogonScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'logon.script_not_run' -and $Arguments[0] -eq 'all/30-missing' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'logon.script_not_run' -and $Arguments[0] -eq 'all/40-changed' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'logon.script_exit_code' -and $Arguments[1] -eq 3 -and $Level -eq 'error' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'logon.script_timeout' -and $Arguments[0] -eq 'all/60-hangs' }
+        Test-Path -LiteralPath (Join-Path $script:WmLogonDir 'all-40-changed.ps1') | Should -BeFalse
+    }
+
+    It 'does nothing without a new sign-in or without sign-in scripts' {
+        Mock Get-WmLogonContent { @() }
+        Mock Get-WmUserSessions { @(New-Session 1 'AAAA') }
+        Mock Invoke-WmUserScript { }
+        Invoke-WmLogonScripts -Config $cfg
+        Mock Get-WmUserSessions { @() }
+        Invoke-WmLogonScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 0
+        Should -Invoke Write-WmLog -Times 0
+    }
+}
+
 Describe 'Get-WmRequirements without a management source' {
     It 'returns a flat list, not a list nested in an array' {
         Mock Get-WmRequirementsText { "vlc`n7zip" }
