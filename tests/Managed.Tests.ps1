@@ -196,6 +196,29 @@ Describe 'Merge-WmRequirements' {
     }
 }
 
+Describe 'Test-WmManagementConfig and Write-WmCertificateExpiry' {
+    BeforeAll {
+        $cfg = @{ Management = @{ Source = 'https://example.test/acme'; SourceId = $sid; Certificate = 'wmanager-signing.cer' } }
+        function New-FakeCert { param([int]$Days) [pscustomobject]@{ Subject = 'CN=t'; Thumbprint = 'AB12'; NotAfter = (Get-Date).AddDays($Days) } }
+    }
+    It 'names the source before provisioning starts, but leaves the expiry to the run (the log file is not open yet)' {
+        Mock Get-WmSigningCertificate { New-FakeCert 10 }
+        Mock Write-WmLog { }
+        Test-WmManagementConfig -Config $cfg -ConfigDir 'C:\cfg'
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.source_info' }
+        Should -Invoke Write-WmLog -Times 0 -Exactly -ParameterFilter { $Key -like 'managed.cert_exp*' }
+    }
+    It 'warns of a certificate that expires within 60 days, and of one that expired' {
+        Mock Write-WmLog { }
+        Write-WmCertificateExpiry (New-FakeCert 10)
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.cert_expiring' -and $Level -eq 'warn' }
+        Write-WmCertificateExpiry (New-FakeCert -1)
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.cert_expired' -and $Level -eq 'warn' }
+        Write-WmCertificateExpiry (New-FakeCert 400)
+        Should -Invoke Write-WmLog -Times 2 -Exactly
+    }
+}
+
 Describe 'Get-WmRequirements without a management source' {
     It 'returns a flat list, not a list nested in an array' {
         Mock Get-WmRequirementsText { "vlc`n7zip" }

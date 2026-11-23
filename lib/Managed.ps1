@@ -505,13 +505,13 @@ function Get-WmRequirements {
 }
 
 # Checked before provisioning changes anything: settings and the certificate next to the config ($ConfigDir).
+# The log file isn't open yet, so it doesn't warn of the certificate's expiry: reading the source does, in the log.
 function Test-WmManagementConfig {
     param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$ConfigDir)
     $settings = Get-WmManagementSettings $Config
     if (-not $settings) { return }
     $cert = Get-WmSigningCertificate -Config $Config -Dir $ConfigDir
     Write-WmLog -Key 'managed.source_info' -Arguments @($settings.Source, $settings.SourceId, $cert.Subject, $cert.Thumbprint)
-    Write-WmCertificateExpiry $cert
 }
 
 # ---------------------------------------------------------------------------
