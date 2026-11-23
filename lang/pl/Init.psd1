@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = 'Zapisać ten klucz mimo to?'
     'init.stopped_healthchecks'     = 'Przerwano: popraw klucz Healthchecks i uruchom kreator jeszcze raz.'
 
-    'init.section_groups'           = 'Grupy komputerów: podpisane źródło zarządzania (opcjonalnie, README: Computer groups)'
+    'init.section_groups'           = 'Grupy komputerów: podpisane źródło zarządzania (opcjonalnie, docs/groups.md)'
     'init.groups_off_dash'          = '(- = bez grup)'
     'init.groups_off_enter'         = '(Enter = bez grup)'
     'init.source'                   = 'Źródło: adres https:// folderu albo pełna ścieżka {0}'

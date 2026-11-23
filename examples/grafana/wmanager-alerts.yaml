@@ -1,4 +1,4 @@
-# Alert rules for the lines wmanager sends to Loki, in the Loki ruler format (README: Grafana dashboard and alerts).
+# Alert rules for the lines wmanager sends to Loki, in the Loki ruler format (docs/monitoring.md: Grafana dashboard and alerts).
 # Load them into the Loki ruler of the stack (lokitool rules load wmanager-alerts.yaml, with a token that has
 # rules:write), or make a Grafana alert rule from each expr: then set "Alert state if no data" to Normal, since a
 # healthy result is empty. The log lines are English on every computer, so these patterns hold whatever the

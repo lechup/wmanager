@@ -9,7 +9,7 @@
 # - wizard-linux: the tests of the configuration wizard, the languages, the group tool and the companies helper
 #   (tools/wm.ps1) in PowerShell 7 on Linux (init.ps1 and lib/Lang.ps1 run there too)
 # It is Windows Server, not Windows 11 Home/Pro: debloat, privacy, notifications and Restore-Backup.ps1 still
-# need a Windows 11 virtual machine (see README, "Tests").
+# need a Windows 11 virtual machine (see docs/testing.md).
 name: tests
 
 on:
@@ -24,7 +24,7 @@ jobs:
   sign:
     name: Sign test sources (Linux)
     runs-on: ubuntu-24.04
-    # osslsigncode signs PowerShell files only in newer versions; 26.04 has the same 2.13 the README setup uses
+    # osslsigncode signs PowerShell files only in newer versions; 26.04 has the same 2.13 the setup in docs/groups.md uses
     container: ubuntu:26.04
     steps:
       - name: Install tools

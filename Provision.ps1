@@ -162,7 +162,7 @@ if ([int]$os.BuildNumber -lt 22000) {
 }
 
 if (-not $ConfigPath) {
-    # provision.config.psd1 next to this script, or the chosen company's from configs\ (README, "Several companies")
+    # provision.config.psd1 next to this script, or the chosen company's from configs\ (docs/companies.md)
     try { $ConfigPath = Find-WmConfig -Folder $here }
     catch { Write-Host (Format-WmErrorText $_) -ForegroundColor Red; exit 2 }
     if (-not $ConfigPath) { $ConfigPath = Join-Path $here 'provision.config.psd1' }

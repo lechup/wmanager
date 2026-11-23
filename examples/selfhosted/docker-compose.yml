@@ -1,4 +1,4 @@
-# wmanager: Grafana and Loki of your own (README: Hosting Grafana and Loki yourself). On a server with Docker, in
+# wmanager: Grafana and Loki of your own (docs/monitoring.md: Hosting Grafana and Loki yourself). On a server with Docker, in
 # this folder (with ../grafana next to it, as in the repository):
 #   ./selfhosted.sh init                  the names, the e-mail for the certificates, the Grafana password
 #   ./selfhosted.sh add-company <name>    a Loki tenant for the company, its logins, a Grafana data source and alerts,

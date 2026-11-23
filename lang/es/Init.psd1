@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = '¿Guardar esta clave de todos modos?'
     'init.stopped_healthchecks'     = 'Detenido: corrige la clave de Healthchecks y vuelve a ejecutar el asistente.'
 
-    'init.section_groups'           = 'Grupos de equipos: un origen de administración firmado (opcional; README: Computer groups)'
+    'init.section_groups'           = 'Grupos de equipos: un origen de administración firmado (opcional; docs/groups.md)'
     'init.groups_off_dash'          = '(- = sin grupos)'
     'init.groups_off_enter'         = '(Intro = sin grupos)'
     'init.source'                   = 'Origen: la dirección https:// de una carpeta o una ruta completa {0}'

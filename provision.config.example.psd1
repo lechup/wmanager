@@ -13,7 +13,7 @@
 
     # --- Computer groups (optional) -----------------------------------------------
     # Signed management source: the common package list, the map of computers to groups, and each
-    # group's packages, scripts and jobs. See README, "Computer groups". Empty Source = off.
+    # group's packages, scripts and jobs. See docs/groups.md. Empty Source = off.
     Management = @{
         # https:// address of the folder (e.g. a private repository) or a full folder path (\\server\share\...)
         Source      = ''   # e.g. 'https://raw.githubusercontent.com/<owner>/<management-repo>/main'

@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = 'Deze sleutel toch opslaan?'
     'init.stopped_healthchecks'     = 'Gestopt: corrigeer de Healthchecks-sleutel en voer de wizard opnieuw uit.'
 
-    'init.section_groups'           = 'Computergroepen: een ondertekende beheerbron (optioneel, README: Computer groups)'
+    'init.section_groups'           = 'Computergroepen: een ondertekende beheerbron (optioneel, docs/groups.md)'
     'init.groups_off_dash'          = '(- = geen groepen)'
     'init.groups_off_enter'         = '(Enter = geen groepen)'
     'init.source'                   = 'Bron: het https://-adres van een map of een volledig pad {0}'

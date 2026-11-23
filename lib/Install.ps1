@@ -32,7 +32,7 @@ function Get-WmSiblingLocation {
 }
 
 # A folder given as the configuration: its provision.config.psd1, or the one of the company chosen from it
-# (README, "Several companies"; Find-WmConfig in lib\Common.ps1). A file or an address stays as it is.
+# (docs/companies.md; Find-WmConfig in lib\Common.ps1). A file or an address stays as it is.
 function Resolve-WmConfigLocation {
     param([Parameter(Mandatory = $true)][string]$Location)
     if ($Location -match '^[A-Za-z][A-Za-z0-9+.-]*://' -or -not [IO.Directory]::Exists($Location)) { return $Location }

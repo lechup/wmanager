@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = 'Diesen Schlüssel trotzdem speichern?'
     'init.stopped_healthchecks'     = 'Abgebrochen: Korrigieren Sie den Healthchecks-Schlüssel und starten Sie den Assistenten erneut.'
 
-    'init.section_groups'           = 'Computergruppen: eine signierte Verwaltungsquelle (optional, README: Computer groups)'
+    'init.section_groups'           = 'Computergruppen: eine signierte Verwaltungsquelle (optional, docs/groups.md)'
     'init.groups_off_dash'          = '(- = ohne Gruppen)'
     'init.groups_off_enter'         = '(Enter = ohne Gruppen)'
     'init.source'                   = 'Quelle: die https://-Adresse eines Ordners oder ein vollständiger Pfad {0}'

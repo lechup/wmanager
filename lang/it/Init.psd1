@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = 'Vuoi salvare comunque questa chiave?'
     'init.stopped_healthchecks'     = 'Interrotto: correggi la chiave di Healthchecks ed esegui di nuovo la procedura guidata.'
 
-    'init.section_groups'           = 'Gruppi di computer: un''origine di gestione firmata (facoltativo, README: Computer groups)'
+    'init.section_groups'           = 'Gruppi di computer: un''origine di gestione firmata (facoltativo, docs/groups.md)'
     'init.groups_off_dash'          = '(- = senza gruppi)'
     'init.groups_off_enter'         = '(Invio = senza gruppi)'
     'init.source'                   = 'Origine: l''indirizzo https:// di una cartella o un percorso completo {0}'
