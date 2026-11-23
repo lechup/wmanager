@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = 'Enregistrer quand même cette clé ?'
     'init.stopped_healthchecks'     = 'Interrompu : corrigez la clé Healthchecks et relancez l''assistant.'
 
-    'init.section_groups'           = 'Groupes d''ordinateurs : une source de gestion signée (facultatif, README : Computer groups)'
+    'init.section_groups'           = 'Groupes d''ordinateurs : une source de gestion signée (facultatif, docs/groups.md)'
     'init.groups_off_dash'          = '(- = sans groupes)'
     'init.groups_off_enter'         = '(Entrée = sans groupes)'
     'init.source'                   = 'Source : l''adresse https:// d''un dossier ou un chemin complet {0}'

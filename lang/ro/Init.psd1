@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = 'Salvați totuși această cheie?'
     'init.stopped_healthchecks'     = 'Oprit: corectați cheia Healthchecks și rulați din nou expertul.'
 
-    'init.section_groups'           = 'Grupuri de computere: o sursă de gestionare semnată (opțional, README: Computer groups)'
+    'init.section_groups'           = 'Grupuri de computere: o sursă de gestionare semnată (opțional, docs/groups.md)'
     'init.groups_off_dash'          = '(- = fără grupuri)'
     'init.groups_off_enter'         = '(Enter = fără grupuri)'
     'init.source'                   = 'Sursa: adresa https:// a unui folder sau o cale completă {0}'

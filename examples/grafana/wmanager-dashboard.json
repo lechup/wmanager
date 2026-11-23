@@ -15,7 +15,7 @@
   ],
   "title": "wmanager",
   "uid": "wmanager",
-  "description": "The computers wmanager looks after: runs, versions, errors, silent computers, key changes. README: Grafana dashboard and alerts.",
+  "description": "The computers wmanager looks after: runs, versions, errors, silent computers, key changes. docs/monitoring.md: Grafana dashboard and alerts.",
   "tags": [
     "wmanager"
   ],

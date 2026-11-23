@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = 'Save this key anyway?'
     'init.stopped_healthchecks'     = 'Stopped: fix the Healthchecks key and run the wizard again.'
 
-    'init.section_groups'           = 'Computer groups: a signed management source (optional, README: Computer groups)'
+    'init.section_groups'           = 'Computer groups: a signed management source (optional, docs/groups.md)'
     'init.groups_off_dash'          = '(- = no groups)'
     'init.groups_off_enter'         = '(Enter = no groups)'
     'init.source'                   = 'Source: the https:// address of a folder or a full path {0}'

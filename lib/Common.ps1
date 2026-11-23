@@ -1,7 +1,7 @@
 ﻿# Shared functions: paths, configuration, logs, registry, Loki, Healthchecks.
 # Compatible with Windows PowerShell 5.1.
 
-# Messages in the user's language: Get-WmText, New-WmError, Write-WmLog -Key (README, "Languages")
+# Messages in the user's language: Get-WmText, New-WmError, Write-WmLog -Key (docs/languages.md)
 . (Join-Path $PSScriptRoot 'Lang.ps1')
 
 $script:WmRoot       = Join-Path $env:ProgramData 'wmanager'
@@ -662,7 +662,7 @@ function Confirm-WmContinue {
 }
 
 # ---------------------------------------------------------------------------
-# Configurations of several companies (README, "Several companies")
+# Configurations of several companies (docs/companies.md)
 # ---------------------------------------------------------------------------
 
 # The configurations of several companies in a folder: configs\<company>\provision.config.psd1 (a wmanager folder

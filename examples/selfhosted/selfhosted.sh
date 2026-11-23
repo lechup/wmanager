@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wmanager: Grafana and Loki of your own, on a server with Docker (README: Hosting Grafana and Loki yourself).
+# wmanager: Grafana and Loki of your own, on a server with Docker (docs/monitoring.md: Hosting Grafana and Loki yourself).
 # Run it in this folder, with ../grafana next to it (as in the repository).
 #
 #   ./selfhosted.sh init                   the server's names, the e-mail for the certificates; writes .env (with a

@@ -1,7 +1,7 @@
 ﻿# Tests for tools/wm.ps1, the helper for several companies: the companies and what they lack, the commands it passes
 # on to tools/groups.ps1, the menu, and the configuration of every company onto a USB drive. PowerShell 7 (Linux in
 # CI). A new company's steps (key, first signature) run only where osslsigncode can sign PowerShell files (2.13 can,
-# older ones can't), as in the README setup.
+# older ones can't), as in the setup of docs/groups.md.
 # To run (Pester 5):
 #   Invoke-Pester ./tests/Wm.Tests.ps1
 

@@ -1,6 +1,6 @@
 ﻿# Tests for the self-update (lib\SelfUpdate.ps1): copying a version into the installed folder, preparing the release
 # the management source names, and handing over to it. Windows PowerShell 5.1 (Expand-Archive, powershell.exe).
-# The whole switch, with the scheduled task, is tested on a Windows 11 virtual machine (README, "Tests").
+# The whole switch, with the scheduled task, is tested on a Windows 11 virtual machine (docs/testing.md).
 # To run (Pester 5):
 #   Invoke-Pester .\tests\SelfUpdate.Tests.ps1
 

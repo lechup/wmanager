@@ -652,7 +652,7 @@ function Update-Computer {
     $path = Get-FullPath $Root 'groups.psd1'
     $file = Read-TextFile $path
     if (-not $file.Exists) {
-        $file = [pscustomobject]@{ Text = "# Which groups each computer belongs to (see README: Computer groups).`r`n@{`r`n    Default = @()`r`n}`r`n"; Bom = $true; NewLine = "`r`n"; Exists = $false }
+        $file = [pscustomobject]@{ Text = "# Which groups each computer belongs to (see docs/groups.md).`r`n@{`r`n    Default = @()`r`n}`r`n"; Bom = $true; NewLine = "`r`n"; Exists = $false }
     }
     $map = ConvertTo-GroupMap $file.Text
     $own = @(Get-OwnGroups $map $Computer)

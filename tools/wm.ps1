@@ -5,7 +5,7 @@
 #   <company>/config/   its provision.config.psd1 and the certificate next to it (the wizard, init.ps1)
 # Without arguments it asks which company and what to do, and says what comes next; the commands below do the same
 # without the menu. It runs the other tools (groups.ps1, publish.sh, new-signing-cert.sh, init.ps1) on the folders of
-# the chosen company. README, "Several companies".
+# the chosen company. docs/companies.md.
 #
 #   pwsh tools/wm.ps1                          the menu
 #   pwsh tools/wm.ps1 list                     the companies and their state
@@ -1490,7 +1490,7 @@ function Resolve-RealPath {
 
 # The whole folder of a company in <folder>/<company>-<UTC time>.tar.gz, readable by you only: its source (with its
 # Git history), its key (protected by its passphrase), its configuration and the read-only keys (tokens in plain
-# text, as on the USB drive). Linked folders (the README says a company may link its folders) go in with what they
+# text, as on the USB drive). Linked folders (docs/companies.md says a company may link its folders) go in with what they
 # hold. Not inside the companies folder: the next backup would hold the last one.
 function Backup-Company {
     param($Company, [string]$Folder)

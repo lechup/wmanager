@@ -1,4 +1,4 @@
-﻿# Messages in the user's language (README, "Languages"). Platform-neutral: the wizard uses it on Linux too.
+﻿# Messages in the user's language (docs/languages.md). Platform-neutral: the wizard uses it on Linux too.
 #
 # Catalogs: lang\<code>\<area>.psd1, each a hashtable of key -> text with String.Format placeholders ({0}, {1}).
 # English (lang\en) is complete and the fallback for a key missing in another language. The screen (console,

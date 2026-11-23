@@ -52,7 +52,7 @@
     'init.healthchecks_save_anyway' = 'Přesto tento klíč uložit?'
     'init.stopped_healthchecks'     = 'Přerušeno: opravte klíč Healthchecks a spusťte průvodce znovu.'
 
-    'init.section_groups'           = 'Skupiny počítačů: podepsaný zdroj správy (volitelné, README: Computer groups)'
+    'init.section_groups'           = 'Skupiny počítačů: podepsaný zdroj správy (volitelné, docs/groups.md)'
     'init.groups_off_dash'          = '(- = bez skupin)'
     'init.groups_off_enter'         = '(Enter = bez skupin)'
     'init.source'                   = 'Zdroj: adresa https:// složky nebo úplná cesta {0}'
