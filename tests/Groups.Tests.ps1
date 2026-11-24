@@ -549,7 +549,7 @@ Describe 'set-version and unset-version' {
 
         $r = Invoke-Tool $src show
         $r.Text | Should -Match 'wmanager version: v0\.2\.0 on every computer; v0\.3\.0-rc1 in group pilot'
-        $r.Text | Should -Match 'pilot\s+1 computer.*only its own wmanager version'
+        $r.Text | Should -Match 'pilot\s+1 computer.*\(only a wmanager version\)'
         (Invoke-Tool $src show OFFICE-07).Text | Should -Match 'wmanager: v0\.3\.0-rc1 \(group pilot\)'
         (Invoke-Tool $src show OFFICE-01).Text | Should -Match 'wmanager: v0\.2\.0'
         $r = Invoke-Tool $src check

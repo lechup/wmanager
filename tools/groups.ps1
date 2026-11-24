@@ -386,11 +386,12 @@ function Show-Overview {
         $st = @($startup).Count
         $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
         $extra = ''
+        # Short, so the line fits 120 columns (Windows PowerShell wraps it there)
         if (-not $hasFiles) {
-            $extra = '   (no folder groups/' + $g + '/)'
-            if (Test-WmGroupHasVersion $Versions $g) { $extra = '   (only its own wmanager version)' }
+            $extra = '   (no folder yet)'
+            if (Test-WmGroupHasVersion $Versions $g) { $extra = '   (only a wmanager version)' }
         }
-        Write-Host ('  {0,-15}  {1,-15}  packages: {2}  scripts: {3}  jobs: {4}  sign-in: {5}  startup: {6}{7}' -f $g, $members, $pk, $sc, $jb, $lg, $st, $extra)
+        Write-Host ('  {0,-15} {1,-14} packages: {2}  scripts: {3}  jobs: {4}  sign-in: {5}  startup: {6}{7}' -f $g, $members, $pk, $sc, $jb, $lg, $st, $extra)
     }
 }
 
