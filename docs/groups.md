@@ -61,6 +61,16 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   ```
   {service_name="wmanager", task="all/system-report"} | json | kind="disk"
   ```
+- **Sign-in scripts:** `groups/<group>/logon/*.ps1` run at every sign-in, as the user who signs in, not as SYSTEM:
+  for what belongs to the user's session, such as a network drive (a drive SYSTEM maps is SYSTEM's alone). The
+  `wmanager-Logon` task (SYSTEM) starts half a minute after a sign-in and runs them in the user's session, hidden,
+  group by group and by name, at most 5 minutes each, from the verified copy of the source (the last one the computer
+  took; it never fetches at sign-in). Keep them short and safe to repeat: do a thing only when it isn't done yet.
+  Exit code `0` = done, anything else is an error in the log (`logs\logon-YYYY-MM-DD.log`, and Loki with
+  `job="logon"`); the next sign-in runs them again anyway. They see the user's own environment plus
+  `WMANAGER_GROUP` and `WMANAGER_COMPUTER`, but not the group's folder (the computer's copy of the source is private).
+  `tools/groups.ps1 <folder> new-logon <group> <name>` makes one from a template (`tools/wm.ps1`: menu item 20); for
+  network drives the library has a ready one, see [Network drives](#network-drives).
 - **For both:** the working folder is the system TEMP. Use `$PSScriptRoot` or `WMANAGER_GROUP_DIR` (the group's folder)
   for the group's files; other variables: `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, and `WMANAGER_JOB` for jobs. The group
   folders are replaced with every new version of the source, so don't run programs or services from them: copy what
@@ -102,6 +112,40 @@ $password = $env:WMANAGER_SECRET_SHAREPASSWORD
   SYSTEM read it, but on the USB drive and in the company's folder anyone who has them does. A secret a computer can
   use is also readable by that computer's administrators; give each company its own logins, with only the rights the
   scripts need.
+- A [sign-in script](#network-drives) gets the secrets it names the same way, in the environment of its own process
+  only (nothing is written to disk). But it runs as the user, and **the user can read what their own processes
+  hold**: a secret given to a sign-in script is as good as given to every user of its group's computers. Use it only
+  for a login that reaches nothing more than the script needs, such as one share.
+
+### Network drives
+
+A drive that SYSTEM maps is SYSTEM's alone (Windows keeps each sign-in's network connections apart), so a group
+script can't give users a drive; a sign-in script can. The library has one ready, `network-drive`:
+
+```bash
+pwsh tools/groups.ps1 $src enable network-drive office       # groups/office/logon/10-network-drive.ps1
+```
+
+At the top of the copy go the drives (`Z:` and `\\nas\documents`, one line each). At every sign-in it leaves a
+drive that is there and reachable as it is and maps any other, remembered like a drive mapped in Explorer. Two ways:
+
+- **Each person's own login** (as it comes; no secret anywhere): it maps a drive with the login Windows remembers for
+  its server (`net use`); when there is none, or it no longer works, a Windows login window asks for it ("Your login to
+  \\\\nas\\documents, for drive Z:"), with "Remember my password" ticked: the script keeps the login in the person's
+  Credential Manager (as `cmdkey /add` does) and the drive is mapped without asking from then on. Three tries for a
+  wrong password; cancelled, the next sign-in asks again; not answered within the 5 minutes, the window closes, the
+  log has an error and the next sign-in asks again.
+- **One login for everyone**: delete `off: ` in its line `# off: wmanager-secrets: ShareUser, SharePassword` and add
+  the two [secrets](#secrets-for-scripts) (`pwsh tools/wm.ps1 <company> secret ShareUser`); it then maps the drives
+  with that login, without asking. Every user of the group's computers can read it (see above): give it access to
+  these shares only.
+
+What the VM tests showed, for a script of your own: `WNetAddConnection2` (behind Explorer's "Map network drive")
+without a login logs on anonymously instead of taking the remembered one, which `net use` does; what the "Remember"
+box of Windows' own login window keeps was not taken when the drive reconnected (wrong password at the server), while
+a login kept as `cmdkey /add` keeps it was; `net use` for a login Windows doesn't remember asks for it on its input,
+which a sign-in script doesn't have (it is empty, so it fails at once); opening the share in Explorer doesn't ask at
+all.
 
 ## How a computer checks the source
 
@@ -259,6 +303,7 @@ pwsh tools/groups.ps1 $src library                           # what there is, an
 pwsh tools/groups.ps1 $src enable windows-update all         # groups/all/scripts/20-windows-update.ps1
 pwsh tools/groups.ps1 $src enable check-disk-space all       # groups/all/jobs/daily/check-disk-space.ps1
 pwsh tools/groups.ps1 $src enable check-updates all weekly   # a job on another schedule
+pwsh tools/groups.ps1 $src enable network-drive office       # groups/office/logon/10-network-drive.ps1
 tools/publish.sh $src
 ```
 
@@ -272,6 +317,7 @@ tools/publish.sh $src
 | `check-updates` | job, daily | Last successful Windows Update installation, a restart pending for too long (pending and the computer up for that many days); **fails** when behind | 40 days, 7 days |
 | `check-defender` | job, daily | Real-time protection, signature age, last scan, threats found; **fails** on a problem; passes when another antivirus is registered and Defender is passive | 3 days, 14 days, 1 day |
 | `system-report` | job, daily | The daily report described under **Jobs** above (no thresholds) | none |
+| `network-drive` | sign-in script | Network drives at every sign-in, see [Network drives](#network-drives): with each person's own login (asked once, then kept in their Credential Manager) or, after one line is changed, a shared login from the secrets | the drives (letter and `\\server\share`) |
 
 - **Alerts:** a check job that finds a problem ends with exit code 1, which wmanager logs as an error with
   `job="jobs"`, so one Grafana alert covers every check, e.g. on

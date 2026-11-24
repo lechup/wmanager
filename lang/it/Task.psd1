@@ -7,4 +7,5 @@
     'task.notify_failed'    = 'Impossibile avviare la notifica: {0}'
     'task.every_day'        = 'ogni giorno'
     'task.days_list'        = '{0}'
+    'task.logon_registered' = 'Attività wmanager-Logon registrata: gli script di accesso dei gruppi.'
 }

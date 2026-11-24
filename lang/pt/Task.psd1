@@ -7,4 +7,5 @@
     'task.notify_failed'    = 'Não foi possível iniciar a notificação: {0}'
     'task.every_day'        = 'todos os dias'
     'task.days_list'        = '{0}'
+    'task.logon_registered' = 'Tarefa wmanager-Logon registada: os scripts de início de sessão dos grupos.'
 }

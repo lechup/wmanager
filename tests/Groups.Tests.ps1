@@ -380,6 +380,58 @@ Describe 'new-script and new-job' {
     }
 }
 
+Describe 'sign-in scripts' {
+    It 'new-logon makes a numbered sign-in script that parses and names no secret' {
+        $src = New-Source
+        (Invoke-Tool $src new-logon accounting network-drive).Code | Should -Be 0
+        $path = Get-Path $src 'groups/accounting/logon/10-network-drive.ps1'
+        Test-Bom $path | Should -BeTrue
+        $text = Read-Text $path
+        Test-OnlyCrLf $text | Should -BeTrue
+        $text | Should -Match 'Sign-in script of group accounting'
+        $errs = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errs)
+        @($errs).Count | Should -Be 0
+        . (Join-Path (Join-Path $script:root 'lib') 'Lang.ps1')
+        . (Join-Path (Join-Path $script:root 'lib') 'Groups.ps1')
+        (Get-WmScriptSecretNames $text).Count | Should -Be 0
+        (Invoke-Tool $src new-logon accounting printers).Code | Should -Be 0
+        Test-Path -LiteralPath (Get-Path $src 'groups/accounting/logon/20-printers.ps1') | Should -BeTrue
+        (Invoke-Tool $src check).Code | Should -Be 0
+    }
+
+    It 'show lists them for a computer and counts them per group' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/accounting/logon/10-drive.ps1') "exit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/logon/20-printer.ps1') "exit 0`r`n" -Bom
+        $r = Invoke-Tool $src show office-01
+        $r.Text | Should -Match 'Sign-in scripts, in this order'
+        $r.Text | Should -Match '(?s)groups/all/logon/20-printer\.ps1.*groups/accounting/logon/10-drive\.ps1'
+        (Invoke-Tool $src show office-99).Text | Should -Not -Match '10-drive'
+        (Invoke-Tool $src show).Text | Should -Match 'accounting\s+2 computers\s+packages: 1\s+scripts: 1\s+jobs: 0\s+sign-in: 1'
+        Set-Text (Get-Path $src 'groups/accounting/logon/20-more.ps1') "exit 0`r`n" -Bom
+        Remove-Item -LiteralPath (Get-Path $src 'groups/all/logon') -Recurse
+        $r = Invoke-Tool $src show
+        $r.Text | Should -Match 'accounting\s+2 computers\s+packages: 1\s+scripts: 1\s+jobs: 0\s+sign-in: 2'
+        $r.Text | Should -Match 'all\s+every computer\s+packages: 0\s+scripts: 0\s+jobs: 1\s+sign-in: 0'
+    }
+
+    It 'check reads them like scripts: syntax, secrets, and a subfolder that is not run' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/all/logon/10-bad.ps1') "if (`$x {`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'ERROR: groups/all/logon/10-bad\.ps1, line'
+        Set-Text (Get-Path $src 'groups/all/logon/10-bad.ps1') "# wmanager-secrets: 1x`r`nexit 0`r`n" -Bom
+        (Invoke-Tool $src check).Text | Should -Match "groups/all/logon/10-bad\.ps1: wmanager-secrets: '1x'"
+        Remove-Item -LiteralPath (Get-Path $src 'groups/all/logon/10-bad.ps1')
+        Set-Text (Get-Path $src 'groups/all/logon/sub/10-deep.ps1') "exit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'groups/all/logon/sub/10-deep\.ps1 is not run: sign-in scripts go directly in groups/<group>/logon/'
+    }
+}
+
 # The tests give -Url as a path and -Zip as the file, so they don't go to GitHub
 Describe 'set-version and unset-version' {
     It 'writes version.psd1 for every computer and for a group, and show and check read it' {
@@ -511,7 +563,7 @@ Describe 'library and enable' {
 
     It 'passes check with every item enabled, and warns about a copy older than the library' {
         $src = New-Source
-        foreach ($name in @('windows-update', 'power', 'defender-hardening', 'network-hardening', 'check-disk-space', 'check-updates', 'check-defender')) {
+        foreach ($name in @('windows-update', 'power', 'defender-hardening', 'network-hardening', 'check-disk-space', 'check-updates', 'check-defender', 'network-drive')) {
             (Invoke-Tool $src enable $name all).Code | Should -Be 0
         }
         $r = Invoke-Tool $src check
@@ -544,7 +596,29 @@ Describe 'library and enable' {
             $names.ContainsKey($f.BaseName) | Should -BeFalse
             $names[$f.BaseName] = $true
         }
-        $names.Count | Should -Be 8
+        $names.Count | Should -Be 9
+    }
+
+    It 'puts the network-drive sign-in script in the group''s logon folder; its shared login is off until one line changes' {
+        $src = New-Source
+        $r = Invoke-Tool $src library
+        $r.Text | Should -Match '(?s)Sign-in scripts \(at every sign-in.*network-drive\s+r1'
+        (Invoke-Tool $src enable network-drive accounting).Code | Should -Be 0
+        $path = Get-Path $src 'groups/accounting/logon/10-network-drive.ps1'
+        Test-Bom $path | Should -BeTrue
+        Test-OnlyCrLf (Read-Text $path) | Should -BeTrue
+        (Invoke-Tool $src library).Text | Should -Match 'in groups/accounting/logon/10-network-drive\.ps1 \(r1\)'
+        (Invoke-Tool $src enable network-drive accounting).Code | Should -Be 1
+        (Invoke-Tool $src enable network-drive all daily).Code | Should -Be 1
+        (Invoke-Tool $src show office-01).Text | Should -Match 'groups/accounting/logon/10-network-drive\.ps1'
+        . (Join-Path (Join-Path $script:root 'lib') 'Lang.ps1')
+        . (Join-Path (Join-Path $script:root 'lib') 'Groups.ps1')
+        (Get-WmScriptSecretNames (Read-Text $path)).Count | Should -Be 0
+        $shared = (Read-Text $path).Replace('# off: wmanager-secrets:', '# wmanager-secrets:')
+        $names = Get-WmScriptSecretNames $shared
+        $names | Should -Be @('ShareUser', 'SharePassword')
+        Set-Text $path $shared -Bom
+        (Invoke-Tool $src check).Code | Should -Be 0
     }
 
     It 'keeps the example system report the same as the library''s' {

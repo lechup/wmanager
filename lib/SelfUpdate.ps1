@@ -27,7 +27,7 @@ function Copy-WmProgramFiles {
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $To 'lib') -ErrorAction Stop | Out-Null
     Copy-Item -Path (Join-Path $From 'lib\*.ps1') -Destination (Join-Path $To 'lib') -Force -ErrorAction Stop
-    foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Invoke-Jobs.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt')) {
+    foreach ($f in @('Provision.ps1', 'Update-Packages.ps1', 'Invoke-Jobs.ps1', 'Invoke-Logon.ps1', 'Notify-User.ps1', 'Restore-Backup.ps1', 'run.cmd', 'choco-reqs.txt')) {
         $p = Join-Path $From $f
         if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $To -Force -ErrorAction Stop }
     }

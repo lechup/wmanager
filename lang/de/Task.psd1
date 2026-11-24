@@ -7,4 +7,5 @@
     'task.notify_failed'    = 'Die Benachrichtigung konnte nicht gestartet werden: {0}'
     'task.every_day'        = 'täglich'
     'task.days_list'        = '{0}'
+    'task.logon_registered' = 'Aufgabe wmanager-Logon registriert: die Anmeldeskripte der Gruppen.'
 }

@@ -7,4 +7,5 @@
     'task.notify_failed'    = 'Kan de melding niet starten: {0}'
     'task.every_day'        = 'elke dag'
     'task.days_list'        = '{0}'
+    'task.logon_registered' = 'Taak wmanager-Logon geregistreerd: de aanmeldscripts van de groepen.'
 }

@@ -125,6 +125,20 @@ function Get-WmGroupScripts {
     return ,$result
 }
 
+# Sign-in scripts of the given groups: groups/<group>/logon/*.ps1, groups in order, files by name. They run at every
+# sign-in, as the user who signs in (Invoke-Logon.ps1). Name (group/file) labels their entries in Loki.
+function Get-WmGroupLogonScripts {
+    param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
+    $result = @()
+    foreach ($g in $Groups) {
+        foreach ($p in (Get-WmManagedScriptPaths -Files $Files -Folder "groups/$g/logon/")) {
+            $base = [IO.Path]::GetFileNameWithoutExtension($p.Substring($p.LastIndexOf('/') + 1))
+            $result += [pscustomobject]@{ Group = $g; Path = $p; Hash = $Files[$p]; Name = "$g/$base" }
+        }
+    }
+    return ,$result
+}
+
 # Jobs of the given groups: groups/<group>/jobs/hourly|daily|weekly/*.ps1. Name (group/file) labels the
 # job's entries in Loki.
 function Get-WmGroupJobs {
@@ -327,6 +341,7 @@ function Resolve-WmComputerContent {
         Requirements = (Merge-WmRequirements -Lists $toMerge)
         Scripts      = (Get-WmGroupScripts -Files $Files -Groups $groups)
         Jobs         = (Get-WmGroupJobs -Files $Files -Groups $groups)
+        LogonScripts = (Get-WmGroupLogonScripts -Files $Files -Groups $groups)
         Wmanager     = (Get-WmWantedVersion -Versions $Versions -Groups (Get-WmVersionGroupOrder -Map $Map -Groups $groups))
     }
 }
