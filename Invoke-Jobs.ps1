@@ -34,6 +34,8 @@ try {
     $content = Get-WmManagedContent -Config $config -CachedOnly:(-not (Test-WmManagedRefreshDue -Hours 20))
     $null = Invoke-WmStep 'step.group_scripts' { Invoke-WmGroupScripts -Config $config -RetryFailedAfterHours 20 }
     $null = Invoke-WmStep 'step.group_jobs' { Invoke-WmGroupJobs -Config $config -Content $content }
+    # The jobs with a time start at it: their times as triggers of this task
+    $null = Invoke-WmStep 'step.jobs_times' { Sync-WmJobsTaskTimes -Times (Get-WmJobTimes -Content $content) }
     if ($script:WmScriptsNeedReboot) {
         Set-WmRebootFlag
         Write-WmLog -Key 'jobs.reboot_needed'

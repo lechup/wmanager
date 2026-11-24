@@ -18,6 +18,11 @@
     'managed.package_group_replaces'     = 'Pakket {0}: de vermelding van groep {1} vervangt de vermelding van de gemeenschappelijke lijst.'
     'managed.package_conflict'           = "Pakket {0} is verschillend beschreven in '{1}' en '{2}'; de vermelding uit '{1}' wordt gebruikt."
     'managed.unknown_period'             = "onbekende frequentie '{0}'"
+    'managed.at_bad'                     = 'wmanager-at: ''{0}'' is geen tijd zoals 18:00, Mon-Fri 18:00 of Mon,Wed 07:30 (Engelse dagnamen)'
+    'managed.at_twice'                   = 'meer dan één wmanager-at-regel'
+    'managed.at_hourly'                  = 'een uurlijkse taak loopt elk uur: wmanager-at is voor dagelijkse en wekelijkse taken'
+    'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': een wekelijkse taak noemt één dag, bijv. Fri 17:00'
+    'managed.job_first_time'             = 'Taak {0} loopt om {1}: de eerste keer dan.'
 
     'managed.cert_missing'               = 'Ondertekeningscertificaat niet gevonden: {0}'
     'managed.cert_private_key'           = '{0} bevat een persoonlijke sleutel; alleen de openbare .cer gaat naar de computers'

@@ -8,5 +8,6 @@
     'task.every_day'        = 'codziennie'
     'task.days_list'        = '{0}'
     'task.logon_registered' = 'Zarejestrowano zadanie wmanager-Logon: skrypty logowania grup.'
+    'task.jobs_times' = 'Godziny zadań jako wyzwalacze wmanager-Jobs: {0}'
     'task.jobs_start_failed' = 'Nie udało się uruchomić wmanager-Jobs: {0}'
 }

@@ -204,6 +204,61 @@ function Get-WmScriptRunAs {
     return $found[0].ToLowerInvariant()
 }
 
+# ---------------------------------------------------------------------------
+# A time for a daily or weekly job: a comment line "# wmanager-at: 18:00" (every day), "Mon-Fri 18:00" or
+# "Mon,Wed,Fri 07:30" in jobs/daily, "Fri 17:00" (one day) in jobs/weekly. The job then runs at that time (the
+# wmanager-Jobs task gets it as a trigger), or at the next hour the computer is on when it was off then.
+# ---------------------------------------------------------------------------
+
+$script:WmWeekDays = @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+
+# English day names (Mon or Monday, any case), a list (Mon,Wed) or a range (Mon-Fri, also Fri-Mon over the weekend),
+# as full names, Monday first; $null for anything else
+function ConvertFrom-WmDayList {
+    param([string]$Text)
+    $index = @{}
+    for ($i = 0; $i -lt 7; $i++) { $index[$script:WmWeekDays[$i].Substring(0, 3).ToLowerInvariant()] = $i }
+    $pick = New-Object bool[] 7
+    foreach ($part in ($Text -split ',')) {
+        $ends = @($part.Trim() -split '-')
+        if ($ends.Count -gt 2) { return $null }
+        $at = @(foreach ($e in $ends) {
+            $e = $e.Trim().ToLowerInvariant()
+            $key = if ($e.Length -ge 3) { $e.Substring(0, 3) } else { '' }
+            if (-not $index.ContainsKey($key) -or -not $script:WmWeekDays[$index[$key]].ToLowerInvariant().StartsWith($e)) { return $null }
+            $index[$key]
+        })
+        $i = $at[0]
+        while ($true) { $pick[$i] = $true; if ($i -eq $at[-1]) { break }; $i = ($i + 1) % 7 }
+    }
+    return @(for ($i = 0; $i -lt 7; $i++) { if ($pick[$i]) { $script:WmWeekDays[$i] } })
+}
+
+# The time a job declares: $null without a "# wmanager-at:" line, else Time (HH:mm), Days (full names, Monday first)
+# and Text (as written, for the log). $Every: the job's folder. Throws on a line it can't read, a second one, one in an
+# hourly job, or a weekly job with other than one day.
+function Get-WmJobAt {
+    param([AllowEmptyString()][string]$Text, [Parameter(Mandatory = $true)][string]$Every)
+    $found = @(foreach ($line in ($Text -split "\r?\n")) {
+        if ($line -match '^\s*#\s*wmanager-at\s*:(.*)$') { $Matches[1].Trim() }
+    })
+    if ($found.Count -eq 0) { return $null }
+    if ($found.Count -gt 1) { throw (New-WmError 'managed.at_twice') }
+    $at = $found[0]
+    if ($Every -eq 'hourly') { throw (New-WmError 'managed.at_hourly') }
+    if ($at -notmatch '^(?:(?<days>\S+)\s+)?(?<time>[0-9]{1,2}:[0-9]{2})$') { throw (New-WmError 'managed.at_bad' @($at)) }
+    $time = [datetime]::MinValue
+    if (-not [datetime]::TryParseExact($Matches['time'], 'H:mm', [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None, [ref]$time)) { throw (New-WmError 'managed.at_bad' @($at)) }
+    $days = $script:WmWeekDays
+    if ($Matches['days']) {
+        $days = ConvertFrom-WmDayList $Matches['days']
+        if ($null -eq $days -or $days.Count -eq 0) { throw (New-WmError 'managed.at_bad' @($at)) }
+    }
+    if ($Every -eq 'weekly' -and (-not $Matches['days'] -or @($days).Count -ne 1)) { throw (New-WmError 'managed.at_weekly_day' @($at)) }
+    return [pscustomobject]@{ Time = $time.ToString('HH:mm'); Days = @($days); Text = $at }
+}
+
 # The Secrets of a configuration, checked: an empty table without the setting. Throws when it isn't a table, a name
 # isn't one, or a value isn't text on one line.
 function Get-WmSecrets {

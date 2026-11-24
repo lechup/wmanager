@@ -10,6 +10,7 @@
     'step.default_browser'          = 'Navigateur par défaut'
     'step.schedule'                 = 'Planificateur de tâches'
     'step.group_jobs'               = 'Travaux de groupe'
+    'step.jobs_times'               = 'Heures des tâches'
     'step.packages'                 = 'Packages'
     'step.privacy'                  = 'Confidentialité'
     'step.group_scripts'            = 'Scripts de groupe'

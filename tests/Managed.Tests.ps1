@@ -503,6 +503,31 @@ Describe 'scripts and jobs that run as the user' {
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.script_not_run' -and $Arguments[0] -eq 'groups/all/scripts/20-changed.ps1 (user1)' }
     }
 
+    It 'runs a job with a time at that time, once, and not when it first appears' {
+        # Its time within the next minute: the 2 minutes of slack make it due at the second run
+        $at = (Get-Date).AddMinutes(1).ToString('HH:mm')
+        $job = Add-Item 'groups/all/jobs/daily/backup.ps1' "# wmanager-at: $at`r`nexit 0`r`n" 'daily'
+        $content = [pscustomobject]@{ Jobs = @($job) }
+        Mock Invoke-WmScriptProcess { [pscustomobject]@{ ExitCode = 0; Output = ''; Errors = '' } }
+        Invoke-WmGroupJobs -Config $cfg -Content $content
+        Should -Invoke Invoke-WmScriptProcess -Times 0
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.job_first_time' -and $Arguments[1] -eq $at }
+        Invoke-WmGroupJobs -Config $cfg -Content $content
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.job_starting' -and $Arguments[1] -eq "daily $at" }
+        # Started a moment before its time, it counts as run at it: the trigger of that time doesn't run it again
+        Invoke-WmGroupJobs -Config $cfg -Content $content
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly
+    }
+
+    It 'does not run a job whose time it can''t read' {
+        $job = Add-Item 'groups/all/jobs/hourly/ping.ps1' "# wmanager-at: 18:00`r`nexit 0`r`n" 'hourly'
+        Mock Invoke-WmScriptProcess { [pscustomobject]@{ ExitCode = 0; Output = ''; Errors = '' } }
+        Invoke-WmGroupJobs -Config $cfg -Content ([pscustomobject]@{ Jobs = @($job) })
+        Should -Invoke Invoke-WmScriptProcess -Times 0
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.job_not_run' -and $Arguments[0] -eq 'all/ping' }
+    }
+
     It 'runs a user job on its schedule for each signed-in person' {
         $job = Add-Item 'groups/all/jobs/daily/inbox.ps1' "# wmanager-run-as: user`r`nexit 0`r`n" 'daily'
         $content = [pscustomobject]@{ Jobs = @($job) }
@@ -629,5 +654,54 @@ Describe 'Test-WmJobDue' {
 
     It 'runs a job whose last run is in the future (clock went back)' {
         Test-WmJobDue -Every 'weekly' -LastRun $now.AddDays(2) -Now $now | Should -BeTrue
+    }
+}
+
+Describe 'Get-WmJobAt' {
+    It 'reads a time, days, lists and ranges' {
+        $at = Get-WmJobAt "exit 0`r`n# wmanager-at: 18:00`r`n" 'daily'
+        $at.Time | Should -Be '18:00'
+        $at.Days | Should -Be @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+        (Get-WmJobAt '# wmanager-at: Mon-Fri 7:30' 'daily').Days | Should -Be @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday')
+        (Get-WmJobAt '# wmanager-at: Mon-Fri 7:30' 'daily').Time | Should -Be '07:30'
+        (Get-WmJobAt '#wmanager-at: sat,MONDAY 06:00' 'daily').Days | Should -Be @('Monday', 'Saturday')
+        (Get-WmJobAt '# wmanager-at: Fri-Mon 22:00' 'daily').Days | Should -Be @('Monday', 'Friday', 'Saturday', 'Sunday')
+        (Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly').Days | Should -Be @('Friday')
+        (Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly').Text | Should -Be 'Fri 17:00'
+        Get-WmJobAt "exit 0`r`n" 'daily' | Should -BeNullOrEmpty
+    }
+
+    It 'refuses what it can''t read, a second line, an hourly job, and a weekly job without exactly one day' {
+        foreach ($bad in @('18', '25:00', '18:60', 'Mo 18:00', 'Mon-Tue-Wed 18:00', 'Mon- 18:00', 'Funday 18:00', 'Mon Fri 18:00', '')) {
+            { Get-WmJobAt "# wmanager-at: $bad" 'daily' } | Should -Throw '*is not a time like*' -Because $bad
+        }
+        { Get-WmJobAt "# wmanager-at: 18:00`r`n# wmanager-at: 19:00" 'daily' } | Should -Throw '*more than one*'
+        { Get-WmJobAt '# wmanager-at: 18:00' 'hourly' } | Should -Throw '*every hour*'
+        { Get-WmJobAt '# wmanager-at: 17:00' 'weekly' } | Should -Throw '*names one day*'
+        { Get-WmJobAt '# wmanager-at: Mon,Fri 17:00' 'weekly' } | Should -Throw '*names one day*'
+    }
+}
+
+Describe 'Test-WmJobDue with a time' {
+    BeforeAll {
+        # Local times, as the user writes them; the job state keeps UTC
+        function L { param([string]$Text) ([datetime]::ParseExact($Text, 'yyyy-MM-dd HH:mm', $null)).ToUniversalTime() }
+        $workdays = Get-WmJobAt '# wmanager-at: Mon-Fri 18:00' 'daily'
+    }
+
+    It 'is due once its time has passed since the last run, a moment early included' {
+        # 2026-11-24 is a Tuesday
+        Test-WmJobDue -Every 'daily' -LastRun (L '2026-11-23 18:00') -Now (L '2026-11-24 17:00') -At $workdays | Should -BeFalse
+        Test-WmJobDue -Every 'daily' -LastRun (L '2026-11-23 18:00') -Now (L '2026-11-24 17:59') -At $workdays | Should -BeTrue
+        Test-WmJobDue -Every 'daily' -LastRun (L '2026-11-24 18:00') -Now (L '2026-11-24 23:00') -At $workdays | Should -BeFalse
+    }
+
+    It 'catches up at the next hour after a time the computer was off, and skips the days it doesn''t run' {
+        # Off from Friday 17:00 to Monday 09:00: Friday's 18:00 is caught up, once
+        Test-WmJobDue -Every 'daily' -LastRun (L '2026-11-26 18:00') -Now (L '2026-11-30 09:00') -At $workdays | Should -BeTrue
+        Test-WmJobDue -Every 'daily' -LastRun (L '2026-11-27 18:00') -Now (L '2026-11-30 09:00') -At $workdays | Should -BeFalse
+        $friday = Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly'
+        Test-WmJobDue -Every 'weekly' -LastRun (L '2026-11-20 17:00') -Now (L '2026-11-26 12:00') -At $friday | Should -BeFalse
+        Test-WmJobDue -Every 'weekly' -LastRun (L '2026-11-20 17:00') -Now (L '2026-11-27 17:00') -At $friday | Should -BeTrue
     }
 }

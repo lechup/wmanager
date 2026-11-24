@@ -93,13 +93,34 @@ function Test-WmSameFiles {
 
 
 
+# The latest time a job with a time ($At, from Get-WmJobAt) was due, at or before $Now: its time on today or an
+# earlier one of its days, in local time (as the user wrote it). 2 minutes of slack: the task that time starts may
+# start a moment early.
+function Get-WmJobLastSlot {
+    param([Parameter(Mandatory = $true)]$At, [Parameter(Mandatory = $true)][datetime]$Now)
+    $probe = $Now.ToLocalTime().AddMinutes(2)
+    $time = [TimeSpan]::ParseExact($At.Time, 'hh\:mm', [Globalization.CultureInfo]::InvariantCulture)
+    for ($d = 0; $d -le 7; $d++) {
+        $day = $probe.Date.AddDays(-$d)
+        if (@($At.Days) -notcontains $day.DayOfWeek.ToString()) { continue }
+        $slot = $day.Add($time)
+        if ($slot -le $probe) { return $slot }
+    }
+    return $null
+}
+
 # Is a job due? The hourly task starts a little early or late, so 5 minutes of slack keep a daily job at
-# the same hour instead of drifting. A last run in the future (the clock went back) counts as due.
+# the same hour instead of drifting. A last run in the future (the clock went back) counts as due. A job with a time
+# ($At) is due when its latest time has passed since its last run (a computer that was off then catches up).
 function Test-WmJobDue {
-    param([Parameter(Mandatory = $true)][string]$Every, $LastRun, [Parameter(Mandatory = $true)][datetime]$Now)
+    param([Parameter(Mandatory = $true)][string]$Every, $LastRun, [Parameter(Mandatory = $true)][datetime]$Now, $At = $null)
     if ($null -eq $LastRun) { return $true }
     $last = [datetime]$LastRun
     if ($last -gt $Now.AddMinutes(5)) { return $true }
+    if ($At) {
+        $slot = Get-WmJobLastSlot -At $At -Now $Now
+        return ($null -ne $slot -and $last -lt $slot.ToUniversalTime())
+    }
     switch ($Every) {
         'hourly' { $period = [TimeSpan]::FromHours(1) }
         'daily'  { $period = [TimeSpan]::FromDays(1) }
@@ -775,6 +796,17 @@ function Invoke-WmGroupScripts {
     }
 }
 
+# The times of this computer's jobs that declare one (Get-WmJobAt), for the triggers of wmanager-Jobs
+# (Sync-WmJobsTaskTimes). A job whose line can't be read is left out here (it doesn't run; the log says why).
+function Get-WmJobTimes {
+    param([Parameter(Mandatory = $true)]$Content)
+    return @(foreach ($j in @($Content.Jobs)) {
+        try { $at = Get-WmJobAt ([IO.File]::ReadAllText((Join-Path $script:WmManagedDir ($j.Path -replace '/', '\')))) $j.Every }
+        catch { continue }
+        if ($at) { $at }
+    })
+}
+
 # Runs the due jobs of this computer's groups (Invoke-Jobs.ps1, every hour). The start time is recorded
 # before the run, so a failed or killed job waits for its next turn instead of repeating every hour.
 # Output lines go to Loki unchanged, labelled task="<group>/<name>". A job that runs as the user is due per person:
@@ -795,16 +827,35 @@ function Invoke-WmGroupJobs {
     $now = [DateTime]::UtcNow
     foreach ($j in $jobs) {
         $file = Join-Path $script:WmManagedDir ($j.Path -replace '/', '\')
+        try { $at = Get-WmJobAt ([IO.File]::ReadAllText($file)) $j.Every }
+        catch {
+            Write-WmLog -Key 'managed.job_not_run' -Arguments @($j.Name, (Get-WmErrorText $_)) -Level error -Task $j.Name
+            continue
+        }
+        $when = if ($at) { "$($j.Every) $($at.Text)" } else { $j.Every }
         foreach ($run in (Get-WmGroupRuns -Item $j -File $file -Label $j.Name)) {
             $last = $null
             $parsed = [datetime]::MinValue
             if ($state[$run.Key] -and [datetime]::TryParse($state[$run.Key], [Globalization.CultureInfo]::InvariantCulture,
                     [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { $last = $parsed.ToUniversalTime() }
-            if (-not (Test-WmJobDue -Every $j.Every -LastRun $last -Now $now)) { continue }
+            # A new job with a time waits for its first time, rather than running when it appears
+            if ($at -and $null -eq $last -and -not $run.NotRun) {
+                $state[$run.Key] = $now.ToString('o')
+                Write-WmLog -Key 'managed.job_first_time' -Arguments @($run.Label, $at.Text) -Task $j.Name -LocalOnly
+                continue
+            }
+            if (-not (Test-WmJobDue -Every $j.Every -LastRun $last -Now $now -At $at)) { continue }
 
-            $state[$run.Key] = $now.ToString('o')
+            # A job with a time that starts a moment before it (the slack) counts as run at its time, so the trigger
+            # of that time doesn't run it again
+            $stamp = $now
+            if ($at) {
+                $slot = (Get-WmJobLastSlot -At $at -Now $now).ToUniversalTime()
+                if ($slot -gt $stamp) { $stamp = $slot }
+            }
+            $state[$run.Key] = $stamp.ToString('o')
             try { Save-WmTabState -Path $script:WmJobsState -Map $state } catch { Write-WmLog -Key 'managed.jobs_state_failed' -Arguments @(Get-WmErrorText $_) -Level warn }
-            Write-WmLog -Key 'managed.job_starting' -Arguments @($run.Label, $j.Every) -Task $j.Name
+            Write-WmLog -Key 'managed.job_starting' -Arguments @($run.Label, $when) -Task $j.Name
             $vars = Get-WmScriptEnvironment $j.Group $j.Path
             $vars['WMANAGER_JOB'] = $j.Name
             $r = Invoke-WmGroupRun -Item $j -File $file -Run $run -Vars $vars -Secrets $secrets -TimeoutMinutes $timeout -Copies $copies

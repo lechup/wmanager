@@ -18,6 +18,11 @@
     'managed.package_group_replaces'     = 'Pacchetto {0}: la voce del gruppo {1} sostituisce quella dell''elenco comune.'
     'managed.package_conflict'           = 'Il pacchetto {0} è descritto in modo diverso in ''{1}'' e ''{2}''; viene usata la voce di ''{1}''.'
     'managed.unknown_period'             = 'frequenza sconosciuta ''{0}'''
+    'managed.at_bad'                     = 'wmanager-at: ''{0}'' non è un orario come 18:00, Mon-Fri 18:00 o Mon,Wed 07:30 (nomi dei giorni in inglese)'
+    'managed.at_twice'                   = 'più di una riga wmanager-at'
+    'managed.at_hourly'                  = 'un job orario gira ogni ora: wmanager-at è per i job giornalieri e settimanali'
+    'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': un job settimanale indica un giorno, es. Fri 17:00'
+    'managed.job_first_time'             = 'Il job {0} gira alle {1}: la prima volta allora.'
 
     'managed.cert_missing'               = 'Certificato di firma non trovato: {0}'
     'managed.cert_private_key'           = '{0} contiene una chiave privata; sui computer va solo il .cer pubblico'

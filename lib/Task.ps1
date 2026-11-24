@@ -44,6 +44,33 @@ function Get-WmUpdateDays {
     return @(Get-WmSetting $Config 'UpdateDays' $script:WmAllDays)
 }
 
+# The times of the jobs that declare one (Get-WmJobTimes) as extra triggers of wmanager-Jobs, after its hourly one,
+# so such a job starts at its time rather than at the next hour. Changed only when the set of times differs (the task
+# runs this itself: changing its triggers doesn't stop the run). Without the task (no management source) nothing.
+function Sync-WmJobsTaskTimes {
+    param([AllowEmptyCollection()][object[]]$Times = @())
+    $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -ErrorAction SilentlyContinue
+    if (-not $task) { return }
+    $want = @{}
+    foreach ($t in $Times) { $want['{0} {1}' -f $t.Time, (Get-WmDaysMask $t.Days)] = $t }
+    $have = @{}
+    foreach ($tr in @($task.Triggers | Select-Object -Skip 1)) {
+        $time = if ($tr.StartBoundary) { ([datetime]$tr.StartBoundary).ToString('HH:mm') } else { '' }
+        $have['{0} {1}' -f $time, [int]$tr.DaysOfWeek] = $true
+    }
+    $same = $want.Count -eq $have.Count
+    foreach ($k in $want.Keys) { if (-not $have.ContainsKey($k)) { $same = $false } }
+    if ($same) { return }
+    $keys = @($want.Keys | Sort-Object)
+    $triggers = @($task.Triggers | Select-Object -First 1) + @(foreach ($k in $keys) {
+        $at = [datetime]::ParseExact($want[$k].Time, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+        New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $want[$k].Days -At $at
+    })
+    Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Trigger $triggers -ErrorAction Stop | Out-Null
+    $list = if ($keys.Count) { @($keys | ForEach-Object { $want[$_].Text }) -join '; ' } else { '-' }
+    Write-WmLog -Key 'task.jobs_times' -Arguments @($list)
+}
+
 function Get-WmDaysMask {
     param([string[]]$Days)
     $bits = @{ Sunday = 1; Monday = 2; Tuesday = 4; Wednesday = 8; Thursday = 16; Friday = 32; Saturday = 64 }

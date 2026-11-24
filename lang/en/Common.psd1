@@ -10,6 +10,7 @@
     'step.default_browser'          = 'Default browser'
     'step.schedule'                 = 'Task Scheduler'
     'step.group_jobs'               = 'Group jobs'
+    'step.jobs_times'               = 'Times of the jobs'
     'step.packages'                 = 'Packages'
     'step.privacy'                  = 'Privacy'
     'step.group_scripts'            = 'Group scripts'

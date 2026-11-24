@@ -10,6 +10,7 @@
     'step.default_browser'          = 'Browser implicit'
     'step.schedule'                 = 'Planificator de activități'
     'step.group_jobs'               = 'Lucrările grupurilor'
+    'step.jobs_times'               = 'Orele sarcinilor'
     'step.packages'                 = 'Pachete'
     'step.privacy'                  = 'Confidențialitate'
     'step.group_scripts'            = 'Scripturile grupurilor'

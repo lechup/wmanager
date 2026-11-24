@@ -10,6 +10,7 @@
     'step.default_browser'          = 'Standaardbrowser'
     'step.schedule'                 = 'Taakplanner'
     'step.group_jobs'               = 'Groepsopdrachten'
+    'step.jobs_times'               = 'Tijden van de taken'
     'step.packages'                 = 'Pakketten'
     'step.privacy'                  = 'Privacy'
     'step.group_scripts'            = 'Groepsscripts'

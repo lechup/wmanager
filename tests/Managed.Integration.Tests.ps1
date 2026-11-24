@@ -283,6 +283,23 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         (Get-ScheduledTaskInfo -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).NextRunTime | Should -Not -BeNullOrEmpty
     }
 
+    It 'gives the jobs task the times of the jobs that have one, and changes it only when they change' {
+        Sync-WmJobsTaskTimes -Times @((Get-WmJobAt '# wmanager-at: Mon-Fri 18:00' 'daily'), (Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly'))
+        $triggers = @((Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).Triggers)
+        $triggers.Count | Should -Be 3
+        $triggers[0].Repetition.Interval | Should -Be 'PT1H'
+        $timed = @($triggers | Select-Object -Skip 1 | ForEach-Object { '{0} {1}' -f ([datetime]$_.StartBoundary).ToString('HH:mm'), [int]$_.DaysOfWeek })
+        $timed | Sort-Object | Should -Be @('17:00 32', '18:00 62')
+        Mock Set-ScheduledTask { }
+        Sync-WmJobsTaskTimes -Times @((Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly'), (Get-WmJobAt '# wmanager-at: Mon-Fri 18:00' 'daily'))
+        Should -Invoke Set-ScheduledTask -Times 0
+    }
+
+    It 'drops the times when no job has one' {
+        Sync-WmJobsTaskTimes -Times @()
+        @((Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).Triggers).Count | Should -Be 1
+    }
+
     It 'registers the sign-in task: SYSTEM, at every sign-in, half a minute later, queued' {
         $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskLogon
         $trigger = $task.Triggers | Select-Object -First 1

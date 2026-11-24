@@ -51,7 +51,11 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
 - **Jobs:** like scripts, but on a schedule: the `wmanager-Jobs` task (SYSTEM) starts every hour and runs each job of the
   computer's groups whose time has come, by folder: `jobs/hourly`, `jobs/daily`, `jobs/weekly`. A computer that was off
   catches up at the next hour it is on. The start time is recorded before the job runs, so a failed job waits for its
-  next turn (the error is in the log). Time limit `JobTimeoutMinutes` (10 by default). Every line a job prints goes to
+  next turn (the error is in the log). **At a fixed time:** a daily or weekly job with the line
+  `# wmanager-at: 18:00` runs at 18:00 (local time) instead; `# wmanager-at: Mon-Fri 18:00` or `Mon,Wed,Fri 07:30` on
+  some days, and a weekly job names one day: `# wmanager-at: Fri 17:00` (English day names, `Mon` or `Monday`). The
+  times become triggers of `wmanager-Jobs`; a computer that was off then runs the job at the next hour it is on, once,
+  and a new job waits for its first time. `tools/groups.ps1 check` reads the line, `show` shows the time. Time limit `JobTimeoutMinutes` (10 by default). Every line a job prints goes to
   Loki unchanged, with the label `task="<group>/<file name>"` (`job="jobs"`): print one JSON object per line and Grafana
   can read it with `| json`. The local log is `logs\jobs-YYYY-MM-DD.log`. Example (also in the
   [library](#library-of-ready-scripts-and-jobs)):

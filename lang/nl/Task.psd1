@@ -8,5 +8,6 @@
     'task.every_day'        = 'elke dag'
     'task.days_list'        = '{0}'
     'task.logon_registered' = 'Taak wmanager-Logon geregistreerd: de aanmeldscripts van de groepen.'
+    'task.jobs_times' = 'De tijden van de taken als triggers van wmanager-Jobs: {0}'
     'task.jobs_start_failed' = 'Kon wmanager-Jobs niet starten: {0}'
 }
