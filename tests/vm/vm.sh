@@ -6,7 +6,10 @@
 #
 #   tests/vm/vm.sh create <pro|home> <windows11.iso> [memory-MB]   new disk, unattended installation (30-60 min)
 #   tests/vm/vm.sh installed <vm>                      after the installation: boot from the disk only
-#   tests/vm/vm.sh start <vm> [memory-MB]              start in the background
+#   tests/vm/vm.sh start <vm> [memory-MB]              start in the background and wait until SSH answers (a boot
+#                                                      that hangs is reset once; WM_VM_WAIT=0: don't wait)
+#   tests/vm/vm.sh wait <vm>                           wait until SSH answers, the same way
+#   tests/vm/vm.sh restart <vm>                        restart Windows and wait until the new one answers
 #   tests/vm/vm.sh stop <vm>                           full Windows shutdown (not Fast Startup), then stop
 #   tests/vm/vm.sh status                              which machines run
 #   tests/vm/vm.sh ssh <vm> [command]                  PowerShell over SSH as "tester" (administrator)
@@ -94,6 +97,22 @@ set_ssh_opts() {
               -o "UserKnownHostsFile=$dir/known_hosts" -o ConnectTimeout=10)
 }
 
+# Runs a command over SSH without waiting long: false when SSH doesn't answer within 5 s or the command doesn't end
+# within 20 (a booting Windows may open the connection and never start the session). Options before ssh_opts: ssh
+# takes the first value it gets.
+ssh_answers() {
+    set_ssh_opts
+    timeout 20 ssh -o ConnectTimeout=5 -o BatchMode=yes "${ssh_opts[@]}" -p "$ssh_port" tester@127.0.0.1 "$@" \
+        </dev/null >/dev/null 2>&1
+}
+
+# The QMP command that saves the screen to a file (PPM, or the given format)
+screendump_json() {
+    local file
+    file=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1")
+    echo "{\"execute\":\"screendump\",\"arguments\":{\"filename\":$file${2:+,\"format\":\"$2\"}}}"
+}
+
 # The memory for a machine in MB (see the header), checked against what the host has available
 vm_memory() {
     local mb=${1:-${WM_VM_MEMORY:-6144}} avail
@@ -154,7 +173,11 @@ cmd_start() {
     need qemu-system-x86_64 swtpm
     need_kvm
     [[ -f $dir/disk.qcow2 ]] || die "machine $1 does not exist (tests/vm/vm.sh create $1 <iso>)"
-    running && { echo "Machine $1 is already running."; return; }
+    if running; then
+        echo "Machine $1 is already running."
+        if [[ ! -f $dir/install.iso && ${WM_VM_WAIT:-1} != 0 ]]; then wait_ready "$1"; fi
+        return
+    fi
     local memory
     memory=$(vm_memory "${2:-}")
     rm -f "$dir/swtpm.sock" "$dir/qmp.sock"
@@ -199,6 +222,66 @@ cmd_start() {
         qmp "${presses[@]}" >/dev/null
     fi
     echo "Machine $1 is running with $memory MB (SSH 127.0.0.1:$ssh_port, VNC 127.0.0.1:$((5900 + vnc)))."
+    # Not while Windows installs: SSH comes only at its end
+    if [[ ! -f $dir/install.iso && ${WM_VM_WAIT:-1} != 0 ]]; then wait_ready "$1"; fi
+}
+
+# Waits until SSH answers. On a busy host a boot sometimes hangs (the spinner stops, SSH never comes, and only a
+# reset helps): no SSH and the same screen for 5 minutes is taken for that, and the machine is reset once (two cut-off
+# boots in a row would send Windows into Automatic Repair). Each look takes two frames a second apart, so a turning
+# spinner always counts as alive; a boot that installs updates changes its percentage, so it is waited for.
+# WM_VM_BOOT_MINUTES (20) in all.
+wait_ready() {
+    vm_conf "$1"
+    running || die "machine $1 is not running"
+    local minutes=${WM_VM_BOOT_MINUTES:-20}
+    [[ $minutes =~ ^[1-9][0-9]*$ ]] || die "WM_VM_BOOT_MINUTES: a number of minutes, e.g. 20 ('$minutes')"
+    local started=$SECONDS limit=$((minutes * 60)) a=$dir/boot-screen-a.ppm b=$dir/boot-screen-b.ppm
+    local dump_a dump_b last='' since=$SECONDS sum reset=0
+    dump_a=$(screendump_json "$a")
+    dump_b=$(screendump_json "$b")
+    while (( SECONDS - started < limit )); do
+        if ssh_answers 'exit 0'; then
+            rm -f "$a" "$b"
+            echo "Machine $1 answers over SSH (after $((SECONDS - started)) s)."
+            return 0
+        fi
+        running || die "machine $1 stopped while starting"
+        rm -f "$a" "$b"
+        sum=''
+        if qmp "$dump_a" sleep:1 "$dump_b" >/dev/null 2>&1 && [[ -f $a && -f $b ]] && cmp -s "$a" "$b"; then
+            sum=$(md5sum < "$a" | cut -d' ' -f1)
+        fi
+        if [[ -z $sum || $sum != "$last" ]]; then
+            last=$sum; since=$SECONDS
+        elif (( SECONDS - since >= 300 )); then
+            (( reset == 0 )) || { rm -f "$a" "$b"; die "machine $1 hung again after a reset (no SSH, the screen unchanged for 5 minutes); look: $0 screenshot $1 screen.png"; }
+            reset=1
+            echo "Machine $1 seems hung while starting (no SSH, the screen unchanged for 5 minutes): reset." >&2
+            # cont: a machine paused by hand would stay paused after the reset
+            qmp '{"execute":"system_reset"}' '{"execute":"cont"}' >/dev/null
+            last=''; since=$SECONDS
+        fi
+        sleep 10
+    done
+    rm -f "$a" "$b"
+    die "machine $1 did not answer over SSH within $minutes minutes; look: $0 screenshot $1 screen.png"
+}
+
+# Restarts Windows over SSH and waits for the new one: first until the old one stops answering (right after the
+# command it still does), then as start does. Installing updates on the way down may take minutes.
+cmd_restart() {
+    vm_conf "$1"
+    running || die "machine $1 is not running"
+    # Its connection may break as Windows goes down: whether the restart came is told by SSH going away
+    ssh_answers 'shutdown.exe /r /f /t 0' || true
+    local waited=0
+    while ssh_answers 'exit 0'; do
+        (( waited < 900 )) || die "machine $1 still answers 15 minutes after the restart command (did it take it?)"
+        sleep 5; waited=$((waited + 5))
+    done
+    echo "Machine $1 is restarting..."
+    wait_ready "$1"
 }
 
 cmd_stop() {
@@ -206,10 +289,8 @@ cmd_stop() {
     if running; then
         # A full shutdown: the power button only hibernates the kernel when Fast Startup is on (the Windows
         # default), so a pending computer name or update would wait, and a saved state would hold a hibernated system
-        set_ssh_opts
         # (/f: an open window or dialog in the signed-in session must not hold the shutdown up)
-        ssh "${ssh_opts[@]}" -o BatchMode=yes -o ConnectTimeout=5 -p "$ssh_port" tester@127.0.0.1 'shutdown.exe /s /f /t 0' \
-            </dev/null >/dev/null 2>&1 || qmp '{"execute":"system_powerdown"}' >/dev/null || true
+        ssh_answers 'shutdown.exe /s /f /t 0' || qmp '{"execute":"system_powerdown"}' >/dev/null || true
         # Windows installs pending updates while it shuts down, which can take minutes; cutting the power then
         # could break the installation, so it gets 15 minutes before qemu is stopped
         local waited=0
@@ -303,7 +384,7 @@ cmd_screenshot() {
     running || die "machine $1 is not running"
     local out
     out=$(realpath -m "$2")
-    qmp "{\"execute\":\"screendump\",\"arguments\":{\"filename\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$out"),\"format\":\"png\"}}" >/dev/null
+    qmp "$(screendump_json "$out" png)" >/dev/null
     echo "$out"
 }
 
@@ -361,6 +442,8 @@ cmd=$1; shift
 case $cmd in
     create)     [[ $# -ge 2 && $# -le 3 ]] || die "usage: $0 create <pro|home> <iso> [memory-MB]"; cmd_create "$@" ;;
     start)      [[ $# -ge 1 && $# -le 2 ]] || die "usage: $0 start <vm> [memory-MB]"; cmd_start "$@" ;;
+    wait)       [[ $# -eq 1 ]] || die "usage: $0 wait <vm>"; wait_ready "$1" ;;
+    restart)    [[ $# -eq 1 ]] || die "usage: $0 restart <vm>"; cmd_restart "$1" ;;
     stop)       [[ $# -eq 1 ]] || die "usage: $0 stop <vm>"; cmd_stop "$1" ;;
     status)     cmd_status ;;
     ssh)        [[ $# -ge 1 ]] || die "usage: $0 ssh <vm> [command]"; cmd_ssh "$@" ;;
