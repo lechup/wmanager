@@ -142,6 +142,8 @@ Describe 'Set-WmAccounts' {
         Set-WmAccounts -Plan $script:plan
         Should -Invoke New-LocalUser -Times 1 -ParameterFilter { $Name -eq 'it-admin' -and $PasswordNeverExpires }
         Should -Invoke Set-WmRegValue -Times 1 -ParameterFilter { $Path -like '*\SpecialAccounts\UserList' -and $Name -eq 'it-admin' -and $Value -eq 0 }
+        # hidden, it is typed in the UAC prompt
+        Should -Invoke Set-WmRegValue -Times 1 -ParameterFilter { $Path -like '*\Policies\CredUI' -and $Name -eq 'EnumerateAdministrators' -and $Value -eq 0 }
         Should -Invoke Set-WmAccountPassword -Times 1 -ParameterFilter { $Name -eq 'anna' -and (Get-TestPlain $Old) -eq 'old-right' -and (Get-TestPlain $New) -eq 'New-2' }
         Should -Invoke Remove-WmAdminMember -Times 1 -ParameterFilter { $Sid -eq 'S-1-5-21-1-2-3-1001' }
         $script:admins | Should -Be @('S-1-5-21-1-2-3-1002')
@@ -216,6 +218,7 @@ Describe 'Local accounts on Windows' -Tag 'Integration' -Skip:(-not $env:WM_CI_S
     AfterAll {
         foreach ($n in $script:names) { Remove-LocalUser -Name $n -ErrorAction SilentlyContinue }
         Remove-ItemProperty -Path $script:WmHiddenAccountsKey -Name 'wmci-admin' -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $script:WmCredUiKey -Name 'EnumerateAdministrators' -ErrorAction SilentlyContinue
     }
 
     It 'tells the current password from a wrong one' {
@@ -234,6 +237,7 @@ Describe 'Local accounts on Windows' -Tag 'Integration' -Skip:(-not $env:WM_CI_S
         Get-WmAdminSids | Should -Contain $admin.SID.Value
         Get-WmAdminSids | Should -Not -Contain $script:person.Sid
         (Get-ItemProperty -Path $script:WmHiddenAccountsKey -Name 'wmci-admin').'wmci-admin' | Should -Be 0
+        (Get-ItemProperty -Path $script:WmCredUiKey -Name 'EnumerateAdministrators').EnumerateAdministrators | Should -Be 0
         Test-WmAccountPassword -Name 'wmci-admin' -Password (New-TestSecret 'Admin-pass-2026!') | Should -BeTrue
         Test-WmAccountPassword -Name 'wmci-person' -Password (New-TestSecret 'New-pass-2026!') | Should -BeTrue
         Test-WmAccountPassword -Name 'wmci-person' -Password (New-TestSecret $script:personOld) | Should -BeFalse

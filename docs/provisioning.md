@@ -61,7 +61,10 @@ Then, after the backup, in this order:
 
 - The administrator account is created (password never expires), or enabled; added to the Administrators group and
   hidden from the sign-in screen (`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList`).
-  To sign in with it, type its name in the UAC prompt (or in "Other user", where the sign-in screen shows one).
+- The UAC prompt asks for a name and a password (the policy "Enumerate administrator accounts on elevation" disabled:
+  `EnumerateAdministrators = 0` in `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\CredUI`). It lists only
+  the administrators the sign-in screen shows, so with the account hidden it would offer nothing but "No". A standard
+  user types the account's name and password there.
 - Checked: enabled and in the Administrators group. If not, the step stops here and nobody loses administrator rights.
 - The person's password is changed. If Windows refuses (the password rules of the computer, for example), the log says
   so and their password stays as it was.
@@ -72,8 +75,9 @@ the answer was no. Without a console (provisioning not run by a person at the co
 and the accounts stay as they are; the log has a warning. Only membership of the Administrators group itself is
 removed: an account that is an administrator through another group (a domain group) stays one.
 
-`Restore-Backup.ps1` asks whether to make those people administrators again and shows the administrator account on the
-sign-in screen again (it is a journaled registry value); the account itself stays, to be removed by hand if not needed.
+`Restore-Backup.ps1` asks whether to make those people administrators again, and shows the administrator account on
+the sign-in screen and in the UAC prompt again (journaled registry values); the account itself stays, to be removed by
+hand if not needed.
 
 ## Backup and restore
 

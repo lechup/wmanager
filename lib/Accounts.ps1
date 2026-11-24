@@ -4,12 +4,13 @@
 # does: set without it (a reset), Windows would lose what it keeps under the old one (passwords saved in the browser
 # and in Credential Manager, EFS files). The administrator account is created and checked first; the person is
 # made a standard user only then, so a failure never leaves the computer without an administrator. Restore-Backup.ps1
-# makes those people administrators again (state\accounts-demoted.txt); the hidden flag is a registry value of the
-# undo journal.
+# makes those people administrators again (state\accounts-demoted.txt); the hidden flag and the UAC prompt asking for
+# a name are registry values of the undo journal.
 
 $script:WmAdminsSid = 'S-1-5-32-544'
 $script:WmDemotedFile = Join-Path $script:WmStateDir 'accounts-demoted.txt'
 $script:WmHiddenAccountsKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
+$script:WmCredUiKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\CredUI'
 
 # LogonUser checks a password without signing in (a network logon: no profile, no session); NetUserChangePassword
 # changes one with the current one.
@@ -179,6 +180,10 @@ function Set-WmAccounts {
     $adminSid = $account.SID.Value
     if ((Get-WmAdminSids) -notcontains $adminSid) { Add-WmAdminMember -Sid $adminSid }
     Set-WmRegValue $script:WmHiddenAccountsKey $Plan.Admin 0
+    # The UAC prompt lists only the administrator accounts the sign-in screen shows: without another one it has no way
+    # to give the hidden one (just "No"). It asks for a name and password instead ("Enumerate administrator accounts
+    # on elevation" disabled, as CIS also recommends).
+    Set-WmRegValue $script:WmCredUiKey 'EnumerateAdministrators' 0
     $account = Get-LocalUser -SID $adminSid -ErrorAction Stop
     if (-not $account.Enabled -or (Get-WmAdminSids) -notcontains $adminSid) { throw (New-WmError 'provision.admin_not_usable' @($Plan.Admin)) }
     Write-WmLog -Key 'provision.admin_ready' -Arguments @($Plan.Admin)

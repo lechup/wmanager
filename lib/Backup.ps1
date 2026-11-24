@@ -23,6 +23,7 @@ $script:WmBackupMachineKeys = @(
     'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\DiagTrack'
     'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\dmwappushservice'
     'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts'
+    'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\CredUI'
 )
 
 # Relative to each user's hive
