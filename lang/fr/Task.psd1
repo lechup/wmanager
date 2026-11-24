@@ -8,5 +8,6 @@
     'task.every_day'        = 'tous les jours'
     'task.days_list'        = '{0}'
     'task.logon_registered' = 'Tâche wmanager-Logon enregistrée : les scripts d''ouverture de session des groupes.'
+    'task.startup_registered' = 'Tâche wmanager-Startup enregistrée : les scripts de démarrage des groupes.'
     'task.jobs_start_failed' = 'Impossible de démarrer wmanager-Jobs : {0}'
 }

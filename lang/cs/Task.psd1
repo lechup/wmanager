@@ -8,5 +8,6 @@
     'task.every_day'        = 'denně'
     'task.days_list'        = '{0}'
     'task.logon_registered' = 'Zaregistrována úloha wmanager-Logon: přihlašovací skripty skupin.'
+    'task.startup_registered' = 'Úloha wmanager-Startup zaregistrována: spouštěcí skripty skupin.'
     'task.jobs_start_failed' = 'Nepodařilo se spustit wmanager-Jobs: {0}'
 }

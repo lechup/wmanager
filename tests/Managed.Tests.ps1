@@ -392,6 +392,122 @@ Describe 'Invoke-WmLogonScripts' {
     }
 }
 
+Describe 'Invoke-WmStartupScripts' {
+    BeforeAll {
+        $script:WmManagedDir = Join-Path $TestDrive 'managed-startup'
+        $script:WmStartupDir = Join-Path $TestDrive 'startup'
+        $script:WmStartupServed = Join-Path $TestDrive 'startup-served.txt'
+        $script:WmHostName = 'PC-1'
+        $cfg = @{ Management = @{ Source = 'https://example.test/acme'; SourceId = $sid; ScriptTimeoutMinutes = 7 }
+                  Secrets = @{ ShareUser = 'office'; SharePassword = 'p4ss-W0rd' } }
+
+        # Startup scripts in the verified copy, as its manifest lists them (path -> SHA256)
+        function Set-StartupFiles {
+            param([hashtable]$Scripts)
+            $script:startupFiles = @{}
+            foreach ($rel in $Scripts.Keys) {
+                $file = Join-Path $script:WmManagedDir ($rel -replace '/', '\')
+                New-Item -ItemType Directory -Force -Path (Split-Path $file -Parent) | Out-Null
+                [IO.File]::WriteAllText($file, $Scripts[$rel])
+                $script:startupFiles[$rel] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+            }
+        }
+    }
+    BeforeEach {
+        Remove-Item -LiteralPath $script:WmStartupDir, $script:WmManagedDir, $script:WmStartupServed -Recurse -Force -ErrorAction SilentlyContinue
+        Mock Write-WmLog { }
+        Mock Get-WmBootMark { '' }
+        Mock Get-WmVerifiedGroups { [pscustomobject]@{ Files = $script:startupFiles; Groups = @('all', 'office'); Settings = $cfg.Management } }
+        Mock Invoke-WmScriptProcess { [pscustomobject]@{ ExitCode = 0; Output = 'mapped as office with p4ss-W0rd'; Errors = '' } }
+    }
+
+    It 'runs them group by group and by name, with only the secrets each names, hidden in the log' {
+        Set-StartupFiles @{
+            'groups/office/startup/10-share.ps1' = "# wmanager-secrets: ShareUser, SharePassword`r`nexit 0`r`n"
+            'groups/all/startup/20-clean.ps1'    = "exit 0`r`n"
+            'groups/all/startup/10-first.ps1'    = "exit 0`r`n"
+            'groups/all/startup/sub/10-deep.ps1' = "exit 0`r`n"
+            'groups/other/startup/10-not.ps1'    = "exit 0`r`n"
+        }
+        $script:order = New-Object System.Collections.Generic.List[string]
+        Mock Invoke-WmScriptProcess { [void]$script:order.Add((Split-Path $File -Leaf)); [pscustomobject]@{ ExitCode = 0; Output = 'mapped as office with p4ss-W0rd'; Errors = '' } }
+        Invoke-WmStartupScripts -Config $cfg
+        $script:order | Should -Be @('all-startup-10-first.ps1', 'all-startup-20-clean.ps1', 'office-startup-10-share.ps1')
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly -ParameterFilter {
+            $File -like '*office-startup-10-share.ps1' -and $Environment['WMANAGER_SECRET_SHAREPASSWORD'] -eq 'p4ss-W0rd' -and
+            $Environment['WMANAGER_GROUP'] -eq 'office' -and $Environment['WMANAGER_COMPUTER'] -eq 'PC-1' -and $TimeoutMinutes -eq 7 }
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly -ParameterFilter { $File -like '*all-startup-20-clean.ps1' -and $Environment.Count -eq 2 }
+        Should -Invoke Write-WmLog -Times 0 -ParameterFilter { "$Message" -match 'p4ss|office with' }
+        Should -Invoke Write-WmLog -Times 3 -Exactly -ParameterFilter { $Key -eq 'startup.script_done' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.scripts' -and $Arguments[0] -eq 3 }
+    }
+
+    It 'skips a script whose secret is missing or whose file is not the verified one, and logs exit codes and time limits' {
+        Set-StartupFiles @{
+            'groups/all/startup/10-missing.ps1' = "# wmanager-secrets: Nope`r`nexit 0`r`n"
+            'groups/all/startup/20-changed.ps1' = "exit 0`r`n"
+            'groups/all/startup/30-fails.ps1'   = "exit 3`r`n"
+            'groups/all/startup/40-hangs.ps1'   = "Start-Sleep 600`r`n"
+        }
+        [IO.File]::WriteAllText((Join-Path $script:WmManagedDir 'groups\all\startup\20-changed.ps1'), "exit 5`r`n")
+        Mock Invoke-WmScriptProcess {
+            if ($File -like '*30-fails.ps1') { [pscustomobject]@{ ExitCode = 3; Output = ''; Errors = 'boom' } }
+            else { [pscustomobject]@{ ExitCode = $null; Output = ''; Errors = '' } }
+        }
+        Invoke-WmStartupScripts -Config $cfg
+        Should -Invoke Invoke-WmScriptProcess -Times 2 -Exactly
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.script_not_run' -and $Arguments[0] -eq 'all/10-missing' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.script_not_run' -and $Arguments[0] -eq 'all/20-changed' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.script_exit_code' -and $Arguments[1] -eq 3 }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.script_timeout' -and $Arguments[1] -eq 7 }
+    }
+
+    It 'says so without a verified copy, after waiting for one, and drops the copies of scripts gone from the source' {
+        Mock Get-WmVerifiedGroups { $null }
+        Invoke-WmStartupScripts -Config $cfg -CopyWaitSeconds 0
+        Should -Invoke Invoke-WmScriptProcess -Times 0
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.no_copy' -and $Level -eq 'warn' }
+
+        Set-StartupFiles @{ 'groups/all/startup/10-first.ps1' = "exit 0`r`n" }
+        Mock Get-WmVerifiedGroups { [pscustomobject]@{ Files = $script:startupFiles; Groups = @('all'); Settings = $cfg.Management } }
+        Invoke-WmStartupScripts -Config $cfg
+        Test-Path -LiteralPath (Join-Path $script:WmStartupDir 'all-startup-10-first.ps1') | Should -BeTrue
+        $script:startupFiles = @{}
+        Invoke-WmStartupScripts -Config $cfg
+        @(Get-ChildItem -LiteralPath $script:WmStartupDir -File).Count | Should -Be 0
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.scripts' }
+    }
+
+    It 'serves a start once, whichever of its two triggers comes second' {
+        Set-StartupFiles @{ 'groups/all/startup/10-first.ps1' = "exit 0`r`n" }
+        Mock Get-WmBootMark { '4711' }
+        Invoke-WmStartupScripts -Config $cfg
+        Invoke-WmStartupScripts -Config $cfg
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly
+        Mock Get-WmBootMark { '4800' }
+        Invoke-WmStartupScripts -Config $cfg
+        Should -Invoke Invoke-WmScriptProcess -Times 2 -Exactly
+    }
+
+    It 'takes 3010 as done, and goes on after a script that can''t start' {
+        Set-StartupFiles @{
+            'groups/all/startup/10-restart.ps1' = "exit 3010`r`n"
+            'groups/all/startup/20-blocked.ps1' = "exit 0`r`n"
+            'groups/all/startup/30-after.ps1'   = "exit 0`r`n"
+        }
+        Mock Invoke-WmScriptProcess {
+            if ($File -like '*10-restart.ps1') { return [pscustomobject]@{ ExitCode = 3010; Output = ''; Errors = '' } }
+            if ($File -like '*20-blocked.ps1') { throw 'Access is denied' }
+            [pscustomobject]@{ ExitCode = 0; Output = ''; Errors = '' }
+        }
+        Invoke-WmStartupScripts -Config $cfg
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.script_restart' -and $Arguments[0] -eq 'all/10-restart' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.script_not_run' -and $Arguments[0] -eq 'all/20-blocked' -and $Level -eq 'error' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'startup.script_done' -and $Arguments[0] -eq 'all/30-after' }
+        Should -Invoke Write-WmLog -Times 0 -ParameterFilter { $Key -eq 'startup.script_exit_code' }
+    }
+}
+
 Describe 'scripts and jobs that run as the user' {
     BeforeAll {
         function Get-WmUserSessions { }
