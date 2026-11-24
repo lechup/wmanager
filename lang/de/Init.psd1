@@ -90,4 +90,10 @@
     'init.next_copy'                = 'Als Nächstes: Kopieren Sie den gesamten wmanager-Ordner mit dieser Datei auf ein USB-Laufwerk oder eine Freigabe und führen Sie auf dem Computer run.cmd aus.'
     'init.next_tokens'              = 'Die Datei enthält Token: Behalten Sie das USB-Laufwerk unter Ihrer Kontrolle.'
     'init.next_other_settings'      = 'Die übrigen Einstellungen (zu entfernende Apps, Browser, Chocolatey-Quellen) ändern Sie von Hand in dieser Datei, die Programmliste in choco-reqs.txt.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'init.section_accounts'                      = 'Konten: ein eigener Administrator, die angemeldete Person als Standardbenutzer (optional)'
+    'init.admin_account'                         = 'Name des Administratorkontos (Enter = beibehalten; - = keins: die Konten bleiben, wie sie sind)'
+    'init.admin_account_hint'                    = 'Bis zu 20 Buchstaben, Ziffern, ., - und _, beginnend mit Buchstabe oder Ziffer; - für keins.'
+    'init.admin_account_note'                    = 'Die Einrichtung legt dieses Konto an (auf dem Anmeldebildschirm ausgeblendet) und macht die angemeldete Person zum Standardbenutzer; beide Kennwörter werden am Computer eingegeben und nirgends gespeichert.'
 }

@@ -90,4 +90,10 @@
     'init.next_copy'                = 'A seguir: copie a pasta wmanager inteira com este ficheiro para uma unidade USB ou uma partilha e execute run.cmd no computador.'
     'init.next_tokens'              = 'O ficheiro contém tokens: mantenha a unidade USB sob o seu controlo.'
     'init.next_other_settings'      = 'Altere as outras definições (aplicações a remover, browser, origens do Chocolatey) neste ficheiro à mão, e a lista de programas em choco-reqs.txt.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'init.section_accounts'                      = 'Contas: um administrador à parte, a pessoa com sessão iniciada como utilizador padrão (opcional)'
+    'init.admin_account'                         = 'Nome da conta de administrador (Enter = manter; - = nenhuma: as contas ficam como estão)'
+    'init.admin_account_hint'                    = 'Até 20 letras, dígitos, ., - e _, a começar por letra ou dígito; - para nenhuma.'
+    'init.admin_account_note'                    = 'A instalação cria esta conta (oculta no ecrã de início de sessão) e torna a pessoa com sessão iniciada um utilizador padrão; ambas as palavras-passe são escritas no computador e não ficam guardadas em lado nenhum.'
 }

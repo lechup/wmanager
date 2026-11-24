@@ -20,4 +20,10 @@
     'restore.summary'                   = 'Fertig: {0} Warnungen, {1} Fehler. Protokoll: {2}'
     'restore.finished_with_errors'      = 'Die Wiederherstellung wurde mit Fehlern abgeschlossen. Prüfen Sie das Protokoll oben.'
     'restore.finished'                  = 'Die Wiederherstellung ist abgeschlossen. Starten Sie den Computer neu, damit die Einstellungen wirksam werden.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'restore.confirm_admin_again'                = 'Die Personen, die die Einrichtung zu Standardbenutzern gemacht hat, wieder zu Administratoren machen?'
+    'restore.admin_again'                        = '{0} ist wieder Administrator.'
+    'restore.admin_again_failed'                 = '{0} konnte nicht wieder Administrator werden: {1}'
+    'restore.admin_account_stays'                = 'Das Administratorkonto {0} bleibt (wieder auf dem Anmeldebildschirm sichtbar); bei Bedarf von Hand entfernen.'
 }

@@ -5,6 +5,8 @@ Provisioning for Windows 11 (Home and Pro) office computers:
 - removes Microsoft bloatware and services (Teams, OneDrive, Copilot, Widgets, Xbox, Outlook (new) and more),
 - turns off telemetry (down to the minimum the edition allows), ads, suggestions and Bing in search,
 - installs Chocolatey and the packages from `choco-reqs.txt`,
+- optionally gives the computer a hidden administrator account and makes the person signed in a standard user,
+  with both passwords typed at the computer (see [Administrator account](docs/provisioning.md#administrator-account)),
 - optionally puts computers into groups from a signed management source: extra packages, scripts and scheduled jobs
   (e.g. a daily system report to Loki) per group (see [Computer groups](docs/groups.md)),
 - registers a package update, every day at 12:00 by default,
@@ -94,7 +96,7 @@ changing anything.
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |
 | `choco-reqs.txt` | Package list (when there is no management source) |
 | `lang\<code>\*.psd1` | Messages in each language (see [Languages](docs/languages.md)) |
-| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, Chocolatey, computer groups, wmanager's own updates, scheduled tasks, the configuration wizard |
+| `lib\*.ps1` | Stages: shared functions, backup and undo journal, debloat, privacy, local accounts, Chocolatey, computer groups, wmanager's own updates, scheduled tasks, the configuration wizard |
 | `tools/` | For the management source: `groups.ps1` (show, check and edit groups, packages, scripts, jobs and the wmanager version, switch on library items; PowerShell 7 or 5.1), and Linux scripts `new-signing-cert.sh` (once) and `publish.sh` (after every change); `wm.ps1`, a menu over all of them for several companies (see [Several companies](docs/companies.md)); `build-release.sh` (see [Releases](docs/releases.md)) |
 | `configs\<company>\` | Optional, on the USB drive: the configuration of each company; `run.cmd` asks which one (see [Several companies](docs/companies.md)) |
 | `library/` | Ready group scripts and jobs to switch on with `tools/groups.ps1 enable` (see [Library](docs/groups.md#library-of-ready-scripts-and-jobs)) |

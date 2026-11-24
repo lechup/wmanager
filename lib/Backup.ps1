@@ -10,7 +10,7 @@
 #   manifest.txt                               which key went to which file, or that it did not exist
 # The undo journal state\backup\journal.jsonl is shared by all runs: for every registry value
 # wmanager changed, the state before the very first change (see Add-WmJournalEntry in Common.ps1).
-# Keep the key lists below in sync with lib\Debloat.ps1 and lib\Privacy.ps1.
+# Keep the key lists below in sync with lib\Debloat.ps1, lib\Privacy.ps1 and lib\Accounts.ps1.
 
 $script:WmOemAssocFile = Join-Path $env:SystemRoot 'System32\OEMDefaultAssociations.xml'
 
@@ -22,6 +22,8 @@ $script:WmBackupMachineKeys = @(
     'HKEY_LOCAL_MACHINE\SOFTWARE\Classes\WOW6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}'
     'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\DiagTrack'
     'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\dmwappushservice'
+    'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts'
+    'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\CredUI'
 )
 
 # Relative to each user's hive

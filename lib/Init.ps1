@@ -50,6 +50,28 @@ function Set-WmConfigText {
     return $Text.Substring(0, $m.Groups[2].Index) + $Literal + $Text.Substring($m.Groups[2].Index + $m.Groups[2].Length)
 }
 
+# Like Set-WmConfigText, but a file from before the setting gets it, with $Comment above it, before the
+# configuration's closing brace: an older configuration keeps everything else (starting it over from the example
+# would lose what was added by hand, e.g. the secrets).
+function Set-WmConfigTextOrAdd {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Literal,
+        [string[]]$Comment = @()
+    )
+    if ([regex]::IsMatch($Text, '(?m)^\s*' + [regex]::Escape($Name) + '\s*=')) { return (Set-WmConfigText $Text $Name $Literal) }
+    $nl = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.AddRange([string[]]($Text -split "\r?\n"))
+    $last = -1
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) { if ($lines[$i] -match '^\}\s*$') { $last = $i; break } }
+    if ($last -lt 0) { throw (New-WmError 'init.setting_not_once' @($Name, 0)) }
+    $add = @('') + @($Comment | ForEach-Object { "    # $_" }) + @("    $Name = $Literal")
+    $lines.InsertRange($last, [string[]]$add)
+    return ($lines -join $nl)
+}
+
 # UTF-8 with BOM and CRLF, like the other .psd1 files (Windows PowerShell 5.1 reads them correctly).
 function Write-WmConfigFile {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Text)

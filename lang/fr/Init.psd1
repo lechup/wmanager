@@ -90,4 +90,10 @@
     'init.next_copy'                = 'Ensuite : copiez tout le dossier wmanager avec ce fichier sur une clé USB ou un partage, puis exécutez run.cmd sur l''ordinateur.'
     'init.next_tokens'              = 'Le fichier contient des jetons : gardez la clé USB sous votre contrôle.'
     'init.next_other_settings'      = 'Modifiez à la main dans ce fichier les autres paramètres (applications à supprimer, navigateur, sources Chocolatey), et la liste des programmes dans choco-reqs.txt.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'init.section_accounts'                      = 'Comptes : un administrateur à part, la personne connectée en utilisateur standard (facultatif)'
+    'init.admin_account'                         = 'Nom du compte administrateur (Entrée = garder ; - = aucun : les comptes restent tels quels)'
+    'init.admin_account_hint'                    = 'Jusqu''à 20 lettres, chiffres, ., - et _, commençant par une lettre ou un chiffre ; - pour aucun.'
+    'init.admin_account_note'                    = 'L''installation crée ce compte (masqué sur l''écran de connexion) et fait de la personne connectée un utilisateur standard ; les deux mots de passe se tapent sur l''ordinateur et ne sont gardés nulle part.'
 }

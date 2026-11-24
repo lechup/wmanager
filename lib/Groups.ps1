@@ -11,6 +11,13 @@ function Test-WmComputerName {
     return ($Name -match '^(?![0-9]+$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?$')
 }
 
+# A local account name the configuration may give (AdminAccount): up to 20 letters, digits, '.', '-', '_', starting
+# with a letter or digit (Windows allows more, but these work in every tool and language)
+function Test-WmAccountName {
+    param([string]$Name)
+    return ($Name -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$' -and $Name -notmatch '\.$')
+}
+
 # A path from the manifest: relative, '/' separated, letters, digits, '.', '-', '_' only.
 # No '.' or '..' segments, no segment ending with a dot (Windows drops it) and no device names (NUL, COM1...).
 function Test-WmManagedPath {

@@ -48,6 +48,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\SelfUpdate.ps1')
 . (Join-Path $here 'lib\Task.ps1')
+. (Join-Path $here 'lib\Accounts.ps1')
 Initialize-WmLanguage -Lang $Lang
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,8 @@ try {
 
 try {
     $newName = Resolve-WmComputerName -Requested $ComputerName -Prompt ([bool](Get-WmSetting $config 'PromptComputerName' $true))
+    # The accounts' questions too, so whoever starts provisioning answers everything now and can leave it running
+    $accounts = Read-WmAccountPlan -Config $config
 } catch {
     Write-Host (Get-WmText 'provision.stopped' @(Get-WmErrorText $_)) -ForegroundColor Red
     exit 1
@@ -271,6 +274,9 @@ try {
     # Pinged only once the final name is known, so start and end go to the same check
     Send-WmHealthcheck -Config $config -Signal start
     $hcStarted = $true
+
+    # A separate administrator account, the person signed in a standard user (AdminAccount; lib\Accounts.ps1)
+    if ($accounts) { $null = Invoke-WmStep 'step.accounts' { Set-WmAccounts -Plan $accounts } }
 
     # Each stage on its own: a failure (e.g. no network for Chocolatey) is logged as an error,
     # but the scheduled tasks still get registered, so the scheduled update can finish the job.

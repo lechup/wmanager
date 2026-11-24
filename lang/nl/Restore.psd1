@@ -20,4 +20,10 @@
     'restore.summary'                   = 'Klaar: {0} waarschuwingen, {1} fouten. Logboek: {2}'
     'restore.finished_with_errors'      = 'Herstel voltooid met fouten. Controleer het logboek hierboven.'
     'restore.finished'                  = 'Herstel voltooid. Start de computer opnieuw op zodat de instellingen van kracht worden.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'restore.confirm_admin_again'                = 'De mensen die de inrichting standaardgebruiker heeft gemaakt weer beheerder maken?'
+    'restore.admin_again'                        = '{0} is weer beheerder.'
+    'restore.admin_again_failed'                 = '{0} kon niet weer beheerder worden: {1}'
+    'restore.admin_account_stays'                = 'Het beheerdersaccount {0} blijft (weer zichtbaar op het aanmeldscherm); verwijder het met de hand als het niet nodig is.'
 }

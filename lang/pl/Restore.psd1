@@ -20,4 +20,10 @@
     'restore.summary'                   = 'Koniec: ostrzeżenia {0}, błędy {1}. Log: {2}'
     'restore.finished_with_errors'      = 'Przywracanie zakończone z błędami. Sprawdź log powyżej.'
     'restore.finished'                  = 'Przywracanie zakończone. Uruchom ponownie komputer, żeby ustawienia zadziałały.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'restore.confirm_admin_again'                = 'Przywrócić uprawnienia administratora osobom, które provisioning zrobił zwykłymi użytkownikami?'
+    'restore.admin_again'                        = '{0} jest znowu administratorem.'
+    'restore.admin_again_failed'                 = 'Nie udało się przywrócić uprawnień administratora dla {0}: {1}'
+    'restore.admin_account_stays'                = 'Konto administratora {0} zostaje (znowu widoczne na ekranie logowania); usuń je ręcznie, jeśli jest niepotrzebne.'
 }

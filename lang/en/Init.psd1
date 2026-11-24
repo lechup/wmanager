@@ -90,4 +90,10 @@
     'init.next_copy'                = 'Next: copy the whole wmanager folder with this file to a USB drive or a share and run run.cmd on the computer.'
     'init.next_tokens'              = 'The file holds tokens: keep the USB drive under your control.'
     'init.next_other_settings'      = 'Change the other settings (apps to remove, browser, Chocolatey sources) in this file by hand, and the list of programs in choco-reqs.txt.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'init.section_accounts'                      = 'Accounts: a separate administrator, the person signed in a standard user (optional)'
+    'init.admin_account'                         = 'Name of the administrator account (Enter = keep; - = none: the accounts stay as they are)'
+    'init.admin_account_hint'                    = 'Up to 20 letters, digits, ., - and _, starting with a letter or digit; - for none.'
+    'init.admin_account_note'                    = 'Provisioning creates this account (hidden from the sign-in screen) and makes the person signed in a standard user; both passwords are typed at the computer and kept nowhere.'
 }

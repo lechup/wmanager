@@ -20,4 +20,10 @@
     'restore.summary'                   = 'Hotovo. Upozornění: {0}, chyby: {1}. Protokol: {2}'
     'restore.finished_with_errors'      = 'Obnovení skončilo s chybami. Zkontrolujte protokol výše.'
     'restore.finished'                  = 'Obnovení dokončeno. Restartujte počítač, aby se nastavení projevila.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'restore.confirm_admin_again'                = 'Vrátit práva správce lidem, které instalace udělala standardními uživateli?'
+    'restore.admin_again'                        = '{0} je opět správce.'
+    'restore.admin_again_failed'                 = '{0} se nepodařilo znovu udělat správcem: {1}'
+    'restore.admin_account_stays'                = 'Účet správce {0} zůstává (opět vidět na přihlašovací obrazovce); odstraňte ho ručně, pokud není potřeba.'
 }

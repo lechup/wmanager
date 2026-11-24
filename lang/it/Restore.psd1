@@ -20,4 +20,10 @@
     'restore.summary'                   = 'Fatto: {0} avvisi, {1} errori. Log: {2}'
     'restore.finished_with_errors'      = 'Ripristino terminato con errori. Controlla il log qui sopra.'
     'restore.finished'                  = 'Ripristino terminato. Riavvia il computer per rendere effettive le impostazioni.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'restore.confirm_admin_again'                = 'Ridare i diritti di amministratore alle persone che l''installazione ha reso utenti standard?'
+    'restore.admin_again'                        = '{0} è di nuovo amministratore.'
+    'restore.admin_again_failed'                 = 'Impossibile rendere di nuovo amministratore {0}: {1}'
+    'restore.admin_account_stays'                = 'L''account amministratore {0} resta (di nuovo visibile nella schermata di accesso); rimuoverlo a mano se non serve.'
 }

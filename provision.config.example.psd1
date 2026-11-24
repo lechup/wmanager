@@ -134,6 +134,12 @@
     # Ask for the name when -ComputerName is not given (Enter = keep current).
     PromptComputerName = $true
 
+    # --- Accounts (optional) -------------------------------------------------------
+    # A local administrator account provisioning creates, hidden from the sign-in screen; the person signed in
+    # becomes a standard user, and what needs administrator rights asks for this account. Both passwords are typed
+    # at the computer when provisioning starts (twice, not shown) and kept nowhere. Empty = off. docs/provisioning.md
+    AdminAccount = ''
+
     # --- Logs and monitoring --------------------------------------------------
     LogRetentionDays = 90
 
