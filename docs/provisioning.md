@@ -1,11 +1,13 @@
 # Provisioning
 
-What a run does to a computer, the backup and how to undo it, the package list and the scheduled update.
+What a run does to a computer, the administrator account, the backup and how to undo it, the package list and the
+scheduled update.
 
 ## Provisioning steps
 
 1. Check for Windows 11 and administrator rights, the management settings and signing certificate (if set),
-   determine the computer name.
+   determine the computer name. With `AdminAccount` set, ask the passwords of the accounts (see
+   [Administrator account](#administrator-account)): all questions come first, so the run can be left alone afterwards.
 2. Check that the Chocolatey, package-list and management servers answer. Without internet the script asks whether
    to go on without installing programs (Enter = stop, nothing changed yet); the scheduled update installs them later.
 3. System restore point. If it can't be created, the script asks whether to go on without it (Enter = stop).
@@ -14,6 +16,7 @@ What a run does to a computer, the backup and how to undo it, the package list a
    If it fails, the script asks the same way.
 5. Copy files to `C:\ProgramData\wmanager` and set permissions.
 6. Rename the computer (if a name was given; takes effect after a restart).
+   Then, with `AdminAccount`, the administrator account and the person signed in made a standard user.
 7. Debloat: apps from the `RemoveAppx` list (from the system image and for all users), OneDrive, policies, Edge.
    For DevHome and the new Outlook it also removes the Windows Update entries (`UScheduler_Oobe`) that would install
    them again minutes after removal. An installation Windows has already started (in the first minutes after setup)
@@ -35,6 +38,42 @@ User settings are applied to every existing profile and to the default profile (
 If Desktop, Documents or Pictures are redirected to OneDrive in any profile (local, domain or Entra ID account),
 or a profile's registry cannot be checked, the script **does not remove** OneDrive on that computer
 and writes a warning to the log.
+
+## Administrator account
+
+With `AdminAccount = 'name'` in `provision.config.psd1` (the wizard asks for it; empty = off), provisioning gives the
+computer a separate local administrator account, and the person signed in at the computer becomes a standard user:
+what needs administrator rights then asks for the administrator account (the UAC prompt).
+
+At the start, before anything changes, it asks at the computer (passwords are not shown, typed twice, kept nowhere:
+not in the configuration, the log or Loki):
+
+1. The password of the administrator account. A new account needs one; for an account that exists, Enter keeps its
+   password (and anything else typed sets it anew).
+2. Whether the person signed in (the user of the computer's screen, not the account provisioning runs as after UAC)
+   becomes a standard user, Enter = yes. Not asked when they are a standard user already.
+3. A new password for that person, Enter = no change; then their current password (Enter = none), checked right away,
+   three tries. The password is changed with the current one, as Ctrl+Alt+Del does: set without it, Windows would lose
+   what it keeps under the old one (passwords saved in the browser and in Credential Manager, EFS files). Not asked for
+   a Microsoft account (its password is changed at account.microsoft.com) or a domain account.
+
+Then, after the backup, in this order:
+
+- The administrator account is created (password never expires), or enabled; added to the Administrators group and
+  hidden from the sign-in screen (`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList`).
+  To sign in with it, type its name in the UAC prompt (or in "Other user", where the sign-in screen shows one).
+- Checked: enabled and in the Administrators group. If not, the step stops here and nobody loses administrator rights.
+- The person's password is changed. If Windows refuses (the password rules of the computer, for example), the log says
+  so and their password stays as it was.
+- The person is removed from the Administrators group and written down for the restore (`state\accounts-demoted.txt`).
+
+Nobody becomes a standard user when nobody is signed in, when the administrator account itself is signed in, or when
+the answer was no. Without a console (provisioning not run by a person at the computer, e.g. over SSH) nothing is asked
+and the accounts stay as they are; the log has a warning. Only membership of the Administrators group itself is
+removed: an account that is an administrator through another group (a domain group) stays one.
+
+`Restore-Backup.ps1` asks whether to make those people administrators again and shows the administrator account on the
+sign-in screen again (it is a journaled registry value); the account itself stays, to be removed by hand if not needed.
 
 ## Backup and restore
 
@@ -67,8 +106,11 @@ removed since then, and offers to disable the wmanager tasks (otherwise the sche
 With the tasks disabled it also removes the wmanager signing certificate from the trusted root store.
 Restart the computer afterwards.
 
+It asks whether to make the people provisioning made standard users administrators again (see
+[Administrator account](#administrator-account)).
+
 Not undone: removed Store apps (reinstall from the Store) and OneDrive (reinstall from Microsoft), installed
-Chocolatey packages, what group scripts changed, the computer name. Settings the scheduled update applies to profiles created after provisioning
+Chocolatey packages, what group scripts changed, the computer name, the administrator account (it stays) and passwords. Settings the scheduled update applies to profiles created after provisioning
 are not in the journal, nor are `UScheduler_Oobe` entries that Windows created after provisioning and the scheduled update deleted. Programs and system files can be rolled back with the system restore point.
 
 ## choco-reqs.txt

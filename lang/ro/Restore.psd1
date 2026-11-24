@@ -20,4 +20,10 @@
     'restore.summary'                   = 'Gata. Avertismente: {0}, erori: {1}. Jurnal: {2}'
     'restore.finished_with_errors'      = 'Restaurarea s-a încheiat cu erori. Verificați jurnalul de mai sus.'
     'restore.finished'                  = 'Restaurarea s-a încheiat. Reporniți computerul pentru ca setările să intre în vigoare.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'restore.confirm_admin_again'                = 'Le redați drepturile de administrator persoanelor pe care configurarea le-a făcut utilizatori standard?'
+    'restore.admin_again'                        = '{0} este din nou administrator.'
+    'restore.admin_again_failed'                 = '{0} nu a putut redeveni administrator: {1}'
+    'restore.admin_account_stays'                = 'Contul de administrator {0} rămâne (din nou vizibil pe ecranul de conectare); eliminați-l manual dacă nu mai e necesar.'
 }

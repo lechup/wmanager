@@ -20,4 +20,10 @@
     'restore.summary'                   = 'Done: {0} warnings, {1} errors. Log: {2}'
     'restore.finished_with_errors'      = 'Restore finished with errors. Check the log above.'
     'restore.finished'                  = 'Restore finished. Restart the computer so that the settings take effect.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'restore.confirm_admin_again'                = 'Make the people provisioning made standard users administrators again?'
+    'restore.admin_again'                        = '{0} is an administrator again.'
+    'restore.admin_again_failed'                 = '{0} couldn''t be made an administrator again: {1}'
+    'restore.admin_account_stays'                = 'The administrator account {0} stays (shown on the sign-in screen again); remove it by hand if it is not needed.'
 }

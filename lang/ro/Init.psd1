@@ -90,4 +90,10 @@
     'init.next_copy'                = 'Pasul următor: copiați întregul folder wmanager împreună cu acest fișier pe o unitate USB sau într-un folder partajat și rulați run.cmd pe computer.'
     'init.next_tokens'              = 'Fișierul conține tokenuri: păstrați unitatea USB sub controlul dvs.'
     'init.next_other_settings'      = 'Modificați manual în acest fișier celelalte setări (aplicațiile de eliminat, browserul, sursele Chocolatey), iar lista de programe în choco-reqs.txt.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'init.section_accounts'                      = 'Conturi: un administrator separat, persoana conectată ca utilizator standard (opțional)'
+    'init.admin_account'                         = 'Numele contului de administrator (Enter = păstrează; - = niciunul: conturile rămân cum sunt)'
+    'init.admin_account_hint'                    = 'Până la 20 de litere, cifre, ., - și _, începând cu o literă sau cifră; - pentru niciunul.'
+    'init.admin_account_note'                    = 'Configurarea creează acest cont (ascuns pe ecranul de conectare) și face din persoana conectată un utilizator standard; ambele parole se tastează la computer și nu se păstrează nicăieri.'
 }

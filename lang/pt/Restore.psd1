@@ -20,4 +20,10 @@
     'restore.summary'                   = 'Concluído: {0} avisos, {1} erros. Registo: {2}'
     'restore.finished_with_errors'      = 'O restauro terminou com erros. Verifique o registo acima.'
     'restore.finished'                  = 'Restauro concluído. Reinicie o computador para que as definições entrem em vigor.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'restore.confirm_admin_again'                = 'Devolver os direitos de administrador às pessoas que a instalação tornou utilizadores padrão?'
+    'restore.admin_again'                        = '{0} é de novo administrador.'
+    'restore.admin_again_failed'                 = 'Não foi possível tornar {0} administrador de novo: {1}'
+    'restore.admin_account_stays'                = 'A conta de administrador {0} fica (de novo visível no ecrã de início de sessão); remova-a à mão se não for precisa.'
 }

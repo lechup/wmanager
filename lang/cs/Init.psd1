@@ -90,4 +90,10 @@
     'init.next_copy'                = 'Dále: zkopírujte celou složku wmanager i s tímto souborem na jednotku USB nebo do sdílené složky a na počítači spusťte run.cmd.'
     'init.next_tokens'              = 'Soubor obsahuje tokeny: mějte jednotku USB pod kontrolou.'
     'init.next_other_settings'      = 'Ostatní nastavení (aplikace k odebrání, prohlížeč, zdroje Chocolatey) změňte v tomto souboru ručně, seznam programů v choco-reqs.txt.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'init.section_accounts'                      = 'Účty: samostatný správce, přihlášená osoba jako standardní uživatel (volitelné)'
+    'init.admin_account'                         = 'Název účtu správce (Enter = ponechat; - = žádný: účty zůstanou, jak jsou)'
+    'init.admin_account_hint'                    = 'Až 20 písmen, číslic, ., - a _, na začátku písmeno nebo číslice; - pro žádný.'
+    'init.admin_account_note'                    = 'Instalace vytvoří tento účet (skrytý na přihlašovací obrazovce) a z přihlášené osoby udělá standardního uživatele; obě hesla se zadávají u počítače a nikde se neukládají.'
 }

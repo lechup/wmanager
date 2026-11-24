@@ -32,6 +32,7 @@ param([string]$ConfigPath, [string]$Lang, [string]$DefaultSourceId)
 $ErrorActionPreference = 'Stop'
 . (Join-Path (Join-Path $PSScriptRoot 'lib') 'Lang.ps1')
 . (Join-Path (Join-Path $PSScriptRoot 'lib') 'Init.ps1')
+. (Join-Path (Join-Path $PSScriptRoot 'lib') 'Groups.ps1')   # Test-WmAccountName
 Initialize-WmLanguage -Lang $Lang
 if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot 'provision.config.psd1' }
 $ConfigPath = [IO.Path]::GetFullPath($ConfigPath)
@@ -257,6 +258,18 @@ $text = Set-WmConfigText $text 'Source' (ConvertTo-WmPsdString $source)
 $text = Set-WmConfigText $text 'SourceId' (ConvertTo-WmPsdString $sourceId)
 $text = Set-WmConfigText $text 'AuthHeader' (ConvertTo-WmPsdString $authHeader)
 $text = Set-WmConfigText $text 'Certificate' (ConvertTo-WmPsdString $certName)
+
+# --- Accounts ---------------------------------------------------------------------------------------------------
+# A separate administrator account and the person signed in a standard user (lib\Accounts.ps1). Only the name is
+# kept: the passwords are typed at each computer during provisioning.
+Write-Section (Get-WmText 'init.section_accounts')
+Write-Host ('  ' + (Get-WmText 'init.admin_account_note'))
+$admin = Read-Answer (Get-WmText 'init.admin_account') ([string](Get-Current 'AdminAccount' '')) `
+    { $args[0] -eq '' -or $args[0] -eq '-' -or (Test-WmAccountName $args[0]) } (Get-WmText 'init.admin_account_hint')
+if ($admin -eq '-') { $admin = '' }
+$text = Set-WmConfigTextOrAdd $text 'AdminAccount' (ConvertTo-WmPsdString $admin) @(
+    'A local administrator account provisioning creates, hidden from the sign-in screen; the person signed in becomes'
+    'a standard user. Both passwords are typed at the computer during provisioning, kept nowhere. Empty = off.')
 
 # --- Saving -----------------------------------------------------------------------------------------------------
 Write-Section (Get-WmText 'init.section_save')

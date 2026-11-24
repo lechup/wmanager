@@ -90,4 +90,10 @@
     'init.next_copy'                = 'Dalej: skopiuj cały folder wmanagera razem z tym plikiem na pendrive albo udział i na komputerze uruchom run.cmd.'
     'init.next_tokens'              = 'Plik zawiera tokeny: trzymaj pendrive pod kontrolą.'
     'init.next_other_settings'      = 'Pozostałe ustawienia (aplikacje do usunięcia, przeglądarka, źródła Chocolatey) zmienisz w tym pliku ręcznie; listę programów w choco-reqs.txt.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'init.section_accounts'                      = 'Konta: osobny administrator, zalogowana osoba zwykłym użytkownikiem (opcjonalnie)'
+    'init.admin_account'                         = 'Nazwa konta administratora (Enter = bez zmian; - = brak: konta zostają, jak są)'
+    'init.admin_account_hint'                    = 'Do 20 liter, cyfr, ., - i _, na początku litera lub cyfra; - gdy brak.'
+    'init.admin_account_note'                    = 'Provisioning tworzy to konto (ukryte na ekranie logowania) i robi z zalogowanej osoby zwykłego użytkownika; oba hasła wpisuje się przy komputerze i nigdzie się ich nie zapisuje.'
 }

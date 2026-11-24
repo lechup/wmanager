@@ -75,6 +75,16 @@ BeforeAll {
     }
 }
 
+Describe 'Test-WmAccountName' {
+    BeforeAll { . (Join-Path (Join-Path $script:root 'lib') 'Groups.ps1') }
+    It 'takes plain local account names' {
+        foreach ($n in @('it-admin', 'Admin2', 'office.admin', 'a', 'x_y', '12345678901234567890')) { Test-WmAccountName $n | Should -BeTrue -Because $n }
+    }
+    It 'refuses names other tools or languages would trip on' {
+        foreach ($n in @('', 'bad name', '-admin', '.admin', 'admin.', 'a\b', 'a@b', 'ąbc', '123456789012345678901')) { Test-WmAccountName $n | Should -BeFalse -Because $n }
+    }
+}
+
 Describe 'show' {
     It 'lists what a computer gets: its groups, the merged packages with their list, scripts and jobs' {
         $src = New-Source

@@ -90,4 +90,10 @@
     'init.next_copy'                = 'Volgende stap: kopieer de hele map wmanager met dit bestand naar een USB-station of een netwerkshare en voer run.cmd uit op de computer.'
     'init.next_tokens'              = 'Het bestand bevat tokens: houd het USB-station onder uw beheer.'
     'init.next_other_settings'      = 'Wijzig de overige instellingen (te verwijderen apps, browser, Chocolatey-bronnen) handmatig in dit bestand, en de lijst met programma''s in choco-reqs.txt.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'init.section_accounts'                      = 'Accounts: een aparte beheerder, de aangemelde persoon als standaardgebruiker (optioneel)'
+    'init.admin_account'                         = 'Naam van het beheerdersaccount (Enter = behouden; - = geen: de accounts blijven zoals ze zijn)'
+    'init.admin_account_hint'                    = 'Tot 20 letters, cijfers, ., - en _, beginnend met een letter of cijfer; - voor geen.'
+    'init.admin_account_note'                    = 'De inrichting maakt dit account (verborgen op het aanmeldscherm) en maakt van de aangemelde persoon een standaardgebruiker; beide wachtwoorden worden op de computer getypt en nergens bewaard.'
 }

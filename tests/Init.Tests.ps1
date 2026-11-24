@@ -61,6 +61,28 @@ Describe 'Set-WmConfigText' {
     }
 }
 
+Describe 'Set-WmConfigTextOrAdd' {
+    It 'changes a setting the file has' {
+        $t = Set-WmConfigTextOrAdd $script:example 'AdminAccount' (ConvertTo-WmPsdString 'it-admin') @('not added')
+        (Import-TestConfig $t).AdminAccount | Should -Be 'it-admin'
+        $t | Should -Not -Match 'not added'
+    }
+
+    It 'adds a setting an older file lacks, with its comment, before the closing brace' {
+        $old = "@{`r`n    UpdateTime = '12:00'`r`n    Management = @{`r`n        Source = ''`r`n    }`r`n}`r`n"
+        $t = Set-WmConfigTextOrAdd $old 'AdminAccount' (ConvertTo-WmPsdString 'it-admin') @('A local administrator', 'account.')
+        $c = Import-TestConfig $t
+        $c.AdminAccount | Should -Be 'it-admin'
+        $c.UpdateTime | Should -Be '12:00'
+        $c.Management.ContainsKey('AdminAccount') | Should -BeFalse
+        $t | Should -Match "(?m)^    # A local administrator\r\n    # account\.\r\n    AdminAccount = 'it-admin'\r\n\}"
+        # and changed, not added again, the next time
+        $t = Set-WmConfigTextOrAdd $t 'AdminAccount' (ConvertTo-WmPsdString '') @('A local administrator')
+        (Import-TestConfig $t).AdminAccount | Should -Be ''
+        ([regex]::Matches($t, 'AdminAccount =')).Count | Should -Be 1
+    }
+}
+
 Describe 'Get-WmConfigTextProblems' {
     It 'finds nothing in the example and names what an older or hand-edited file lacks' {
         $names = @('UpdateTime', 'UpdateDays', 'Source', 'SourceId', 'Certificate')

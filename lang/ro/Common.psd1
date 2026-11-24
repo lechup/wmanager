@@ -49,4 +49,7 @@
     'common.company_unknown'        = 'Introduceți un număr de la 1 la {0} sau numele firmei.'
     'common.company_config'         = 'Configurația firmei {0}: {1}'
     'common.company_no_console'     = '{0} conține configurațiile mai multor firme și nu este nimeni la consolă care să aleagă una; indicați-o cu -ConfigPath.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'step.accounts'                              = 'Conturi'
 }

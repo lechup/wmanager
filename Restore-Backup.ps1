@@ -13,6 +13,9 @@
     because otherwise the scheduled update applies debloat again. With the tasks disabled, the wmanager
     signing certificate is also removed from the computer's trusted root store.
 
+    The people provisioning made standard users (AdminAccount) become administrators again; the administrator
+    account it created stays.
+
     Not undone: removed Store apps and OneDrive, installed Chocolatey packages, the effects of group
     scripts, the computer name. A restart is needed afterwards.
 
@@ -32,6 +35,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Backup.ps1')
 . (Join-Path $here 'lib\Managed.ps1')
 . (Join-Path $here 'lib\Task.ps1')
+. (Join-Path $here 'lib\Accounts.ps1')
 Initialize-WmLanguage -Lang $Lang
 
 if (-not (Test-Path -LiteralPath $script:WmBackupDir)) {
@@ -115,6 +119,15 @@ try {
     }
     if ($machine | Where-Object { $_.Name -eq 'DisableFileSyncNGSC' }) {
         Write-WmLog -Key 'restore.onedrive_removed' -Level warn
+    }
+
+    # --- People provisioning made standard users (AdminAccount) ---------------------------
+    if ((Test-Path -LiteralPath $script:WmDemotedFile) -and (Confirm-WmContinue 'restore.confirm_admin_again' -DefaultYes)) {
+        Restore-WmDemotedAdmins
+    }
+    $admin = [string](Get-WmSetting $config 'AdminAccount' '')
+    if ($admin -and (Get-LocalUser -Name $admin -ErrorAction SilentlyContinue)) {
+        Write-WmLog -Key 'restore.admin_account_stays' -Arguments @($admin)
     }
 
     # --- Scheduled tasks and the signing certificate (the scheduled update needs it) ------

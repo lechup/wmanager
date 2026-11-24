@@ -49,4 +49,7 @@
     'common.company_unknown'        = 'Wpisz numer od 1 do {0} albo nazwę firmy.'
     'common.company_config'         = 'Konfiguracja firmy {0}: {1}'
     'common.company_no_console'     = '{0} zawiera konfiguracje kilku firm, a przy konsoli nie ma nikogo, kto wybierze jedną; podaj ją w -ConfigPath.'
+
+    # Accounts: a separate administrator, the person signed in a standard user (lib\Accounts.ps1)
+    'step.accounts'                              = 'Konta'
 }
