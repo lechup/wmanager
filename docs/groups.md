@@ -77,7 +77,8 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   signs in as a rule: for what has to be in place from the start (a service setting, a cleanup, a check). The
   `wmanager-Startup` task starts a minute after the computer does, also after a Fast Startup "Shut down" (the Windows
   default, where Windows resumes rather than starts: the task also listens for the boot event Windows logs at every
-  start), and runs them once per start, group by group and by name, hidden, each at most `ScriptTimeoutMinutes`, from
+  start; the system's boot time, `LastBootUpTime`, then stays that of the last full start, so don't take it for the
+  time the computer was switched on), and runs them once per start, group by group and by name, hidden, each at most `ScriptTimeoutMinutes`, from
   checked copies of the verified copy of the source (it never fetches at startup). The network may not be up yet: the
   template (`tools/groups.ps1 <folder> new-startup <group> <name>`, `tools/wm.ps1`: menu item 21) has a `Wait-Network`
   to call first when a script needs it. Keep them safe to repeat. Exit code `0` = done, `3010` = done (no restart is
