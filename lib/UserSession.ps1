@@ -85,6 +85,8 @@ namespace Wmanager
         static extern bool CreateEnvironmentBlock(out IntPtr environment, IntPtr token, bool inherit);
         [DllImport("userenv.dll", SetLastError = true)]
         static extern bool DestroyEnvironmentBlock(IntPtr environment);
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern IntPtr CreateFile(string name, uint access, uint share, ref SECURITY_ATTRIBUTES attributes, uint creation, uint flags, IntPtr template);
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref SECURITY_ATTRIBUTES attributes, int size);
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -114,6 +116,9 @@ namespace Wmanager
         const uint CREATE_UNICODE_ENVIRONMENT = 0x400;
         const uint CREATE_NO_WINDOW = 0x08000000;
         const uint WAIT_TIMEOUT = 0x102;
+        const uint GENERIC_READ = 0x80000000;
+        const uint FILE_SHARE_READ_WRITE = 3;
+        const uint OPEN_EXISTING = 3;
 
         static string QueryString(int sessionId, int infoClass)
         {
@@ -210,7 +215,7 @@ namespace Wmanager
                                             int timeoutMs, int codePage)
         {
             IntPtr userToken = IntPtr.Zero, token = IntPtr.Zero, envBlock = IntPtr.Zero, newBlock = IntPtr.Zero;
-            IntPtr outRead = IntPtr.Zero, outWrite = IntPtr.Zero, errRead = IntPtr.Zero, errWrite = IntPtr.Zero;
+            IntPtr outRead = IntPtr.Zero, outWrite = IntPtr.Zero, errRead = IntPtr.Zero, errWrite = IntPtr.Zero, input = IntPtr.Zero;
             PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
             try
             {
@@ -235,12 +240,17 @@ namespace Wmanager
                 if (!CreatePipe(out errRead, out errWrite, ref sa, 0)) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreatePipe");
                 SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
                 SetHandleInformation(errRead, HANDLE_FLAG_INHERIT, 0);
+                // Its input is empty: a program that asks for something (net use for a login) gets no answer at once
+                // instead of waiting, unseen, for the time limit
+                input = CreateFile("NUL", GENERIC_READ, FILE_SHARE_READ_WRITE, ref sa, OPEN_EXISTING, 0, IntPtr.Zero);
+                if (input == new IntPtr(-1)) { input = IntPtr.Zero; throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateFile NUL"); }
 
                 STARTUPINFO si = new STARTUPINFO();
                 si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
                 si.lpDesktop = "winsta0\\default";
                 si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
                 si.wShowWindow = 0;
+                si.hStdInput = input;
                 si.hStdOutput = outWrite;
                 si.hStdError = errWrite;
                 if (!CreateProcessAsUser(token, null, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true,
@@ -249,6 +259,7 @@ namespace Wmanager
                 // The child has its ends; with ours closed, reading ends when the child (and what inherited them) ends
                 CloseHandle(outWrite); outWrite = IntPtr.Zero;
                 CloseHandle(errWrite); errWrite = IntPtr.Zero;
+                CloseHandle(input); input = IntPtr.Zero;
 
                 Encoding encoding = Encoding.GetEncoding(codePage);
                 Task<string> outTask = StartReading(outRead, encoding); outRead = IntPtr.Zero;
@@ -274,7 +285,7 @@ namespace Wmanager
             }
             finally
             {
-                foreach (IntPtr h in new IntPtr[] { pi.hProcess, pi.hThread, outRead, outWrite, errRead, errWrite, token, userToken })
+                foreach (IntPtr h in new IntPtr[] { pi.hProcess, pi.hThread, outRead, outWrite, errRead, errWrite, input, token, userToken })
                     if (h != IntPtr.Zero) CloseHandle(h);
                 if (envBlock != IntPtr.Zero) DestroyEnvironmentBlock(envBlock);
                 if (newBlock != IntPtr.Zero) Marshal.FreeHGlobal(newBlock);

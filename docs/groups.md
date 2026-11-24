@@ -155,11 +155,14 @@ script can't give users a drive; a sign-in script can. Two ways:
   $ErrorActionPreference = 'Stop'
   $drive = 'Z:'; $share = '\\nas\documents'
   if (-not (Test-Path "$drive\")) {
-      net.exe use $drive $share /persistent:yes 2>&1 | Out-Null
-      if ($LASTEXITCODE -ne 0) { Start-Process explorer.exe $share }
+      try { $null = New-SmbMapping -LocalPath $drive -RemotePath $share -Persistent $true -ErrorAction Stop }
+      catch { Start-Process explorer.exe $share }
   }
   exit 0
   ```
+
+  `New-SmbMapping` doesn't ask; `net use` would wait for a login nobody can type, since the script runs hidden (its
+  input is empty, so it fails at once rather than at the time limit).
 
 - **One login for everyone** from the [secrets](#secrets-for-scripts) (every user of the group's computers can read
   it, see above): `New-SmbMapping` takes it without putting it on a command line, which the process list shows.

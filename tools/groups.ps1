@@ -830,8 +830,9 @@ $ErrorActionPreference = 'Stop'
 # remembers: the first time the share opens and Windows asks for it (tick "Remember my credentials").
 # $drive = 'Z:'; $share = '\\nas\documents'
 # if (-not (Test-Path "$drive\")) {
-#     net.exe use $drive $share /persistent:yes 2>&1 | Out-Null
-#     if ($LASTEXITCODE -ne 0) { Start-Process explorer.exe $share }
+#     # New-SmbMapping doesn't ask (net use would wait for a login nobody can type here)
+#     try { $null = New-SmbMapping -LocalPath $drive -RemotePath $share -Persistent $true -ErrorAction Stop }
+#     catch { Start-Process explorer.exe $share }
 # }
 # The same with the shared login of the secrets (not on the command line, where the process list shows it):
 # if (-not (Test-Path "$drive\")) {
