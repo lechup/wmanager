@@ -155,17 +155,22 @@ At the top of the copy go the drives (`Z:` and `\\nas\documents`, one line each)
 drive that is there and reachable as it is and maps any other, remembered like a drive mapped in Explorer. Two ways:
 
 - **Each person's own login** (as it comes; no secret anywhere): it maps a drive with the login Windows remembers for
-  its server; when there is none, Windows shows its own "Enter network credentials" window, with "Remember my
-  credentials", and the drive is there from then on. Cancelled, the next sign-in asks again; not answered within the
-  5 minutes, the window closes, the log has an error and the next sign-in asks again.
+  its server (`net use`); when there is none, or it no longer works, a Windows login window asks for it ("Your login to
+  \\\\nas\\documents, for drive Z:"), with "Remember my password" ticked: the script keeps the login in the person's
+  Credential Manager (as `cmdkey /add` does) and the drive is mapped without asking from then on. Three tries for a
+  wrong password; cancelled, the next sign-in asks again; not answered within the 5 minutes, the window closes, the
+  log has an error and the next sign-in asks again.
 - **One login for everyone**: delete `off: ` in its line `# off: wmanager-secrets: ShareUser, SharePassword` and add
   the two [secrets](#secrets-for-scripts) (`pwsh tools/wm.ps1 <company> secret ShareUser`); it then maps the drives
   with that login, without asking. Every user of the group's computers can read it (see above): give it access to
   these shares only.
 
-It uses `WNetAddConnection2`, which Explorer's "Map network drive" uses too. A script of your own should not use
-`net use` for a login Windows doesn't remember: it would ask on its input, which a sign-in script doesn't have (it is
-empty, so `net use` fails at once), and opening the share in Explorer doesn't ask for a login either.
+What the VM tests showed, for a script of your own: `WNetAddConnection2` (behind Explorer's "Map network drive")
+without a login logs on anonymously instead of taking the remembered one, which `net use` does; what the "Remember"
+box of Windows' own login window keeps was not taken when the drive reconnected (wrong password at the server), while
+a login kept as `cmdkey /add` keeps it was; `net use` for a login Windows doesn't remember asks for it on its input,
+which a sign-in script doesn't have (it is empty, so it fails at once); opening the share in Explorer doesn't ask at
+all.
 
 ## How a computer checks the source
 
@@ -337,7 +342,7 @@ tools/publish.sh $src
 | `check-updates` | job, daily | Last successful Windows Update installation, a restart pending for too long (pending and the computer up for that many days); **fails** when behind | 40 days, 7 days |
 | `check-defender` | job, daily | Real-time protection, signature age, last scan, threats found; **fails** on a problem; passes when another antivirus is registered and Defender is passive | 3 days, 14 days, 1 day |
 | `system-report` | job, daily | The daily report described under **Jobs** above (no thresholds) | none |
-| `network-drive` | sign-in script | Network drives at every sign-in, see [Network drives](#network-drives): with each person's own login (Windows asks once, with "Remember my credentials") or, after one line is changed, a shared login from the secrets | the drives (letter and `\\server\share`) |
+| `network-drive` | sign-in script | Network drives at every sign-in, see [Network drives](#network-drives): with each person's own login (asked once, then kept in their Credential Manager) or, after one line is changed, a shared login from the secrets | the drives (letter and `\\server\share`) |
 
 - **Alerts:** a check job that finds a problem ends with exit code 1, which wmanager logs as an error with
   `job="jobs"`, so one Grafana alert covers every check, e.g. on
