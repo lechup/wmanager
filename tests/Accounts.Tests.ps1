@@ -29,6 +29,8 @@ Describe 'Read-WmAccountPlan' {
         Mock Get-LocalUser { $null }
         Mock Get-WmAdminSids { @('S-1-5-21-1-2-3-500', 'S-1-5-21-1-2-3-1001') }
         Mock Test-WmAccountPassword { (Get-TestPlain $Password) -eq 'old-right' }
+        Mock Test-WmPasswordPolicy { $true }
+        $script:existing = [pscustomobject]@{ Name = 'it-admin'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1002' } }
         $script:person = [pscustomobject]@{ Name = 'PC1\anna'; Sid = 'S-1-5-21-1-2-3-1001'; ShortName = 'anna'
                                             Local = [pscustomobject]@{ Name = 'anna' }; Microsoft = $false }
         Mock Get-WmConsoleUser { $script:person }
@@ -72,13 +74,51 @@ Describe 'Read-WmAccountPlan' {
     }
 
     It 'keeps the password of an administrator account that exists on Enter, and the person''s on Enter' {
-        Mock Get-LocalUser { [pscustomobject]@{ Name = 'it-admin' } } -ParameterFilter { $Name -eq 'it-admin' }
+        Mock Get-LocalUser { $script:existing } -ParameterFilter { $Name -eq 'it-admin' }
         Use-Typed '', 'y', ''
         $plan = Read-WmAccountPlan -Config @{ AdminAccount = 'it-admin' }
         $plan.AdminPassword | Should -BeNullOrEmpty
         $plan.UserPassword | Should -BeNullOrEmpty
         $plan.Skip | Should -Be ''
-        Should -Invoke Test-WmAccountPassword -Times 0
+        # only whether the account has no password
+        Should -Invoke Test-WmAccountPassword -Times 1 -ParameterFilter { $Name -eq 'it-admin' -and $Password.Length -eq 0 }
+    }
+
+    It 'needs a new password for an administrator account that exists but is disabled' {
+        $script:existing.Enabled = $false
+        Mock Get-LocalUser { $script:existing } -ParameterFilter { $Name -eq 'it-admin' }
+        Use-Typed '', 'Adm-1', 'Adm-1', 'n'
+        $plan = Read-WmAccountPlan -Config @{ AdminAccount = 'it-admin' }
+        Get-TestPlain $plan.AdminPassword | Should -Be 'Adm-1'
+        $script:prompts[0] | Should -BeLike '*it-admin is disabled or has no password*'
+    }
+
+    It 'needs a new password for an administrator account that exists without one' {
+        Mock Get-LocalUser { $script:existing } -ParameterFilter { $Name -eq 'it-admin' }
+        Mock Test-WmAccountPassword { (Get-TestPlain $Password) -eq '' }
+        Use-Typed '', 'Adm-1', 'Adm-1', 'n'
+        Get-TestPlain (Read-WmAccountPlan -Config @{ AdminAccount = 'it-admin' }).AdminPassword | Should -Be 'Adm-1'
+    }
+
+    It 'refuses an account Windows makes itself, whatever its name' {
+        Mock Get-LocalUser { [pscustomobject]@{ Name = 'Admin'; Enabled = $false; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } } } -ParameterFilter { $Name -eq 'Admin' }
+        { Read-WmAccountPlan -Config @{ AdminAccount = 'Admin' } } | Should -Throw '*an account Windows makes itself*'
+        Should -Invoke Read-Host -Times 0
+    }
+
+    It 'asks again for a password the rules of the computer refuse' {
+        Mock Test-WmPasswordPolicy { (Get-TestPlain $Password).Length -ge 5 }
+        Use-Typed 'abc', 'abc', 'Adm-1', 'Adm-1', 'n'
+        Get-TestPlain (Read-WmAccountPlan -Config @{ AdminAccount = 'it-admin' }).AdminPassword | Should -Be 'Adm-1'
+        Should -Invoke Test-WmPasswordPolicy -Times 2 -ParameterFilter { $Name -eq 'it-admin' }
+    }
+
+    It 'goes on, making nobody a standard user, when the person signed in can''t be determined' {
+        Mock Get-WmConsoleUser { throw 'Some or all identity references could not be translated.' }
+        Use-Typed 'Adm-1', 'Adm-1'
+        $plan = Read-WmAccountPlan -Config @{ AdminAccount = 'it-admin' }
+        $plan.Skip | Should -Be 'user_unknown'
+        $plan.UserError | Should -BeLike '*could not be translated*'
     }
 
     It 'keeps the person''s password after three wrong current ones' {
@@ -120,7 +160,7 @@ Describe 'Set-WmAccounts' {
         Mock Write-WmLog { [void]$script:log.Add($(if ($Key) { Get-WmText -Key $Key -Arguments $Arguments -English } else { $Message })) }
         $script:admins = New-Object System.Collections.Generic.List[string]
         $script:admins.Add('S-1-5-21-1-2-3-1001')
-        Mock Get-WmAdminSids { @($script:admins) }
+        Mock Get-WmAdminMembers { @($script:admins | ForEach-Object { [pscustomobject]@{ Sid = $_; Group = $false } }) }
         $script:adminUser = [pscustomobject]@{ Name = 'it-admin'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1002' } }
         Mock Get-LocalUser { $null } -ParameterFilter { $Name }
         Mock Get-LocalUser { $script:adminUser } -ParameterFilter { $SID }
@@ -129,7 +169,7 @@ Describe 'Set-WmAccounts' {
         Mock Set-LocalUser { }
         Mock Add-WmAdminMember { $script:admins.Add($Sid) }
         Mock Remove-WmAdminMember { [void]$script:admins.Remove($Sid) }
-        Mock Set-WmRegValue { }
+        Mock Set-WmRegValue { $true }
         Mock Set-WmAccountPassword { }
         $script:plan = [pscustomobject]@{
             Admin = 'it-admin'; AdminPassword = (New-TestSecret 'Adm-1'); Skip = ''
@@ -198,7 +238,59 @@ Describe 'Set-WmAccounts' {
         $script:admins.Clear()
         Set-WmAccounts -Plan $script:plan
         Should -Invoke Remove-WmAdminMember -Times 0
-        $script:log -join "`n" | Should -Match 'PC1\\anna is a standard user already'
+        $script:log -join "`n" | Should -Match 'PC1\\anna is not in the Administrators group'
+    }
+}
+
+Describe 'Set-WmAccounts, when something fails' {
+    BeforeEach {
+        $script:WmDemotedFile = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.txt')
+        $script:log = New-Object System.Collections.Generic.List[string]
+        Mock Write-WmLog { [void]$script:log.Add($(if ($Key) { Get-WmText -Key $Key -Arguments $Arguments -English } else { $Message })) }
+        $script:admins = New-Object System.Collections.Generic.List[string]
+        $script:admins.Add('S-1-5-21-1-2-3-1001')
+        $script:adminGroups = @()
+        Mock Get-WmAdminMembers { @($script:admins | ForEach-Object { [pscustomobject]@{ Sid = $_; Group = $false } }) + @($script:adminGroups) }
+        $script:adminUser = [pscustomobject]@{ Name = 'it-admin'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1002' } }
+        Mock Get-LocalUser { $null } -ParameterFilter { $Name }
+        Mock Get-LocalUser { $script:adminUser } -ParameterFilter { $SID }
+        Mock New-LocalUser { $script:adminUser }
+        Mock Add-WmAdminMember { $script:admins.Add($Sid) }
+        Mock Remove-WmAdminMember { [void]$script:admins.Remove($Sid) }
+        Mock Set-WmRegValue { $true }
+        Mock Set-WmAccountPassword { }
+        $script:plan = [pscustomobject]@{
+            Admin = 'it-admin'; AdminPassword = (New-TestSecret 'Adm-1'); Skip = ''; UserError = ''
+            User = [pscustomobject]@{ Name = 'PC1\anna'; Sid = 'S-1-5-21-1-2-3-1001'; ShortName = 'anna'; Microsoft = $false }
+            UserPassword = $null; UserOldPassword = $null
+        }
+    }
+
+    It 'leaves the person an administrator when the UAC prompt can''t be set to ask for the hidden account' {
+        Mock Set-WmRegValue { $Name -ne 'EnumerateAdministrators' }
+        { Set-WmAccounts -Plan $script:plan } | Should -Throw '*UAC prompt*'
+        Should -Invoke Remove-WmAdminMember -Times 0
+    }
+
+    It 'writes the person down for the restore before removing them' {
+        Mock Remove-WmAdminMember { throw 'Access is denied' }
+        { Set-WmAccounts -Plan $script:plan } | Should -Throw '*denied*'
+        Get-Content -LiteralPath $script:WmDemotedFile | Should -Be 'S-1-5-21-1-2-3-1001'
+    }
+
+    It 'warns about groups in the Administrators group, whose members stay administrators' {
+        $script:adminGroups = @([pscustomobject]@{ Sid = 'S-1-5-21-1-2-3-2000'; Group = $true })
+        Mock Get-WmSidName { 'PC1\helpdesk' }
+        Set-WmAccounts -Plan $script:plan
+        $script:log -join "`n" | Should -Match 'groups as members, whose members stay administrators: PC1\\helpdesk'
+    }
+
+    It 'says why nobody becomes a standard user when the person signed in can''t be determined' {
+        $script:plan.Skip = 'user_unknown'; $script:plan.UserError = 'not translated'
+        Set-WmAccounts -Plan $script:plan
+        Should -Invoke New-LocalUser -Times 1
+        Should -Invoke Remove-WmAdminMember -Times 0
+        $script:log -join "`n" | Should -Match "couldn't be determined \(not translated\)"
     }
 }
 
@@ -256,6 +348,23 @@ Describe 'Local accounts on Windows' -Tag 'Integration' -Skip:(-not $env:WM_CI_S
         Set-WmAccountPassword -Name 'wmci-blank' -Old (New-TestSecret '') -New (New-TestSecret 'Blank-pass-2026!')
         Test-WmAccountPassword -Name 'wmci-blank' -Password (New-TestSecret 'Blank-pass-2026!') | Should -BeTrue
         $blank | Should -Not -BeNullOrEmpty
+    }
+
+    It 'checks a new password against the password rules of the computer' {
+        $line = @(& net.exe accounts) -match 'Minimum password length'
+        $before = if ($line -and "$line" -match '(\d+)\s*$') { $Matches[1] } else { '0' }
+        & net.exe accounts /minpwlen:14 | Out-Null
+        try {
+            Test-WmPasswordPolicy -Name 'wmci-person' -Password (New-TestSecret 'Sh0rt-pass!') | Should -BeFalse
+            Test-WmPasswordPolicy -Name 'wmci-person' -Password (New-TestSecret 'Long-enough-pass-2026!') | Should -BeTrue
+        } finally {
+            & net.exe accounts "/minpwlen:$before" | Out-Null
+        }
+    }
+
+    It 'refuses the built-in Administrator account' {
+        $builtin = Get-LocalUser | Where-Object { $_.SID.Value -like '*-500' }
+        { Read-WmAccountPlan -Config @{ AdminAccount = $builtin.Name } } | Should -Throw '*an account Windows makes itself*'
     }
 
     It 'says why a password is not changed' {

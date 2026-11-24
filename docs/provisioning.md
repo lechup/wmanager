@@ -48,14 +48,19 @@ what needs administrator rights then asks for the administrator account (the UAC
 At the start, before anything changes, it asks at the computer (passwords are not shown, typed twice, kept nowhere:
 not in the configuration, the log or Loki):
 
-1. The password of the administrator account. A new account needs one; for an account that exists, Enter keeps its
-   password (and anything else typed sets it anew).
+1. The password of the administrator account. A new account needs one, and so does an account that exists but is
+   disabled or has no password; otherwise Enter keeps its password (and anything else typed sets it anew). Accounts
+   Windows makes itself (Administrator, Guest, DefaultAccount, WDAGUtilityAccount) are refused as `AdminAccount`,
+   whatever they are called.
 2. Whether the person signed in (the user of the computer's screen, not the account provisioning runs as after UAC)
    becomes a standard user, Enter = yes. Not asked when they are a standard user already.
 3. A new password for that person, Enter = no change; then their current password (Enter = none), checked right away,
    three tries. The password is changed with the current one, as Ctrl+Alt+Del does: set without it, Windows would lose
    what it keeps under the old one (passwords saved in the browser and in Credential Manager, EFS files). Not asked for
    a Microsoft account (its password is changed at account.microsoft.com) or a domain account.
+
+A new password that the password rules of the computer (length, complexity) refuse is asked again right away, not
+found out in the middle of the run.
 
 Then, after the backup, in this order:
 
@@ -66,14 +71,15 @@ Then, after the backup, in this order:
   the administrators the sign-in screen shows, so with the account hidden it would offer nothing but "No". A standard
   user types the account's name and password there.
 - Checked: enabled and in the Administrators group. If not, the step stops here and nobody loses administrator rights.
-- The person's password is changed. If Windows refuses (the password rules of the computer, for example), the log says
-  so and their password stays as it was.
-- The person is removed from the Administrators group and written down for the restore (`state\accounts-demoted.txt`).
+- The person's password is changed. If Windows refuses (the password history of the computer, for example), the log
+  says so and their password stays as it was.
+- The person is written down for the restore (`state\accounts-demoted.txt`) and removed from the Administrators group.
 
-Nobody becomes a standard user when nobody is signed in, when the administrator account itself is signed in, or when
-the answer was no. Without a console (provisioning not run by a person at the computer, e.g. over SSH) nothing is asked
+Nobody becomes a standard user when nobody is signed in, when the person signed in can't be determined (a cloud
+account offline, for example), when the administrator account itself is signed in, or when the answer was no. Without a console (provisioning not run by a person at the computer, e.g. over SSH) nothing is asked
 and the accounts stay as they are; the log has a warning. Only membership of the Administrators group itself is
-removed: an account that is an administrator through another group (a domain group) stays one.
+removed: an account that is an administrator through a group in it (a domain group, an Entra ID role) stays one, and
+the log warns about such groups.
 
 `Restore-Backup.ps1` asks whether to make those people administrators again, and shows the administrator account on
 the sign-in screen and in the UAC prompt again (journaled registry values); the account itself stays, to be removed by
