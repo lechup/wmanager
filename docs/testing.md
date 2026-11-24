@@ -74,8 +74,10 @@ once rarely fit. `vm.sh stop` shuts Windows down fully over SSH: the power butto
 hibernates the kernel while Fast Startup is on (the Windows default), so a new computer name or a pending update would
 wait for a restart. Over SSH there is no console, so provisioning takes the default answers (as in a scheduled task).
 
-`start` returns once Windows answers over SSH (`WM_VM_WAIT=0`: right after the machine starts); `vm.sh wait pro` waits
-the same way, e.g. after a restart within a test. On a busy host a boot sometimes hangs: the spinner stops and SSH
-never comes. No SSH and the same screen for 3 minutes is taken for that, and the machine is reset (at most twice);
-a boot that installs updates changes its percentage on the screen, so it is waited for. After 20 minutes without SSH
-(`WM_VM_BOOT_MINUTES`) it gives up and says how to look at the screen.
+`start` returns once Windows answers over SSH (`WM_VM_WAIT=0`: right after the machine starts), also for a machine
+that is already running; `vm.sh wait pro` waits the same way. `vm.sh restart pro` restarts Windows within a test and
+returns once the new one answers (it first waits for the old one to stop answering, which it still does right after
+the command). On a busy host a boot sometimes hangs: the spinner stops and SSH never comes. No SSH and the same screen
+for 5 minutes is taken for that, and the machine is reset once (two cut-off boots in a row would send Windows into
+Automatic Repair); a turning spinner or the percentage of a boot that installs updates keeps it waiting. After 20
+minutes without SSH (`WM_VM_BOOT_MINUTES`) it gives up and says how to look at the screen.
