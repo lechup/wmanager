@@ -442,6 +442,58 @@ Describe 'sign-in scripts' {
     }
 }
 
+Describe 'startup scripts' {
+    It 'new-startup makes a numbered startup script that parses, names no secret and passes check' {
+        $src = New-Source
+        (Invoke-Tool $src new-startup accounting clean-temp).Code | Should -Be 0
+        $path = Get-Path $src 'groups/accounting/startup/10-clean-temp.ps1'
+        Test-Bom $path | Should -BeTrue
+        $text = Read-Text $path
+        Test-OnlyCrLf $text | Should -BeTrue
+        $text | Should -Match 'Startup script of group accounting'
+        $text | Should -Match 'function Wait-Network'
+        $errs = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errs)
+        @($errs).Count | Should -Be 0
+        . (Join-Path (Join-Path $script:root 'lib') 'Lang.ps1')
+        . (Join-Path (Join-Path $script:root 'lib') 'Groups.ps1')
+        (Get-WmScriptSecretNames $text).Count | Should -Be 0
+        (Invoke-Tool $src new-startup accounting services).Code | Should -Be 0
+        Test-Path -LiteralPath (Get-Path $src 'groups/accounting/startup/20-services.ps1') | Should -BeTrue
+        (Invoke-Tool $src check).Code | Should -Be 0
+    }
+
+    It 'show lists them for a computer and counts them per group' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/accounting/startup/10-clean.ps1') "exit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/startup/20-check.ps1') "exit 0`r`n" -Bom
+        $r = Invoke-Tool $src show office-01
+        $r.Text | Should -Match 'Startup scripts, in this order \(at every start of the computer, as SYSTEM\)'
+        $r.Text | Should -Match '(?s)groups/all/startup/20-check\.ps1.*groups/accounting/startup/10-clean\.ps1'
+        (Invoke-Tool $src show office-99).Text | Should -Not -Match '10-clean'
+        $r = Invoke-Tool $src show
+        $r.Text | Should -Match 'accounting\s+2 computers\s+packages: 1\s+scripts: 1\s+jobs: 0\s+sign-in: 0\s+startup: 1'
+        $r.Text | Should -Match 'all\s+every computer\s+packages: 0\s+scripts: 0\s+jobs: 1\s+sign-in: 0\s+startup: 1'
+    }
+
+    It 'check reads them like scripts, refuses run-as in them, and warns about a subfolder that is not run' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/all/startup/10-bad.ps1') "if (`$x {`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'ERROR: groups/all/startup/10-bad\.ps1, line'
+        Set-Text (Get-Path $src 'groups/all/startup/10-bad.ps1') "# wmanager-run-as: user`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'groups/all/startup/10-bad\.ps1: a startup script always runs as SYSTEM'
+        Remove-Item -LiteralPath (Get-Path $src 'groups/all/startup/10-bad.ps1')
+        Set-Text (Get-Path $src 'groups/all/startup/sub/10-deep.ps1') "exit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'groups/all/startup/sub/10-deep\.ps1 is not run: startup scripts go directly in groups/<group>/startup/'
+    }
+}
+
 Describe 'run-as' {
     It 'check takes user or system, never in a sign-in script, and show marks what runs as each person' {
         $src = New-Source

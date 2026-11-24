@@ -16,6 +16,8 @@ choco-reqs.txt                       common list (every computer)
 groups/<group>/choco-reqs.txt        extra packages for the group (optional)
 groups/<group>/scripts/*.ps1         scripts run as SYSTEM when their content changes (optional)
 groups/<group>/jobs/<when>/*.ps1     jobs run as SYSTEM on a schedule: hourly, daily, weekly (optional)
+groups/<group>/logon/*.ps1           sign-in scripts, run as the user at every sign-in (optional)
+groups/<group>/startup/*.ps1         startup scripts, run as SYSTEM at every start of the computer (optional)
 groups/<group>/...                   other files the scripts use (installers, drivers...)
 ```
 
@@ -71,6 +73,15 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   `WMANAGER_GROUP` and `WMANAGER_COMPUTER`, but not the group's folder (the computer's copy of the source is private).
   `tools/groups.ps1 <folder> new-logon <group> <name>` makes one from a template (`tools/wm.ps1`: menu item 20); for
   network drives the library has a ready one, see [Network drives](#network-drives).
+- **Startup scripts:** `groups/<group>/startup/*.ps1` run as SYSTEM at every start of the computer, before anyone
+  signs in as a rule: for what has to be in place from the start (a service setting, a cleanup, a check). The
+  `wmanager-Startup` task starts a minute after the computer does and runs them group by group and by name, hidden,
+  each at most `ScriptTimeoutMinutes`, from checked copies of the verified copy of the source (it never fetches at
+  startup). The network may not be up yet: the template (`tools/groups.ps1 <folder> new-startup <group> <name>`,
+  `tools/wm.ps1`: menu item 21) has a `Wait-Network` to call first when a script needs it. Keep them safe to repeat.
+  Exit code `0` = done, anything else is an error in the log (`logs\startup-YYYY-MM-DD.log`, and Loki with
+  `job="startup"`, sent as soon as the network allows); the next start runs them again anyway. Like sign-in scripts
+  they get `WMANAGER_GROUP`, `WMANAGER_COMPUTER` and the secrets they name, but not the group's folder.
 - **For both:** the working folder is the system TEMP. Use `$PSScriptRoot` or `WMANAGER_GROUP_DIR` (the group's folder)
   for the group's files; other variables: `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, and `WMANAGER_JOB` for jobs. The group
   folders are replaced with every new version of the source, so don't run programs or services from them: copy what
@@ -98,7 +109,8 @@ Nobody signed in: it waits. After a sign-in, `wmanager-Logon` starts `wmanager-J
 what is due for them within a minute. It runs from a copy checked against the manifest, without
 `WMANAGER_GROUP_DIR` (the computer's copy of the source is private); the log names the person
 (`groups/office/scripts/10-outlook.ps1 (anna): done.`). `tools/groups.ps1 check` takes `user` or `system` and refuses
-the line in a sign-in script, which always runs as the user; `show` marks what runs as each person.
+the line in a sign-in script, which always runs as the user, and in a startup script, which always runs as SYSTEM;
+`show` marks what runs as each person.
 
 ### Secrets for scripts
 

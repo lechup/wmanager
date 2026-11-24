@@ -8,5 +8,6 @@
     'task.every_day'        = 'în fiecare zi'
     'task.days_list'        = '{0}'
     'task.logon_registered' = 'Sarcina wmanager-Logon a fost înregistrată: scripturile de conectare ale grupurilor.'
+    'task.startup_registered' = 'Sarcina wmanager-Startup înregistrată: scripturile de pornire ale grupurilor.'
     'task.jobs_start_failed' = 'Nu s-a putut porni wmanager-Jobs: {0}'
 }
