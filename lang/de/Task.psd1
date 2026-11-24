@@ -9,5 +9,6 @@
     'task.days_list'        = '{0}'
     'task.logon_registered' = 'Aufgabe wmanager-Logon registriert: die Anmeldeskripte der Gruppen.'
     'task.jobs_times' = 'Die Zeiten der Jobs als Trigger von wmanager-Jobs: {0}'
+    'task.startup_registered' = 'Aufgabe wmanager-Startup registriert: die Startskripte der Gruppen.'
     'task.jobs_start_failed' = 'wmanager-Jobs konnte nicht gestartet werden: {0}'
 }

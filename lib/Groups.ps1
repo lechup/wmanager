@@ -132,18 +132,33 @@ function Get-WmGroupScripts {
     return ,$result
 }
 
-# Sign-in scripts of the given groups: groups/<group>/logon/*.ps1, groups in order, files by name. They run at every
-# sign-in, as the user who signs in (Invoke-Logon.ps1). Name (group/file) labels their entries in Loki.
-function Get-WmGroupLogonScripts {
-    param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
+# The scripts in groups/<group>/<folder>/*.ps1 of the given groups, groups in order, files by name. Name (group/file)
+# labels their entries in Loki.
+function Get-WmGroupFolderScripts {
+    param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @(),
+          [Parameter(Mandatory = $true)][string]$Folder)
     $result = @()
     foreach ($g in $Groups) {
-        foreach ($p in (Get-WmManagedScriptPaths -Files $Files -Folder "groups/$g/logon/")) {
+        foreach ($p in (Get-WmManagedScriptPaths -Files $Files -Folder "groups/$g/$Folder/")) {
             $base = [IO.Path]::GetFileNameWithoutExtension($p.Substring($p.LastIndexOf('/') + 1))
             $result += [pscustomobject]@{ Group = $g; Path = $p; Hash = $Files[$p]; Name = "$g/$base" }
         }
     }
     return ,$result
+}
+
+# Sign-in scripts: groups/<group>/logon/*.ps1, at every sign-in, as the user who signs in (Invoke-Logon.ps1)
+function Get-WmGroupLogonScripts {
+    param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
+    # (not "return (...)": that would unroll the list, which has to stay one object, also when empty)
+    Get-WmGroupFolderScripts -Files $Files -Groups $Groups -Folder 'logon'
+}
+
+# Startup scripts: groups/<group>/startup/*.ps1, at every start of the computer, as SYSTEM, before anyone signs in
+# (Invoke-Startup.ps1)
+function Get-WmGroupStartupScripts {
+    param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
+    Get-WmGroupFolderScripts -Files $Files -Groups $Groups -Folder 'startup'
 }
 
 # Jobs of the given groups: groups/<group>/jobs/hourly|daily|weekly/*.ps1. Name (group/file) labels the
@@ -418,6 +433,7 @@ function Resolve-WmComputerContent {
         Scripts      = (Get-WmGroupScripts -Files $Files -Groups $groups)
         Jobs         = (Get-WmGroupJobs -Files $Files -Groups $groups)
         LogonScripts = (Get-WmGroupLogonScripts -Files $Files -Groups $groups)
+        StartupScripts = (Get-WmGroupStartupScripts -Files $Files -Groups $groups)
         Wmanager     = (Get-WmWantedVersion -Versions $Versions -Groups (Get-WmVersionGroupOrder -Map $Map -Groups $groups))
     }
 }

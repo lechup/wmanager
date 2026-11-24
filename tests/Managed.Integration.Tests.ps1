@@ -318,6 +318,53 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Register-WmTasks -Config (New-TestConfig (Join-Path $src 'v2'))
     }
 
+    It 'registers the startup task: SYSTEM, at every start (the boot, and the boot event for Fast Startup), a minute later, never twice at once' {
+        $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskStartup
+        $triggers = @($task.Triggers)
+        $triggers.Count | Should -Be 2
+        $triggers[0].CimClass.CimClassName | Should -Be 'MSFT_TaskBootTrigger'
+        $triggers[0].Delay | Should -Be 'PT1M'
+        $triggers[1].CimClass.CimClassName | Should -Be 'MSFT_TaskEventTrigger'
+        $triggers[1].Subscription | Should -Match "Microsoft-Windows-Kernel-Boot'\] and EventID=27"
+        $triggers[1].Delay | Should -Be 'PT1M'
+        # The newest boot event of this runner, as a start's mark
+        Get-WmBootMark | Should -Match '^[0-9]+$'
+        $task.Principal.UserId | Should -Be 'SYSTEM'
+        $task.Settings.MultipleInstances | Should -Be 'IgnoreNew'
+        $task.Actions[0].Arguments | Should -BeLike '*Invoke-Startup.ps1*'
+        # Without a management source it goes; a computer that updated itself from a version without it gets it at
+        # its scheduled update
+        Register-WmTasks -Config @{}
+        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskStartup -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        Update-WmTaskSchedule -Config (New-TestConfig (Join-Path $src 'v2'))
+        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskStartup | Should -Not -BeNullOrEmpty
+        Register-WmTasks -Config (New-TestConfig (Join-Path $src 'v2'))
+    }
+
+    It 'runs Invoke-Startup.ps1 from start to end: the group''s startup script with its secret, hidden in the log' {
+        $marker = 'C:\wm-ci\startup.txt'
+        Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue
+        $configFile = Join-Path $root 'provision.config.psd1'
+        @(
+            '@{'
+            "    Management = @{ Source = '$(Join-Path $src 'v2')'; SourceId = '$id'; Certificate = 'wmanager-signing.cer' }"
+            "    Secrets = @{ CiShare = '$secretValue' }"
+            '}'
+        ) | Set-Content -LiteralPath $configFile -Encoding UTF8
+        try {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root 'Invoke-Startup.ps1')
+            $LASTEXITCODE | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $configFile -Force
+        }
+        [IO.File]::ReadAllText($marker) | Should -Be "ci|$($script:WmHostName)|$secretValue"
+        $log = Get-ChildItem -LiteralPath $script:WmLogDir -Filter 'startup-*.log' | Sort-Object LastWriteTime | Select-Object -Last 1
+        $text = [IO.File]::ReadAllText($log.FullName)
+        $text | Should -Match 'startup secret: \*\*\*'
+        $text | Should -Match 'ci/10-startup: done'
+        $text | Should -Not -Match ([regex]::Escape($secretValue))
+    }
+
     It 'compiles the session launcher in Windows PowerShell 5.1, and runs Invoke-Logon.ps1 from start to end' {
         . (Join-Path $root 'lib\UserSession.ps1')
         # Not SYSTEM here: no user token, so no sessions, and nothing to run

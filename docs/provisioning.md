@@ -25,8 +25,8 @@ scheduled update.
 9. Chocolatey, package sources, installing the packages from the list (with a management source: the common list
    plus the lists of the computer's groups).
 10. Chrome as the default browser for new accounts (DISM); existing users get the Settings page once.
-11. Register the scheduled tasks (folder `\wmanager\`; `wmanager-Jobs` and `wmanager-Logon` only with a management
-    source).
+11. Register the scheduled tasks (folder `\wmanager\`; `wmanager-Jobs`, `wmanager-Logon` and `wmanager-Startup` only
+    with a management source).
 
 With a management source, provisioning doesn't run the group scripts itself: it runs as the person at the console,
 and scripts must run as SYSTEM. `wmanager-Jobs` runs them a few minutes after provisioning (or right after the restart).
