@@ -409,6 +409,11 @@ Describe 'sign-in scripts' {
         $r.Text | Should -Match '(?s)groups/all/logon/20-printer\.ps1.*groups/accounting/logon/10-drive\.ps1'
         (Invoke-Tool $src show office-99).Text | Should -Not -Match '10-drive'
         (Invoke-Tool $src show).Text | Should -Match 'accounting\s+2 computers\s+packages: 1\s+scripts: 1\s+jobs: 0\s+sign-in: 1'
+        Set-Text (Get-Path $src 'groups/accounting/logon/20-more.ps1') "exit 0`r`n" -Bom
+        Remove-Item -LiteralPath (Get-Path $src 'groups/all/logon') -Recurse
+        $r = Invoke-Tool $src show
+        $r.Text | Should -Match 'accounting\s+2 computers\s+packages: 1\s+scripts: 1\s+jobs: 0\s+sign-in: 2'
+        $r.Text | Should -Match 'all\s+every computer\s+packages: 0\s+scripts: 0\s+jobs: 1\s+sign-in: 0'
     }
 
     It 'check reads them like scripts: syntax, secrets, and a subfolder that is not run' {

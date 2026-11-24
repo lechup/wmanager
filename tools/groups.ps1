@@ -373,7 +373,8 @@ function Show-Overview {
         $jobs = Get-WmGroupJobs -Files $Files -Groups @($g)
         $sc = @($scripts).Count
         $jb = @($jobs).Count
-        $lg = @(Get-WmGroupLogonScripts -Files $Files -Groups @($g)).Count
+        $logon = Get-WmGroupLogonScripts -Files $Files -Groups @($g)
+        $lg = @($logon).Count
         $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
         $extra = ''
         if (-not $hasFiles) {
