@@ -6,7 +6,9 @@
 #
 #   tests/vm/vm.sh create <pro|home> <windows11.iso> [memory-MB]   new disk, unattended installation (30-60 min)
 #   tests/vm/vm.sh installed <vm>                      after the installation: boot from the disk only
-#   tests/vm/vm.sh start <vm> [memory-MB]              start in the background
+#   tests/vm/vm.sh start <vm> [memory-MB]              start in the background and wait until SSH answers (a boot
+#                                                      that hangs is reset; WM_VM_WAIT=0: don't wait)
+#   tests/vm/vm.sh wait <vm>                           wait until SSH answers (e.g. after a restart), the same way
 #   tests/vm/vm.sh stop <vm>                           full Windows shutdown (not Fast Startup), then stop
 #   tests/vm/vm.sh status                              which machines run
 #   tests/vm/vm.sh ssh <vm> [command]                  PowerShell over SSH as "tester" (administrator)
@@ -199,6 +201,46 @@ cmd_start() {
         qmp "${presses[@]}" >/dev/null
     fi
     echo "Machine $1 is running with $memory MB (SSH 127.0.0.1:$ssh_port, VNC 127.0.0.1:$((5900 + vnc)))."
+    # Not while Windows installs: SSH comes only at its end
+    if [[ ! -f $dir/install.iso && ${WM_VM_WAIT:-1} != 0 ]]; then wait_ready "$1"; fi
+}
+
+# Waits until SSH answers. On a busy host a boot sometimes hangs (the spinner stops, SSH never comes, and only a
+# reset helps): no SSH and the same screen for 3 minutes is taken for that and the machine is reset, at most twice.
+# A boot that installs updates changes the screen (its percentage), so it is waited for. WM_VM_BOOT_MINUTES (20) in all.
+wait_ready() {
+    vm_conf "$1"
+    running || die "machine $1 is not running"
+    set_ssh_opts
+    local started=$SECONDS limit=$(( ${WM_VM_BOOT_MINUTES:-20} * 60 )) shot=$dir/boot-screen.ppm
+    local last='' since=$SECONDS sum resets=0
+    while (( SECONDS - started < limit )); do
+        if ssh "${ssh_opts[@]}" -o BatchMode=yes -o ConnectTimeout=5 -p "$ssh_port" tester@127.0.0.1 'exit 0' </dev/null >/dev/null 2>&1; then
+            rm -f "$shot"
+            echo "Machine $1 answers over SSH (after $((SECONDS - started)) s)."
+            return 0
+        fi
+        running || die "machine $1 stopped while starting"
+        sum=''
+        rm -f "$shot"
+        if qmp "{\"execute\":\"screendump\",\"arguments\":{\"filename\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$shot")}}" >/dev/null 2>&1 \
+            && [[ -f $shot ]]; then
+            sum=$(md5sum < "$shot" | cut -d' ' -f1)
+        fi
+        if [[ -z $sum || $sum != "$last" ]]; then
+            last=$sum; since=$SECONDS
+        elif (( SECONDS - since >= 180 )); then
+            (( resets < 2 )) || die "machine $1 hung while starting again after $resets resets (no SSH, the screen unchanged for 3 minutes); look: $0 screenshot $1 screen.png"
+            resets=$((resets + 1))
+            echo "Machine $1 seems hung while starting (no SSH, the screen unchanged for 3 minutes): reset $resets of 2." >&2
+            # cont: a machine paused by hand would stay paused after the reset
+            qmp '{"execute":"system_reset"}' '{"execute":"cont"}' >/dev/null
+            last=''; since=$SECONDS
+        fi
+        sleep 15
+    done
+    rm -f "$shot"
+    die "machine $1 did not answer over SSH within $((limit / 60)) minutes; look: $0 screenshot $1 screen.png"
 }
 
 cmd_stop() {
@@ -361,6 +403,7 @@ cmd=$1; shift
 case $cmd in
     create)     [[ $# -ge 2 && $# -le 3 ]] || die "usage: $0 create <pro|home> <iso> [memory-MB]"; cmd_create "$@" ;;
     start)      [[ $# -ge 1 && $# -le 2 ]] || die "usage: $0 start <vm> [memory-MB]"; cmd_start "$@" ;;
+    wait)       [[ $# -eq 1 ]] || die "usage: $0 wait <vm>"; wait_ready "$1" ;;
     stop)       [[ $# -eq 1 ]] || die "usage: $0 stop <vm>"; cmd_stop "$1" ;;
     status)     cmd_status ;;
     ssh)        [[ $# -ge 1 ]] || die "usage: $0 ssh <vm> [command]"; cmd_ssh "$@" ;;

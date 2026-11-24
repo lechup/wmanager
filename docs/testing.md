@@ -57,7 +57,7 @@ sudo usermod -aG kvm $USER
 tests/vm/vm.sh create pro ~/Downloads/Win11_pl.iso    # 30-60 min; done when: tests/vm/vm.sh ssh pro hostname
 tests/vm/vm.sh installed pro                          # boot from the disk only from now on
 tests/vm/vm.sh stop pro && tests/vm/vm.sh snapshot pro clean
-tests/vm/vm.sh start pro                              # or with less memory: tests/vm/vm.sh start pro 4096
+tests/vm/vm.sh start pro                              # waits for SSH; or with less memory: tests/vm/vm.sh start pro 4096
 tests/vm/vm.sh deploy pro                             # working tree + example config -> C:\wmanager
 tests/vm/vm.sh run pro Provision.ps1 -ComputerName WM-TEST-PRO
 tests/vm/vm.sh stop pro && tests/vm/vm.sh revert pro clean
@@ -73,3 +73,9 @@ doesn't push the host into swapping or other programs out (`WM_VM_MEMORY_CHECK=0
 once rarely fit. `vm.sh stop` shuts Windows down fully over SSH: the power button only
 hibernates the kernel while Fast Startup is on (the Windows default), so a new computer name or a pending update would
 wait for a restart. Over SSH there is no console, so provisioning takes the default answers (as in a scheduled task).
+
+`start` returns once Windows answers over SSH (`WM_VM_WAIT=0`: right after the machine starts); `vm.sh wait pro` waits
+the same way, e.g. after a restart within a test. On a busy host a boot sometimes hangs: the spinner stops and SSH
+never comes. No SSH and the same screen for 3 minutes is taken for that, and the machine is reset (at most twice);
+a boot that installs updates changes its percentage on the screen, so it is waited for. After 20 minutes without SSH
+(`WM_VM_BOOT_MINUTES`) it gives up and says how to look at the screen.
