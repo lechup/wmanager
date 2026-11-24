@@ -87,7 +87,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         $c.Groups | Should -Be @('all', 'ci')
         ($c.Requirements | Where-Object Name -eq '7zip').Pinned | Should -BeTrue      # the ci entry replaces the common one
         ($c.Requirements | Where-Object Name -eq 'vlc') | Should -Not -BeNullOrEmpty
-        @($c.Scripts | ForEach-Object Path) | Should -Be @('groups/ci/scripts/10-marker.ps1', 'groups/ci/scripts/20-fail.ps1', 'groups/ci/scripts/30-secret.ps1')
+        @($c.Scripts | ForEach-Object Path) | Should -Be @('groups/ci/scripts/10-marker.ps1', 'groups/ci/scripts/20-fail.ps1', 'groups/ci/scripts/30-secret.ps1', 'groups/ci/scripts/40-user.ps1')
         @($c.Jobs | ForEach-Object Name) | Should -Contain 'ci/ping'
         @($c.Jobs | ForEach-Object Name) | Should -Contain 'all/system-report'
     }
@@ -236,6 +236,41 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         }
         (Get-WmManagedManifest -Thumbprint $thumb -SourceId $id).Serial | Should -Be (Get-Serial (Join-Path $src 'v2'))
         Test-Path -LiteralPath (Join-Path $script:WmLogDir ('jobs-{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))) | Should -BeTrue
+    }
+
+    It 'runs a script that says run-as user in the session of the signed-in person, from SYSTEM (when the runner has one)' {
+        # Run as an administrator here, it found nobody: it waits for the run of SYSTEM
+        (Read-WmTabState $script:WmScriptsState).Keys | Where-Object { $_ -like 'groups/ci/scripts/40-user.ps1*' } | Should -BeNullOrEmpty
+        $configFile = Join-Path $root 'provision.config.psd1'
+        @(
+            '@{'
+            "    Management = @{ Source = '$(Join-Path $src 'v2')'; SourceId = '$id'; Certificate = 'wmanager-signing.cer' }"
+            "    Secrets = @{ CiShare = '$secretValue' }"
+            '}'
+        ) | Set-Content -LiteralPath $configFile -Encoding UTF8
+        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $action = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$(Join-Path $root 'Invoke-Jobs.ps1')`""
+        $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName 'wm-ci-jobs-system' -Action $action -Principal $principal -Force | Out-Null
+        try {
+            Start-ScheduledTask -TaskName 'wm-ci-jobs-system'
+            $deadline = (Get-Date).AddMinutes(4)
+            do { Start-Sleep -Seconds 3 } while ((Get-Date) -lt $deadline -and (Get-ScheduledTask -TaskName 'wm-ci-jobs-system').State -eq 'Running')
+            Write-Host "Invoke-Jobs.ps1 as SYSTEM: $((Get-ScheduledTaskInfo -TaskName 'wm-ci-jobs-system').LastTaskResult)"
+        } finally {
+            Unregister-ScheduledTask -TaskName 'wm-ci-jobs-system' -Confirm:$false
+            Remove-Item -LiteralPath $configFile -Force
+        }
+        $log = Get-Content -LiteralPath (Join-Path $script:WmLogDir ('jobs-{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))) | Where-Object { $_ -like '*40-user*' -or $_ -like '*ran as*' }
+        $log | ForEach-Object { Write-Host $_ }
+        $sessions = @(Get-ChildItem -LiteralPath 'C:\wm-ci' -Filter 'user-*.txt' -ErrorAction SilentlyContinue)
+        if ($sessions.Count -eq 0 -and -not ($log -match '40-user')) { Set-ItResult -Skipped -Because 'nobody is signed in on this runner'; return }
+        $text = Get-Content -LiteralPath $sessions[0].FullName
+        Write-Host $text
+        $text | Should -Not -Match 'nt authority'
+        $text | Should -Match '\|ci\|False$'
+        ($log -join "`n") | Should -Match 'groups/ci/scripts/40-user\.ps1 \(.+\): done'
+        @((Read-WmTabState $script:WmScriptsState).Keys | Where-Object { $_ -like 'groups/ci/scripts/40-user.ps1|S-1-5-*' }).Count | Should -Be 1
     }
 
     It 'registers the hourly jobs task' {

@@ -432,6 +432,37 @@ Describe 'sign-in scripts' {
     }
 }
 
+Describe 'run-as' {
+    It 'check takes user or system, never in a sign-in script, and show marks what runs as each person' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/all/scripts/30-profile.ps1') "# wmanager-run-as: user`r`nexit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/jobs/daily/inbox.ps1') "# wmanager-run-as: user`r`nexit 0`r`n" -Bom
+        (Invoke-Tool $src check).Code | Should -Be 0
+        $r = Invoke-Tool $src show office-01
+        $r.Text | Should -Match 'groups/all/scripts/30-profile\.ps1   \(as each signed-in person\)'
+        $r.Text | Should -Match 'all/inbox\s+\(groups/all/jobs/daily/inbox\.ps1\)   \(as each signed-in person\)'
+        $r.Text | Should -Not -Match '10-power-plan\.ps1   \(as'
+
+        Set-Text (Get-Path $src 'groups/all/scripts/30-profile.ps1') "# wmanager-run-as: admin`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match "groups/all/scripts/30-profile\.ps1: wmanager-run-as: 'admin' is neither user nor system"
+        Set-Text (Get-Path $src 'groups/all/scripts/30-profile.ps1') "# wmanager-run-as: user`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/logon/10-drive.ps1') "# wmanager-run-as: system`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'groups/all/logon/10-drive\.ps1: a sign-in script always runs as the user who signs in'
+    }
+
+    It 'the templates name the option without taking it' {
+        $src = New-Source
+        (Invoke-Tool $src new-script all profile).Code | Should -Be 0
+        (Invoke-Tool $src new-job all daily inbox).Code | Should -Be 0
+        Read-Text (Get-Path $src 'groups/all/scripts/10-profile.ps1') | Should -Match 'wmanager-run-as: user'
+        (Invoke-Tool $src show office-01).Text | Should -Not -Match 'as each signed-in person'
+    }
+}
+
 # The tests give -Url as a path and -Zip as the file, so they don't go to GitHub
 Describe 'set-version and unset-version' {
     It 'writes version.psd1 for every computer and for a group, and show and check read it' {

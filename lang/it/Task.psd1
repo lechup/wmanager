@@ -8,4 +8,5 @@
     'task.every_day'        = 'ogni giorno'
     'task.days_list'        = '{0}'
     'task.logon_registered' = 'Attività wmanager-Logon registrata: gli script di accesso dei gruppi.'
+    'task.jobs_start_failed' = 'Impossibile avviare wmanager-Jobs: {0}'
 }

@@ -75,6 +75,30 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   for the group's files; other variables: `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, and `WMANAGER_JOB` for jobs. The group
   folders are replaced with every new version of the source, so don't run programs or services from them: copy what
   has to stay (e.g. an agent) elsewhere first. Save files as UTF-8 with BOM (otherwise 5.1 garbles letters outside ASCII).
+- **As the user:** a script or job runs as SYSTEM unless it says otherwise, see
+  [Scripts and jobs as the user](#scripts-and-jobs-as-the-user).
+
+### Scripts and jobs as the user
+
+What belongs to a person rather than to the computer (their profile, `HKCU`, a shortcut on their desktop, a mail
+profile) is better done as that person. A script or job with the line
+
+```powershell
+# wmanager-run-as: user
+```
+
+runs in the session of each person signed in when its run comes, as that person and without administrator rights
+(the way SYSTEM runs [sign-in scripts](#network-drives)):
+
+- a **script** once per person and content: each person who signs in on the computer gets it once, and again when the
+  file changes; it fails, waits and retries per person, like a script as SYSTEM;
+- a **job** on its schedule per person: a daily job runs once a day for each person signed in that day.
+
+Nobody signed in: it waits. After a sign-in, `wmanager-Logon` starts `wmanager-Jobs`, so a person who signs in gets
+what is due for them within a minute. It runs from a copy checked against the manifest, without
+`WMANAGER_GROUP_DIR` (the computer's copy of the source is private); the log names the person
+(`groups/office/scripts/10-outlook.ps1 (anna): done.`). `tools/groups.ps1 check` takes `user` or `system` and refuses
+the line in a sign-in script, which always runs as the user; `show` marks what runs as each person.
 
 ### Secrets for scripts
 
@@ -112,10 +136,11 @@ $password = $env:WMANAGER_SECRET_SHAREPASSWORD
   SYSTEM read it, but on the USB drive and in the company's folder anyone who has them does. A secret a computer can
   use is also readable by that computer's administrators; give each company its own logins, with only the rights the
   scripts need.
-- A [sign-in script](#network-drives) gets the secrets it names the same way, in the environment of its own process
-  only (nothing is written to disk). But it runs as the user, and **the user can read what their own processes
-  hold**: a secret given to a sign-in script is as good as given to every user of its group's computers. Use it only
-  for a login that reaches nothing more than the script needs, such as one share.
+- A [sign-in script](#network-drives), or a script or job [as the user](#scripts-and-jobs-as-the-user), gets the
+  secrets it names the same way, in the environment of its own process only (nothing is written to disk). But it runs
+  as the user, and **the user can read what their own processes hold**: a secret given to it is as good as given to
+  every user of its group's computers. Use it only for a login that reaches nothing more than the script needs, such
+  as one share.
 
 ### Network drives
 

@@ -89,4 +89,7 @@
     'managed.secret_missing'             = 'configurația acestui computer nu are secretul {0} (Secrets în provision.config.psd1)'
     'managed.script_not_run'             = '{0}: nu a rulat: {1}; {2}.'
     'managed.job_not_run'                = 'Lucrarea {0}: nu a rulat: {1}.'
+    'managed.run_as_bad'                 = 'wmanager-run-as: ''{0}'' nu este nici user, nici system'
+    'managed.run_as_twice'               = 'wmanager-run-as apare de mai multe ori'
+    'managed.sessions_failed'            = 'Utilizatorii conectați nu pot fi citiți, așa că scripturile și lucrările care rulează ca utilizator așteaptă: {0}'
 }

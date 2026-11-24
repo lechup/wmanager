@@ -89,4 +89,7 @@
     'managed.secret_missing'             = 'the configuration of this computer has no secret {0} (Secrets in provision.config.psd1)'
     'managed.script_not_run'             = '{0}: didn''t run: {1}; {2}.'
     'managed.job_not_run'                = 'Job {0}: didn''t run: {1}.'
+    'managed.run_as_bad'                 = 'wmanager-run-as: ''{0}'' is neither user nor system'
+    'managed.run_as_twice'               = 'wmanager-run-as appears more than once'
+    'managed.sessions_failed'            = 'The signed-in users can''t be read, so the scripts and jobs that run as the user wait: {0}'
 }
