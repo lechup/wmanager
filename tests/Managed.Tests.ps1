@@ -358,6 +358,28 @@ Describe 'Invoke-WmLogonScripts' {
         Should -Invoke Start-WmJobsTask -Times 1 -Exactly
     }
 
+    It 'reads the sign-in scripts of the computer''s groups from the verified copy, and whether anything runs as the user' {
+        $a = Add-LogonScript 'groups/all/logon/10-a.ps1' "exit 0`r`n"
+        $b = Add-LogonScript 'groups/all/logon/20-b.ps1' "exit 0`r`n"
+        $other = Add-LogonScript 'groups/other/logon/10-c.ps1' "exit 0`r`n"
+        $plain = Add-LogonScript 'groups/all/scripts/10-plain.ps1' "exit 0`r`n"
+        $files = @{ 'groups.psd1' = 'X'; 'groups/all/logon/10-a.ps1' = $a.Hash; 'groups/all/logon/20-b.ps1' = $b.Hash
+                    'groups/other/logon/10-c.ps1' = $other.Hash; 'groups/all/scripts/10-plain.ps1' = $plain.Hash }
+        Mock Get-WmSigningCertificate { [pscustomobject]@{ Thumbprint = 'AB' } }
+        Mock Get-WmNextCertificate { $null }
+        Mock Get-WmManagedManifest { [pscustomobject]@{ Files = $files } }
+        Mock Read-WmManagedSnapshot { [pscustomobject]@{ Map = @{ Default = @('all') } } }
+        $savedHost = $script:WmHostName
+        $script:WmHostName = 'OFFICE-01'
+        try {
+        $c = Get-WmLogonContent $cfg
+        @($c.Scripts | ForEach-Object Path) | Should -Be @('groups/all/logon/10-a.ps1', 'groups/all/logon/20-b.ps1')
+        $c.UserRuns | Should -BeFalse
+        [IO.File]::WriteAllText((Join-Path $script:WmManagedDir 'groups\all\scripts\10-plain.ps1'), "# wmanager-run-as: user`r`nexit 0`r`n")
+        (Get-WmLogonContent $cfg).UserRuns | Should -BeTrue
+        } finally { $script:WmHostName = $savedHost }
+    }
+
     It 'does nothing without a new sign-in or without sign-in scripts' {
         Mock Get-WmLogonContent { [pscustomobject]@{ Scripts = @(); UserRuns = $false } }
         Mock Get-WmUserSessions { @(New-Session 1 'AAAA') }

@@ -857,13 +857,17 @@ function Get-WmLogonContent {
     if (-not $manifest) { return $none }
     $snap = Read-WmManagedSnapshot -Dir $script:WmManagedDir -Manifest $manifest
     $groups = Get-WmComputerGroups -Map $snap.Map -ComputerName $script:WmHostName
+    # (lib\Groups.ps1 returns each list as one object: taken into a variable, @() doesn't wrap it once more)
+    $logon = Get-WmGroupLogonScripts -Files $manifest.Files -Groups $groups
+    $scripts = Get-WmGroupScripts -Files $manifest.Files -Groups $groups
+    $jobs = Get-WmGroupJobs -Files $manifest.Files -Groups $groups
     $userRuns = $false
-    foreach ($item in @(@(Get-WmGroupScripts -Files $manifest.Files -Groups $groups) + @(Get-WmGroupJobs -Files $manifest.Files -Groups $groups))) {
+    foreach ($item in @(@($scripts) + @($jobs))) {
         try {
             if ((Get-WmScriptRunAs ([IO.File]::ReadAllText((Join-Path $script:WmManagedDir ($item.Path -replace '/', '\'))))) -eq 'user') { $userRuns = $true; break }
         } catch { }
     }
-    return [pscustomobject]@{ Scripts = @(Get-WmGroupLogonScripts -Files $manifest.Files -Groups $groups); UserRuns = $userRuns }
+    return [pscustomobject]@{ Scripts = @($logon); UserRuns = $userRuns }
 }
 
 # Copies of the scripts in $Dir, each checked against the hash the manifest gives it (from the bytes written, so
