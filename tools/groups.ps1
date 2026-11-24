@@ -295,6 +295,13 @@ function Format-Package {
 # show
 # ---------------------------------------------------------------------------
 
+# For show: how a script or job that runs as the user is marked ('' for SYSTEM; check reports a line it can't read)
+function Get-RunAsNote {
+    param([hashtable]$Files, [string]$Path)
+    try { if ((Get-WmScriptRunAs (Read-TextFile $Files[$Path]).Text) -eq 'user') { return '   (as each signed-in person)' } } catch { }
+    return ''
+}
+
 function Show-Computer {
     param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer, $Versions = $null)
     $v = Get-ComputerView -Files $Files -Map $Map -Lists $Lists -Computer $Computer -Versions $Versions
@@ -311,11 +318,11 @@ function Show-Computer {
     Write-Host ''
     Write-Host 'Scripts, in this order (each once, and again when its file changes):'
     if ($v.Scripts.Count -eq 0) { Write-Host '  (none)' }
-    foreach ($s in $v.Scripts) { Write-Host "  $($s.Path)" }
+    foreach ($s in $v.Scripts) { Write-Host "  $($s.Path)$(Get-RunAsNote $Files $s.Path)" }
     Write-Host ''
     Write-Host 'Jobs:'
     if ($v.Jobs.Count -eq 0) { Write-Host '  (none)' }
-    foreach ($j in $v.Jobs) { Write-Host ('  {0,-7} {1}   ({2})' -f $j.Every, $j.Name, $j.Path) }
+    foreach ($j in $v.Jobs) { Write-Host ('  {0,-7} {1}   ({2}){3}' -f $j.Every, $j.Name, $j.Path, (Get-RunAsNote $Files $j.Path)) }
     Write-Host ''
     Write-Host 'Sign-in scripts, in this order (at every sign-in, as the user who signs in):'
     if ($v.Logon.Count -eq 0) { Write-Host '  (none)' }
@@ -444,6 +451,11 @@ function Invoke-Check {
             }
             # The secrets it names: the computers wouldn't run it with a name that isn't one
             try { $null = Get-WmScriptSecretNames $file.Text } catch { Write-Problem error "${p}: $(Format-WmErrorText $_ -English)" }
+            # Who it runs as: user or system (a sign-in script always runs as the user who signs in)
+            try { $null = Get-WmScriptRunAs $file.Text } catch { Write-Problem error "${p}: $(Format-WmErrorText $_ -English)" }
+            if ($p -match '^groups/[^/]+/logon/' -and $file.Text -match '(?m)^\s*#\s*wmanager-run-as\s*:') {
+                Write-Problem error "${p}: a sign-in script always runs as the user who signs in; remove its wmanager-run-as line"
+            }
         }
         if ($p -match '^groups/[^/]+/scripts/.+/.+\.ps1$') {
             Write-Problem warning "$p is not run: scripts go directly in groups/<group>/scripts/"
@@ -769,6 +781,9 @@ $script:ScriptTemplate = @'
 # file changes. Exit code 0 = done, 3010 = done but the computer needs a restart (the user gets a notification),
 # anything else (or an exception) = failed; it runs again 20 hours later. Its output goes to the log and Loki.
 # Environment: WMANAGER_GROUP, WMANAGER_COMPUTER, WMANAGER_GROUP_DIR (this group's folder, for its files).
+# For a setting of each person (their profile, HKCU) rather than the computer, put a line "wmanager-run-as: user"
+# after a # at the start of a line: it then runs in the session of each signed-in person, once per person, without
+# administrator rights and without WMANAGER_GROUP_DIR.
 # Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
 $ErrorActionPreference = 'Stop'
 
@@ -785,6 +800,8 @@ $script:JobTemplate = @'
 # Every line it prints goes to Loki unchanged, labelled task="{{GROUP}}/{{NAME}}". Print one JSON object per line,
 # then Grafana reads it with: {service_name="wmanager", task="{{GROUP}}/{{NAME}}"} | json
 # Exit code 0 = done; anything else is an error in the log. Time limit: JobTimeoutMinutes (10 by default).
+# To run it in the session of each signed-in person instead (on its schedule per person, without administrator
+# rights), put a line "wmanager-run-as: user" after a # at the start of a line.
 # Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
 $ErrorActionPreference = 'Stop'
 

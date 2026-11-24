@@ -89,4 +89,7 @@
     'managed.secret_missing'             = 'konfigurace tohoto počítače nemá tajemství {0} (Secrets v provision.config.psd1)'
     'managed.script_not_run'             = '{0}: nespuštěn: {1}; {2}.'
     'managed.job_not_run'                = 'Úkol {0}: nespuštěn: {1}.'
+    'managed.run_as_bad'                 = 'wmanager-run-as: ''{0}'' není user ani system'
+    'managed.run_as_twice'               = 'wmanager-run-as se vyskytuje víckrát'
+    'managed.sessions_failed'            = 'Přihlášené uživatele nelze přečíst, takže skripty a úkoly spouštěné jako uživatel čekají: {0}'
 }

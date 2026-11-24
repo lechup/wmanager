@@ -148,7 +148,7 @@ function Get-WmGroupJobs {
         foreach ($every in @('hourly', 'daily', 'weekly')) {
             foreach ($p in (Get-WmManagedScriptPaths -Files $Files -Folder "groups/$g/jobs/$every/")) {
                 $base = [IO.Path]::GetFileNameWithoutExtension($p.Substring($p.LastIndexOf('/') + 1))
-                $result += [pscustomobject]@{ Group = $g; Path = $p; Every = $every; Name = "$g/$base" }
+                $result += [pscustomobject]@{ Group = $g; Path = $p; Every = $every; Name = "$g/$base"; Hash = $Files[$p] }
             }
         }
     }
@@ -181,6 +181,20 @@ function Get-WmScriptSecretNames {
         }
     }
     return ,$names.ToArray()
+}
+
+# Who a script or job runs as: 'system' (the default) or 'user', from a comment line "# wmanager-run-as: user"
+# (anywhere in the file). As the user it runs in the session of each signed-in person: a script once per person and
+# content, a job on its schedule per person. Throws on another value or on more than one such line.
+function Get-WmScriptRunAs {
+    param([AllowEmptyString()][string]$Text)
+    $found = @(foreach ($line in ($Text -split "\r?\n")) {
+        if ($line -match '^\s*#\s*wmanager-run-as\s*:(.*)$') { $Matches[1].Trim() }
+    })
+    if ($found.Count -eq 0) { return 'system' }
+    if ($found.Count -gt 1) { throw (New-WmError 'managed.run_as_twice') }
+    if (@('user', 'system') -notcontains $found[0].ToLowerInvariant()) { throw (New-WmError 'managed.run_as_bad' @($found[0])) }
+    return $found[0].ToLowerInvariant()
 }
 
 # The Secrets of a configuration, checked: an empty table without the setting. Throws when it isn't a table, a name

@@ -89,4 +89,7 @@
     'managed.secret_missing'             = 'de configuratie van deze computer heeft geen geheim {0} (Secrets in provision.config.psd1)'
     'managed.script_not_run'             = '{0}: niet uitgevoerd: {1}; {2}.'
     'managed.job_not_run'                = 'Opdracht {0}: niet uitgevoerd: {1}.'
+    'managed.run_as_bad'                 = 'wmanager-run-as: ''{0}'' is geen user of system'
+    'managed.run_as_twice'               = 'wmanager-run-as komt meer dan eens voor'
+    'managed.sessions_failed'            = 'De aangemelde gebruikers kunnen niet worden gelezen, dus de scripts en opdrachten die als gebruiker draaien wachten: {0}'
 }

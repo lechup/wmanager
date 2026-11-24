@@ -144,6 +144,16 @@ function Update-WmTaskSchedule {
     }
 }
 
+# After a sign-in: the scripts and jobs that run as the user, for the person who signed in, now rather than at the
+# next hour (an instance already running takes them as it is)
+function Start-WmJobsTask {
+    try {
+        Start-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -ErrorAction Stop
+    } catch {
+        Write-WmLog -Key 'task.jobs_start_failed' -Arguments @(Get-WmErrorText $_) -Level warn
+    }
+}
+
 function Start-WmNotifyTask {
     try {
         Start-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskNotify -ErrorAction Stop

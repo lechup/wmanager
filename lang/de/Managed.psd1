@@ -89,4 +89,7 @@
     'managed.secret_missing'             = 'die Konfiguration dieses Computers hat kein Geheimnis {0} (Secrets in provision.config.psd1)'
     'managed.script_not_run'             = '{0}: nicht ausgeführt: {1}; {2}.'
     'managed.job_not_run'                = 'Job {0}: nicht ausgeführt: {1}.'
+    'managed.run_as_bad'                 = 'wmanager-run-as: ''{0}'' ist weder user noch system'
+    'managed.run_as_twice'               = 'wmanager-run-as steht mehr als einmal da'
+    'managed.sessions_failed'            = 'Die angemeldeten Benutzer können nicht gelesen werden, daher warten die Skripte und Jobs, die als Benutzer laufen: {0}'
 }

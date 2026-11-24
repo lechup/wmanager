@@ -262,6 +262,7 @@ Describe 'Invoke-WmLogonScripts' {
         # lib\UserSession.ps1 (Windows API, SYSTEM) is replaced by mocks; these stand in so they can be mocked
         function Get-WmUserSessions { }
         function Invoke-WmUserScript { param([int]$SessionId, [string]$File, [hashtable]$Environment, [int]$TimeoutMinutes) }
+        function Start-WmJobsTask { }
         $script:WmManagedDir = Join-Path $TestDrive 'managed'
         $script:WmLogonDir = Join-Path $TestDrive 'logon'
         $script:WmLogonServed = Join-Path $TestDrive 'logon-served.txt'
@@ -287,20 +288,20 @@ Describe 'Invoke-WmLogonScripts' {
     It 'runs them once per sign-in, in the user''s session, with only the secrets each names, and hides those in the log' {
         $drive = Add-LogonScript 'groups/all/logon/10-drive.ps1' "# wmanager-secrets: ShareUser, SharePassword`r`nexit 0`r`n"
         $hello = Add-LogonScript 'groups/all/logon/20-hello.ps1' "exit 0`r`n"
-        Mock Get-WmLogonContent { @($drive, $hello) }
+        Mock Get-WmLogonContent { [pscustomobject]@{ Scripts = @($drive, $hello); UserRuns = $false } }
         Mock Get-WmUserSessions { @(New-Session 1 '00000000000A1B2C') }
         Mock Invoke-WmUserScript { [pscustomobject]@{ ExitCode = 0; Output = 'mapped as office with p4ss-W0rd'; Errors = '' } }
         Invoke-WmLogonScripts -Config $cfg
         Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
         Should -Invoke Invoke-WmUserScript -Times 1 -Exactly -ParameterFilter {
-            $SessionId -eq 1 -and $File -like '*all-10-drive.ps1' -and $Environment['WMANAGER_SECRET_SHAREPASSWORD'] -eq 'p4ss-W0rd' -and
+            $SessionId -eq 1 -and $File -like '*all-logon-10-drive.ps1' -and $Environment['WMANAGER_SECRET_SHAREPASSWORD'] -eq 'p4ss-W0rd' -and
             $Environment['WMANAGER_SECRET_SHAREUSER'] -eq 'office' -and $Environment['WMANAGER_GROUP'] -eq 'all' -and $TimeoutMinutes -eq 5 }
-        Should -Invoke Invoke-WmUserScript -Times 1 -Exactly -ParameterFilter { $File -like '*all-20-hello.ps1' -and $Environment.Count -eq 2 }
+        Should -Invoke Invoke-WmUserScript -Times 1 -Exactly -ParameterFilter { $File -like '*all-logon-20-hello.ps1' -and $Environment.Count -eq 2 }
         Should -Invoke Write-WmLog -Times 2 -Exactly -ParameterFilter { $Message -match 'mapped as \*\*\* with \*\*\*' }
         Should -Invoke Write-WmLog -Times 0 -ParameterFilter { "$Message" -match 'p4ss|office' }
         Should -Invoke Write-WmLog -Times 2 -Exactly -ParameterFilter { $Key -eq 'logon.script_done' }
         # What the users' processes read: the verified file, in the folder only administrators change
-        [IO.File]::ReadAllText((Join-Path $script:WmLogonDir 'all-20-hello.ps1')) | Should -Be "exit 0`r`n"
+        [IO.File]::ReadAllText((Join-Path $script:WmLogonDir 'all-logon-20-hello.ps1')) | Should -Be "exit 0`r`n"
 
         # The same sign-in again: nothing more
         Invoke-WmLogonScripts -Config $cfg
@@ -309,7 +310,7 @@ Describe 'Invoke-WmLogonScripts' {
 
     It 'serves a new sign-in alongside one already served, and forgets the ones that ended' {
         $hello = Add-LogonScript 'groups/all/logon/20-hello.ps1' "exit 0`r`n"
-        Mock Get-WmLogonContent { @($hello) }
+        Mock Get-WmLogonContent { [pscustomobject]@{ Scripts = @($hello); UserRuns = $false } }
         Mock Invoke-WmUserScript { [pscustomobject]@{ ExitCode = 0; Output = ''; Errors = '' } }
         Mock Get-WmUserSessions { @(New-Session 1 'AAAA') }
         Invoke-WmLogonScripts -Config $cfg
@@ -332,7 +333,7 @@ Describe 'Invoke-WmLogonScripts' {
         [IO.File]::WriteAllText((Join-Path $script:WmManagedDir 'groups\all\logon\40-changed.ps1'), "exit 5`r`n")
         $fails = Add-LogonScript 'groups/all/logon/50-fails.ps1' "exit 3`r`n"
         $hangs = Add-LogonScript 'groups/all/logon/60-hangs.ps1' "Start-Sleep 600`r`n"
-        Mock Get-WmLogonContent { @($missing, $changed, $fails, $hangs) }
+        Mock Get-WmLogonContent { [pscustomobject]@{ Scripts = @($missing, $changed, $fails, $hangs); UserRuns = $false } }
         Mock Get-WmUserSessions { @(New-Session 1 'AAAA') }
         Mock Invoke-WmUserScript {
             if ($File -like '*50-fails.ps1') { [pscustomobject]@{ ExitCode = 3; Output = ''; Errors = 'boom' } }
@@ -344,11 +345,21 @@ Describe 'Invoke-WmLogonScripts' {
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'logon.script_not_run' -and $Arguments[0] -eq 'all/40-changed' }
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'logon.script_exit_code' -and $Arguments[1] -eq 3 -and $Level -eq 'error' }
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'logon.script_timeout' -and $Arguments[0] -eq 'all/60-hangs' }
-        Test-Path -LiteralPath (Join-Path $script:WmLogonDir 'all-40-changed.ps1') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $script:WmLogonDir 'all-logon-40-changed.ps1') | Should -BeFalse
+    }
+
+    It 'starts wmanager-Jobs after a sign-in when scripts or jobs run as the user, also without sign-in scripts' {
+        Mock Get-WmLogonContent { [pscustomobject]@{ Scripts = @(); UserRuns = $true } }
+        Mock Get-WmUserSessions { @(New-Session 1 'AAAA') }
+        Mock Start-WmJobsTask { }
+        Invoke-WmLogonScripts -Config $cfg
+        Should -Invoke Start-WmJobsTask -Times 1 -Exactly
+        Invoke-WmLogonScripts -Config $cfg   # the same sign-in: no
+        Should -Invoke Start-WmJobsTask -Times 1 -Exactly
     }
 
     It 'does nothing without a new sign-in or without sign-in scripts' {
-        Mock Get-WmLogonContent { @() }
+        Mock Get-WmLogonContent { [pscustomobject]@{ Scripts = @(); UserRuns = $false } }
         Mock Get-WmUserSessions { @(New-Session 1 'AAAA') }
         Mock Invoke-WmUserScript { }
         Invoke-WmLogonScripts -Config $cfg
@@ -356,6 +367,138 @@ Describe 'Invoke-WmLogonScripts' {
         Invoke-WmLogonScripts -Config $cfg
         Should -Invoke Invoke-WmUserScript -Times 0
         Should -Invoke Write-WmLog -Times 0
+    }
+}
+
+Describe 'scripts and jobs that run as the user' {
+    BeforeAll {
+        function Get-WmUserSessions { }
+        function Invoke-WmUserScript { param([int]$SessionId, [string]$File, [hashtable]$Environment, [int]$TimeoutMinutes) }
+        $script:WmManagedDir = Join-Path $TestDrive 'managed'
+        $script:WmUserRunDir = Join-Path $TestDrive 'user-run'
+        $script:WmScriptsState = Join-Path $TestDrive 'scripts-done.txt'
+        $script:WmScriptsFailed = Join-Path $TestDrive 'scripts-failed.txt'
+        $script:WmJobsState = Join-Path $TestDrive 'jobs-state.txt'
+        $cfg = @{ Management = @{ Source = 'https://example.test/acme'; SourceId = $sid }; Secrets = @{ Pw = 's3cret-Value' } }
+
+        # A script or job in the verified copy, as the content lists it
+        function Add-Item {
+            param([string]$Rel, [string]$Text, [string]$Every)
+            $file = Join-Path $script:WmManagedDir ($Rel -replace '/', '\')
+            New-Item -ItemType Directory -Force -Path (Split-Path $file -Parent) | Out-Null
+            [IO.File]::WriteAllText($file, $Text)
+            $parts = $Rel.Split('/')
+            $item = [pscustomobject]@{ Group = $parts[1]; Path = $Rel; Hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash }
+            if ($Every) {
+                $item | Add-Member Every $Every
+                $item | Add-Member Name ($parts[1] + '/' + [IO.Path]::GetFileNameWithoutExtension($parts[-1]))
+            }
+            return $item
+        }
+        function New-Session { param([int]$Id, [string]$Sid) [pscustomobject]@{ SessionId = $Id; User = "user$Id"; Domain = 'PC'; LogonId = "L$Id"; Sid = $Sid } }
+        $ok = [pscustomobject]@{ ExitCode = 0; Output = 'set for s3cret-Value'; Errors = '' }
+    }
+    BeforeEach {
+        Remove-Item -LiteralPath $script:WmManagedDir, $script:WmUserRunDir, $script:WmScriptsState, $script:WmScriptsFailed, $script:WmJobsState `
+            -Recurse -Force -ErrorAction SilentlyContinue
+        $script:WmRunSessions = $null
+        $script:WmManaged = $null
+        Mock Write-WmLog { }
+        Mock Invoke-WmScriptProcess { [pscustomobject]@{ ExitCode = 0; Output = ''; Errors = '' } }
+    }
+
+    It 'reads who a script runs as from its wmanager-run-as line' {
+        Get-WmScriptRunAs "exit 0" | Should -Be 'system'
+        Get-WmScriptRunAs "# x`r`n  # wmanager-run-as: User`r`nexit 0" | Should -Be 'user'
+        Get-WmScriptRunAs "# wmanager-run-as: system" | Should -Be 'system'
+        { Get-WmScriptRunAs "# wmanager-run-as: admin" } | Should -Throw "*'admin' is neither user nor system*"
+        { Get-WmScriptRunAs "# wmanager-run-as: user`r`n# wmanager-run-as: user" } | Should -Throw '*more than once*'
+    }
+
+    It 'runs a user script once per signed-in person and content, as that person, and a SYSTEM script once' {
+        $user = Add-Item 'groups/all/scripts/10-profile.ps1' "# wmanager-run-as: user`r`n# wmanager-secrets: Pw`r`nexit 0`r`n"
+        $system = Add-Item 'groups/all/scripts/20-machine.ps1' "exit 0`r`n"
+        Mock Get-WmManagedContent { [pscustomobject]@{ Scripts = @($user, $system) } }
+        Mock Get-WmUserSessions { @((New-Session 1 'S-1-5-21-1'), (New-Session 2 'S-1-5-21-2')) }
+        Mock Invoke-WmUserScript { $ok }
+        Invoke-WmGroupScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+        Should -Invoke Invoke-WmUserScript -Times 1 -Exactly -ParameterFilter {
+            $SessionId -eq 2 -and $File -like '*user-run*all-scripts-10-profile.ps1' -and $Environment['WMANAGER_SECRET_PW'] -eq 's3cret-Value' -and
+            -not $Environment.ContainsKey('WMANAGER_GROUP_DIR') -and $Environment['WMANAGER_GROUP'] -eq 'all' }
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly -ParameterFilter { $File -like '*20-machine.ps1' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.script_done' -and $Arguments[0] -eq 'groups/all/scripts/10-profile.ps1 (user2)' }
+        Should -Invoke Write-WmLog -Times 0 -ParameterFilter { "$Message" -match 's3cret' }
+        $done = Read-WmTabState $script:WmScriptsState
+        $done['groups/all/scripts/10-profile.ps1|S-1-5-21-1'] | Should -Be $user.Hash
+        $done['groups/all/scripts/20-machine.ps1'] | Should -Be $system.Hash
+
+        # Again: nothing; a third person signs in: only for them
+        $script:WmRunSessions = $null
+        Invoke-WmGroupScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+        $script:WmRunSessions = $null
+        Mock Get-WmUserSessions { @((New-Session 1 'S-1-5-21-1'), (New-Session 3 'S-1-5-21-3')) }
+        Invoke-WmGroupScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 3 -Exactly
+        Should -Invoke Invoke-WmUserScript -Times 1 -Exactly -ParameterFilter { $SessionId -eq 3 }
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly
+    }
+
+    It 'waits for a person when nobody is signed in, and records a failure per person' {
+        $user = Add-Item 'groups/all/scripts/10-profile.ps1' "# wmanager-run-as: user`r`nexit 0`r`n"
+        Mock Get-WmManagedContent { [pscustomobject]@{ Scripts = @($user) } }
+        Mock Get-WmUserSessions { @() }
+        Mock Invoke-WmUserScript { $ok }
+        Invoke-WmGroupScripts -Config $cfg
+        Should -Invoke Invoke-WmUserScript -Times 0
+        (Read-WmTabState $script:WmScriptsState).Count | Should -Be 0
+
+        $script:WmRunSessions = $null
+        Mock Get-WmUserSessions { @((New-Session 1 'S-1'), (New-Session 2 'S-2')) }
+        Mock Invoke-WmUserScript { if ($SessionId -eq 1) { [pscustomobject]@{ ExitCode = 2; Output = ''; Errors = '' } } else { $ok } }
+        Invoke-WmGroupScripts -Config $cfg -RetryFailedAfterHours 20
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.script_exit_code' -and $Arguments[0] -eq 'groups/all/scripts/10-profile.ps1 (user1)' }
+        (Read-WmTabState $script:WmScriptsFailed).ContainsKey('groups/all/scripts/10-profile.ps1|S-1') | Should -BeTrue
+        (Read-WmTabState $script:WmScriptsState).ContainsKey('groups/all/scripts/10-profile.ps1|S-2') | Should -BeTrue
+        # Within the 20 hours: not again for the person it failed for
+        $script:WmRunSessions = $null
+        Invoke-WmGroupScripts -Config $cfg -RetryFailedAfterHours 20
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+    }
+
+    It 'does not run a script whose run-as line it cannot read, or whose copy is not the verified file' {
+        $bad = Add-Item 'groups/all/scripts/10-bad.ps1' "# wmanager-run-as: everyone`r`nexit 0`r`n"
+        $changed = Add-Item 'groups/all/scripts/20-changed.ps1' "# wmanager-run-as: user`r`nexit 0`r`n"
+        [IO.File]::WriteAllText((Join-Path $script:WmManagedDir 'groups\all\scripts\20-changed.ps1'), "# wmanager-run-as: user`r`nexit 5`r`n")
+        Mock Get-WmManagedContent { [pscustomobject]@{ Scripts = @($bad, $changed) } }
+        Mock Get-WmUserSessions { @(New-Session 1 'S-1') }
+        Mock Invoke-WmUserScript { $ok }
+        Invoke-WmGroupScripts -Config $cfg
+        Should -Invoke Invoke-WmScriptProcess -Times 0
+        Should -Invoke Invoke-WmUserScript -Times 0
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.script_not_run' -and $Arguments[0] -eq 'groups/all/scripts/10-bad.ps1' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'managed.script_not_run' -and $Arguments[0] -eq 'groups/all/scripts/20-changed.ps1 (user1)' }
+    }
+
+    It 'runs a user job on its schedule for each signed-in person' {
+        $job = Add-Item 'groups/all/jobs/daily/inbox.ps1' "# wmanager-run-as: user`r`nexit 0`r`n" 'daily'
+        $content = [pscustomobject]@{ Jobs = @($job) }
+        Mock Get-WmUserSessions { @((New-Session 1 'S-1'), (New-Session 2 'S-2')) }
+        Mock Invoke-WmUserScript { [pscustomobject]@{ ExitCode = 0; Output = '{"kind":"inbox"}'; Errors = '' } }
+        Invoke-WmGroupJobs -Config $cfg -Content $content
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly -ParameterFilter { $Environment['WMANAGER_JOB'] -eq 'all/inbox' -and $File -like '*all-jobs-daily-inbox.ps1' }
+        Should -Invoke Write-WmLog -Times 2 -Exactly -ParameterFilter { $Message -eq '{"kind":"inbox"}' -and $Task -eq 'all/inbox' }
+        # Not due again today; a person who signs in later gets it
+        $script:WmRunSessions = $null
+        Invoke-WmGroupJobs -Config $cfg -Content $content
+        Should -Invoke Invoke-WmUserScript -Times 2 -Exactly
+        $script:WmRunSessions = $null
+        Mock Get-WmUserSessions { @((New-Session 1 'S-1'), (New-Session 3 'S-3')) }
+        Invoke-WmGroupJobs -Config $cfg -Content $content
+        Should -Invoke Invoke-WmUserScript -Times 3 -Exactly
+        (Read-WmTabState $script:WmJobsState).Keys | Sort-Object | Should -Be @('groups/all/jobs/daily/inbox.ps1|S-1', 'groups/all/jobs/daily/inbox.ps1|S-2', 'groups/all/jobs/daily/inbox.ps1|S-3')
     }
 }
 

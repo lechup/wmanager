@@ -11,7 +11,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Common.ps1')
 . (Join-Path $here 'lib\Choco.ps1')
 . (Join-Path $here 'lib\Managed.ps1')
-. (Join-Path $here 'lib\UserSession.ps1')
+. (Join-Path $here 'lib\Task.ps1')
 Initialize-WmLanguage -Lang $Lang
 
 $config = Import-WmConfig (Join-Path $here 'provision.config.psd1')

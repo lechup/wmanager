@@ -2,9 +2,11 @@
 # (Invoke-Logon.ps1). The process gets the user's own token (for an administrator under UAC, the token without
 # elevation), the user's environment with variables added (the secrets a script names: only in that process, never
 # on disk) and pipes for its output, which SYSTEM reads, so the log and Loki get it. Windows only; needs SYSTEM
-# (WTSQueryUserToken). C# 5, which Windows PowerShell 5.1 compiles.
+# (WTSQueryUserToken). C# 5, which Windows PowerShell 5.1 compiles, only when first needed (Initialize-WmUserSession):
+# lib\Managed.ps1 loads this file for every run, and most runs have nothing to run as a user.
 
-if (-not ('Wmanager.UserSession' -as [type])) {
+function Initialize-WmUserSession {
+    if ('Wmanager.UserSession' -as [type]) { return }
     Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -24,6 +26,7 @@ namespace Wmanager
         public string User;
         public string Domain;
         public string LogonId;   // the logon session (LUID) of the user's token: one per sign-in
+        public string Sid;       // the user's SID: the same at every sign-in
     }
 
     public class UserProcessResult
@@ -100,6 +103,7 @@ namespace Wmanager
         const int WTSActive = 0;
         const int WTSUserName = 5;
         const int WTSDomainName = 7;
+        const int TokenUser = 1;
         const int TokenStatistics = 10;
         const uint MAXIMUM_ALLOWED = 0x02000000;
         const int SecurityImpersonation = 2;
@@ -116,6 +120,20 @@ namespace Wmanager
             IntPtr buffer; int bytes;
             if (!WTSQuerySessionInformation(IntPtr.Zero, sessionId, infoClass, out buffer, out bytes)) return "";
             try { return Marshal.PtrToStringUni(buffer) ?? ""; } finally { WTSFreeMemory(buffer); }
+        }
+
+        static string SidOf(IntPtr token)
+        {
+            int size;
+            GetTokenInformation(token, TokenUser, IntPtr.Zero, 0, out size);
+            IntPtr info = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!GetTokenInformation(token, TokenUser, info, size, out size)) throw new Win32Exception(Marshal.GetLastWin32Error(), "GetTokenInformation");
+                // TOKEN_USER starts with the pointer to the SID
+                return new System.Security.Principal.SecurityIdentifier(Marshal.ReadIntPtr(info)).Value;
+            }
+            finally { Marshal.FreeHGlobal(info); }
         }
 
         static string LogonIdOf(IntPtr token)
@@ -154,6 +172,7 @@ namespace Wmanager
                         u.User = QueryString(s.SessionId, WTSUserName);
                         u.Domain = QueryString(s.SessionId, WTSDomainName);
                         u.LogonId = LogonIdOf(token);
+                        u.Sid = SidOf(token);
                         if (u.User.Length > 0) result.Add(u);
                     }
                     finally { CloseHandle(token); }
@@ -266,8 +285,9 @@ namespace Wmanager
 '@
 }
 
-# The sessions with a signed-in user: SessionId, User, Domain, LogonId (one per sign-in)
+# The sessions with a signed-in user: SessionId, User, Domain, LogonId (one per sign-in), Sid
 function Get-WmUserSessions {
+    Initialize-WmUserSession
     return @([Wmanager.UserSession]::GetActiveSessions())
 }
 
@@ -281,6 +301,7 @@ function Invoke-WmUserScript {
         [hashtable]$Environment = @{},
         [int]$TimeoutMinutes = 5
     )
+    Initialize-WmUserSession
     $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $command = "`"$ps`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$File`""
     $extra = New-Object 'System.Collections.Generic.Dictionary[string,string]'

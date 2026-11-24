@@ -21,6 +21,7 @@
 # version is rejected, the last verified copy is used.
 
 . (Join-Path $PSScriptRoot 'Groups.ps1')   # content checks without system dependencies
+. (Join-Path $PSScriptRoot 'UserSession.ps1')   # scripts and jobs run in a person's session
 
 $script:WmScriptsState      = Join-Path $script:WmStateDir 'scripts-done.txt'
 $script:WmScriptsFailed     = Join-Path $script:WmStateDir 'scripts-failed.txt'   # path -> hash|time of the last failure
@@ -625,11 +626,81 @@ function Add-WmScriptSecrets {
     }
 }
 
+# ---------------------------------------------------------------------------
+# Who runs a script or job: SYSTEM, or each signed-in person ("# wmanager-run-as: user")
+# ---------------------------------------------------------------------------
+# A script or job that runs as the user runs in the session of every person signed in when the run comes (from SYSTEM,
+# lib\UserSession.ps1): a script once per person and content, a job on its schedule per person. Its state is kept
+# per person (key "<path>|<SID>"). Nobody signed in: it waits; the wmanager-Logon task starts wmanager-Jobs after a
+# sign-in, so a new person gets it within a minute. It runs from a copy in state\user-run (the copy of the source is
+# private) checked against the manifest's hash, without WMANAGER_GROUP_DIR, which the person can't read.
+
+$script:WmUserRunDir = Join-Path $script:WmStateDir 'user-run'
+$script:WmRunSessions = $null
+
+# The signed-in people, read once per run; none when they can't be read (not SYSTEM: e.g. provisioning run by hand,
+# whose hourly run after it reads them)
+function Get-WmRunSessions {
+    if ($null -eq $script:WmRunSessions) {
+        try { $script:WmRunSessions = @(Get-WmUserSessions) }
+        catch {
+            Write-WmLog -Key 'managed.sessions_failed' -Arguments @(Get-WmErrorText $_) -Level warn
+            $script:WmRunSessions = @()
+        }
+    }
+    return $script:WmRunSessions
+}
+
+# The runs of a script or job: one as SYSTEM (Key = its path), or one per signed-in person (Key = "<path>|<SID>",
+# Label with the person's name). A run-as line that can't be read: one run that doesn't run (NotRun).
+function Get-WmGroupRuns {
+    param([Parameter(Mandatory = $true)]$Item, [Parameter(Mandatory = $true)][string]$File, [string]$Label)
+    if (-not $Label) { $Label = $Item.Path }
+    try { $runAs = Get-WmScriptRunAs ([IO.File]::ReadAllText($File)) }
+    catch { return @([pscustomobject]@{ Key = $Item.Path; Label = $Label; Session = $null; NotRun = (Get-WmErrorText $_) }) }
+    if ($runAs -ne 'user') { return @([pscustomobject]@{ Key = $Item.Path; Label = $Label; Session = $null; NotRun = $null }) }
+    return @(Get-WmRunSessions | ForEach-Object {
+        [pscustomobject]@{ Key = "$($Item.Path)|$($_.Sid)"; Label = "$Label ($($_.User))"; Session = $_; NotRun = $null }
+    })
+}
+
+# Runs one run of a script or job with $Vars (and the secrets it names): as SYSTEM in its own process, or in the
+# person's session from a checked copy ($Copies: path -> copy, filled as needed). Returns NotRun (why it didn't run),
+# or ExitCode ($null after the time limit), Output and Errors.
+function Invoke-WmGroupRun {
+    param($Item, [string]$File, $Run, [hashtable]$Vars, [hashtable]$Secrets, [int]$TimeoutMinutes, [hashtable]$Copies)
+    $notRun = { param($why) [pscustomobject]@{ NotRun = $why; ExitCode = $null; Output = ''; Errors = '' } }
+    if ($Run.NotRun) { return (& $notRun $Run.NotRun) }
+    $path = $File
+    if ($Run.Session) {
+        if (-not $Copies.ContainsKey($Item.Path)) {
+            $c = Copy-WmCheckedScripts -Scripts @($Item) -Dir $script:WmUserRunDir -Keep
+            if ($c.Errors.ContainsKey($Item.Path)) { return (& $notRun $c.Errors[$Item.Path]) }
+            $Copies[$Item.Path] = $c.Copies[$Item.Path]
+        }
+        $path = $Copies[$Item.Path]
+        $Vars.Remove('WMANAGER_GROUP_DIR')
+    }
+    try { Add-WmScriptSecrets -Environment $Vars -Secrets $Secrets -File $path } catch { return (& $notRun (Get-WmErrorText $_)) }
+    if (-not $Run.Session) { $r = Invoke-WmScriptProcess -File $path -Environment $Vars -TimeoutMinutes $TimeoutMinutes }
+    else {
+        try { $r = Invoke-WmUserScript -SessionId $Run.Session.SessionId -File $path -Environment $Vars -TimeoutMinutes $TimeoutMinutes }
+        catch { return (& $notRun (Get-WmErrorText $_)) }   # e.g. the person signed out in the meantime
+    }
+    return [pscustomobject]@{ NotRun = $null; ExitCode = $r.ExitCode; Output = $r.Output; Errors = $r.Errors }
+}
+
+# A state key without the person: the path of the script or job
+function Get-WmRunPath {
+    param([string]$Key)
+    return $Key.Split('|')[0]
+}
+
 # Runs the scripts of this computer's groups whose content changed since their last successful run
 # (the hourly wmanager-Jobs task and the scheduled update, both as SYSTEM). Exit code 0 = done, 3010 = done and a
 # restart is needed; anything else (or the timeout) is an error and the script runs again later: with
 # -RetryFailedAfterHours (the hourly run) not before that many hours, unless its content changed.
-# A failed script doesn't stop the ones after it.
+# A failed script doesn't stop the ones after it. A script that runs as the user does all that per person.
 function Invoke-WmGroupScripts {
     param([Parameter(Mandatory = $true)][hashtable]$Config, [int]$RetryFailedAfterHours = 0)
     $settings = Get-WmManagementSettings $Config
@@ -638,11 +709,11 @@ function Invoke-WmGroupScripts {
     $content = Get-WmManagedContent -Config $Config
     $scripts = @($content.Scripts)
 
-    # Forget scripts this computer no longer has: if it joins the group again, they run again
+    # Forget scripts this computer no longer has (for every person too): if it joins the group again, they run again
     $done = Read-WmTabState $script:WmScriptsState
     $failed = Read-WmTabState $script:WmScriptsFailed
     foreach ($map in @($done, $failed)) {
-        foreach ($k in @($map.Keys)) { if (-not ($scripts | Where-Object { $_.Path -eq $k })) { $map.Remove($k) } }
+        foreach ($k in @($map.Keys)) { if (-not ($scripts | Where-Object { $_.Path -eq (Get-WmRunPath $k) })) { $map.Remove($k) } }
     }
     try { Save-WmTabState -Path $script:WmScriptsState -Map $done; Save-WmTabState -Path $script:WmScriptsFailed -Map $failed } catch { }
     if ($scripts.Count -eq 0) { Write-WmManagedNote -Key 'managed.no_scripts'; return }
@@ -651,103 +722,106 @@ function Invoke-WmGroupScripts {
     if ($timeout -le 0) { $timeout = 15 }
     $secrets = Get-WmSecrets $Config
     $mask = [string[]]@($secrets.Values)
+    $copies = @{}
     $now = [DateTime]::UtcNow
     foreach ($s in $scripts) {
-        if ($done[$s.Path] -eq $s.Hash) {
-            if (-not $script:WmManagedQuiet) { Write-WmLog -Key 'managed.script_unchanged' -Arguments @($s.Path) -LocalOnly }
-            continue
-        }
-        if ($RetryFailedAfterHours -gt 0 -and $failed[$s.Path]) {
-            $f = $failed[$s.Path].Split('|')
-            $at = [datetime]::MinValue
-            if ($f.Count -eq 2 -and $f[0] -eq $s.Hash -and [datetime]::TryParse($f[1], [Globalization.CultureInfo]::InvariantCulture,
-                    [Globalization.DateTimeStyles]::RoundtripKind, [ref]$at)) {
-                $age = $now - $at.ToUniversalTime()
-                if ($age.TotalHours -ge 0 -and $age.TotalHours -lt $RetryFailedAfterHours) { continue }
-            }
-        }
         $file = Join-Path $script:WmManagedDir ($s.Path -replace '/', '\')
-        Write-WmLog -Key 'managed.script_starting' -Arguments @($s.Path)
-        $vars = Get-WmScriptEnvironment $s.Group $s.Path
-        $notRun = $null
-        try { Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $file } catch { $notRun = Get-WmErrorText $_ }
-        $r = $null
-        if (-not $notRun) {
-            $r = Invoke-WmScriptProcess -File $file -Environment $vars -TimeoutMinutes $timeout
-            Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask)
-            if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '  ! ' }
-        }
-
-        if ($notRun -or $null -eq $r.ExitCode -or ($r.ExitCode -ne 0 -and $r.ExitCode -ne 3010)) {
-            $failed[$s.Path] = '{0}|{1}' -f $s.Hash, [DateTime]::UtcNow.ToString('o')
-            $retry = New-WmText 'managed.retry_next_update'
-            if ($RetryFailedAfterHours -gt 0) { $retry = New-WmText 'managed.retry_after_hours' @($RetryFailedAfterHours) }
-            if ($notRun) { Write-WmLog -Key 'managed.script_not_run' -Arguments @($s.Path, $notRun, $retry) -Level error }
-            elseif ($null -eq $r.ExitCode) { Write-WmLog -Key 'managed.script_timeout' -Arguments @($s.Path, $timeout, $retry) -Level error }
-            else { Write-WmLog -Key 'managed.script_exit_code' -Arguments @($s.Path, $r.ExitCode, $retry) -Level error }
-        } else {
-            $done[$s.Path] = $s.Hash
-            $failed.Remove($s.Path)
-            if ($r.ExitCode -eq 3010) {
-                $script:WmScriptsNeedReboot = $true
-                Write-WmLog -Key 'managed.script_done_reboot' -Arguments @($s.Path)
-            } else {
-                Write-WmLog -Key 'managed.script_done' -Arguments @($s.Path)
+        foreach ($run in (Get-WmGroupRuns -Item $s -File $file)) {
+            if ($done[$run.Key] -eq $s.Hash) {
+                if (-not $script:WmManagedQuiet) { Write-WmLog -Key 'managed.script_unchanged' -Arguments @($run.Label) -LocalOnly }
+                continue
             }
-        }
-        try {
-            Save-WmTabState -Path $script:WmScriptsState -Map $done
-            Save-WmTabState -Path $script:WmScriptsFailed -Map $failed
-        } catch {
-            Write-WmLog -Key 'managed.scripts_state_failed' -Arguments @(Get-WmErrorText $_) -Level warn
+            if ($RetryFailedAfterHours -gt 0 -and $failed[$run.Key]) {
+                $f = $failed[$run.Key].Split('|')
+                $at = [datetime]::MinValue
+                if ($f.Count -eq 2 -and $f[0] -eq $s.Hash -and [datetime]::TryParse($f[1], [Globalization.CultureInfo]::InvariantCulture,
+                        [Globalization.DateTimeStyles]::RoundtripKind, [ref]$at)) {
+                    $age = $now - $at.ToUniversalTime()
+                    if ($age.TotalHours -ge 0 -and $age.TotalHours -lt $RetryFailedAfterHours) { continue }
+                }
+            }
+            Write-WmLog -Key 'managed.script_starting' -Arguments @($run.Label)
+            $r = Invoke-WmGroupRun -Item $s -File $file -Run $run -Vars (Get-WmScriptEnvironment $s.Group $s.Path) -Secrets $secrets `
+                                   -TimeoutMinutes $timeout -Copies $copies
+            if (-not $r.NotRun) {
+                Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask)
+                if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '  ! ' }
+            }
+
+            if ($r.NotRun -or $null -eq $r.ExitCode -or ($r.ExitCode -ne 0 -and $r.ExitCode -ne 3010)) {
+                $failed[$run.Key] = '{0}|{1}' -f $s.Hash, [DateTime]::UtcNow.ToString('o')
+                $retry = New-WmText 'managed.retry_next_update'
+                if ($RetryFailedAfterHours -gt 0) { $retry = New-WmText 'managed.retry_after_hours' @($RetryFailedAfterHours) }
+                if ($r.NotRun) { Write-WmLog -Key 'managed.script_not_run' -Arguments @($run.Label, $r.NotRun, $retry) -Level error }
+                elseif ($null -eq $r.ExitCode) { Write-WmLog -Key 'managed.script_timeout' -Arguments @($run.Label, $timeout, $retry) -Level error }
+                else { Write-WmLog -Key 'managed.script_exit_code' -Arguments @($run.Label, $r.ExitCode, $retry) -Level error }
+            } else {
+                $done[$run.Key] = $s.Hash
+                $failed.Remove($run.Key)
+                if ($r.ExitCode -eq 3010) {
+                    $script:WmScriptsNeedReboot = $true
+                    Write-WmLog -Key 'managed.script_done_reboot' -Arguments @($run.Label)
+                } else {
+                    Write-WmLog -Key 'managed.script_done' -Arguments @($run.Label)
+                }
+            }
+            try {
+                Save-WmTabState -Path $script:WmScriptsState -Map $done
+                Save-WmTabState -Path $script:WmScriptsFailed -Map $failed
+            } catch {
+                Write-WmLog -Key 'managed.scripts_state_failed' -Arguments @(Get-WmErrorText $_) -Level warn
+            }
         }
     }
 }
 
 # Runs the due jobs of this computer's groups (Invoke-Jobs.ps1, every hour). The start time is recorded
 # before the run, so a failed or killed job waits for its next turn instead of repeating every hour.
-# Output lines go to Loki unchanged, labelled task="<group>/<name>".
+# Output lines go to Loki unchanged, labelled task="<group>/<name>". A job that runs as the user is due per person:
+# each signed-in person gets it on its schedule.
 function Invoke-WmGroupJobs {
     param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)]$Content)
     $settings = Get-WmManagementSettings $Config
     $jobs = @($Content.Jobs)
     $state = Read-WmTabState $script:WmJobsState
-    foreach ($k in @($state.Keys)) { if (-not ($jobs | Where-Object { $_.Path -eq $k })) { $state.Remove($k) } }
+    foreach ($k in @($state.Keys)) { if (-not ($jobs | Where-Object { $_.Path -eq (Get-WmRunPath $k) })) { $state.Remove($k) } }
 
     $timeout = [int]$settings.JobTimeoutMinutes
     if ($timeout -le 0) { $timeout = 10 }
     $secrets = Get-WmSecrets $Config
     $mask = [string[]]@($secrets.Values)
+    $copies = @{}
     # One time for the whole run: a long job doesn't shift the ones after it
     $now = [DateTime]::UtcNow
     foreach ($j in $jobs) {
-        $last = $null
-        $parsed = [datetime]::MinValue
-        if ($state[$j.Path] -and [datetime]::TryParse($state[$j.Path], [Globalization.CultureInfo]::InvariantCulture,
-                [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { $last = $parsed.ToUniversalTime() }
-        if (-not (Test-WmJobDue -Every $j.Every -LastRun $last -Now $now)) { continue }
-
-        $state[$j.Path] = $now.ToString('o')
-        try { Save-WmTabState -Path $script:WmJobsState -Map $state } catch { Write-WmLog -Key 'managed.jobs_state_failed' -Arguments @(Get-WmErrorText $_) -Level warn }
-        Write-WmLog -Key 'managed.job_starting' -Arguments @($j.Name, $j.Every) -Task $j.Name
-        $vars = Get-WmScriptEnvironment $j.Group $j.Path
-        $vars['WMANAGER_JOB'] = $j.Name
         $file = Join-Path $script:WmManagedDir ($j.Path -replace '/', '\')
-        try { Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $file }
-        catch {
-            Write-WmLog -Key 'managed.job_not_run' -Arguments @($j.Name, (Get-WmErrorText $_)) -Level error -Task $j.Name
-            continue
-        }
-        $r = Invoke-WmScriptProcess -File $file -Environment $vars -TimeoutMinutes $timeout
-        Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask) -Task $j.Name -Raw -MaxLength 60000
-        if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '! ' -Task $j.Name }
+        foreach ($run in (Get-WmGroupRuns -Item $j -File $file -Label $j.Name)) {
+            $last = $null
+            $parsed = [datetime]::MinValue
+            if ($state[$run.Key] -and [datetime]::TryParse($state[$run.Key], [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { $last = $parsed.ToUniversalTime() }
+            if (-not (Test-WmJobDue -Every $j.Every -LastRun $last -Now $now)) { continue }
 
-        if ($null -eq $r.ExitCode) {
-            Write-WmLog -Key 'managed.job_timeout' -Arguments @($j.Name, $timeout) -Level error -Task $j.Name
-        } elseif ($r.ExitCode -ne 0) {
-            Write-WmLog -Key 'managed.job_exit_code' -Arguments @($j.Name, $r.ExitCode) -Level error -Task $j.Name
-        } else {
-            Write-WmLog -Key 'managed.job_done' -Arguments @($j.Name) -Task $j.Name -LocalOnly
+            $state[$run.Key] = $now.ToString('o')
+            try { Save-WmTabState -Path $script:WmJobsState -Map $state } catch { Write-WmLog -Key 'managed.jobs_state_failed' -Arguments @(Get-WmErrorText $_) -Level warn }
+            Write-WmLog -Key 'managed.job_starting' -Arguments @($run.Label, $j.Every) -Task $j.Name
+            $vars = Get-WmScriptEnvironment $j.Group $j.Path
+            $vars['WMANAGER_JOB'] = $j.Name
+            $r = Invoke-WmGroupRun -Item $j -File $file -Run $run -Vars $vars -Secrets $secrets -TimeoutMinutes $timeout -Copies $copies
+            if ($r.NotRun) {
+                Write-WmLog -Key 'managed.job_not_run' -Arguments @($run.Label, $r.NotRun) -Level error -Task $j.Name
+                continue
+            }
+            Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask) -Task $j.Name -Raw -MaxLength 60000
+            if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '! ' -Task $j.Name }
+
+            if ($null -eq $r.ExitCode) {
+                Write-WmLog -Key 'managed.job_timeout' -Arguments @($run.Label, $timeout) -Level error -Task $j.Name
+            } elseif ($r.ExitCode -ne 0) {
+                Write-WmLog -Key 'managed.job_exit_code' -Arguments @($run.Label, $r.ExitCode) -Level error -Task $j.Name
+            } else {
+                Write-WmLog -Key 'managed.job_done' -Arguments @($run.Label) -Task $j.Name -LocalOnly
+            }
         }
     }
     try { Save-WmTabState -Path $script:WmJobsState -Map $state } catch { }
@@ -761,58 +835,71 @@ function Invoke-WmGroupJobs {
 # (secrets as ***). They read the verified copy without the lock, which the scheduled update may hold for long: the
 # manifest's signature as always, then the hash of each file. The copy itself is private, so each script runs from
 # state\logon, a copy the users can read but only administrators change. A sign-in is served once (its LogonId).
+# Then, when the computer's scripts or jobs include some that run as the user, it starts wmanager-Jobs, so the
+# person gets them now rather than at the next hour.
 
 $script:WmLogonDir = Join-Path $script:WmStateDir 'logon'
 $script:WmLogonServed = Join-Path $script:WmStateDir 'logon-served.txt'
 $script:WmLogonTimeoutMinutes = 5
 
-# This computer's sign-in scripts in the verified copy, read only; none without a verified copy
+# From the verified copy, read only: this computer's sign-in scripts (Scripts), and whether any of its scripts or jobs
+# runs as the user (UserRuns). Nothing without a verified copy.
 function Get-WmLogonContent {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
+    $none = [pscustomobject]@{ Scripts = @(); UserRuns = $false }
     $settings = Get-WmManagementSettings $Config
-    if (-not $settings) { return @() }
+    if (-not $settings) { return $none }
     $cert = Get-WmSigningCertificate -Config $Config -Dir $script:WmRoot
     $trusted = @($cert.Thumbprint)
     $next = Get-WmNextCertificate
     if ($next) { $trusted += $next.Thumbprint }
     $manifest = Get-WmManagedManifest -Thumbprint $trusted -SourceId ([string]$settings.SourceId)
-    if (-not $manifest) { return @() }
+    if (-not $manifest) { return $none }
     $snap = Read-WmManagedSnapshot -Dir $script:WmManagedDir -Manifest $manifest
     $groups = Get-WmComputerGroups -Map $snap.Map -ComputerName $script:WmHostName
-    return (Get-WmGroupLogonScripts -Files $manifest.Files -Groups $groups)
+    $userRuns = $false
+    foreach ($item in @(@(Get-WmGroupScripts -Files $manifest.Files -Groups $groups) + @(Get-WmGroupJobs -Files $manifest.Files -Groups $groups))) {
+        try {
+            if ((Get-WmScriptRunAs ([IO.File]::ReadAllText((Join-Path $script:WmManagedDir ($item.Path -replace '/', '\'))))) -eq 'user') { $userRuns = $true; break }
+        } catch { }
+    }
+    return [pscustomobject]@{ Scripts = @(Get-WmGroupLogonScripts -Files $manifest.Files -Groups $groups); UserRuns = $userRuns }
 }
 
-# Copies of the scripts in state\logon, each checked against the hash the manifest gives it (from the bytes written,
-# so nothing changes between the check and the copy). Returns path in the source -> copy; a script that doesn't match
-# is logged and left out. Copies of scripts no longer there are removed.
-function Copy-WmLogonScripts {
-    param([AllowEmptyCollection()][object[]]$Scripts)
-    New-Item -ItemType Directory -Force -Path $script:WmLogonDir | Out-Null
+# Copies of the scripts in $Dir, each checked against the hash the manifest gives it (from the bytes written, so
+# nothing changes between the check and the copy): Copies (path in the source -> copy) and Errors (path -> why not).
+# Without -Keep, copies of other scripts there are removed.
+function Copy-WmCheckedScripts {
+    param([AllowEmptyCollection()][object[]]$Scripts, [Parameter(Mandatory = $true)][string]$Dir, [switch]$Keep)
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $copies = @{}
+    $errors = @{}
     $names = @{}
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
         foreach ($s in $Scripts) {
-            $name = ($s.Path -replace '^groups/', '') -replace '/logon/', '-' -replace '/', '-'
+            $name = ($s.Path -replace '^groups/', '') -replace '/', '-'
             try {
                 $bytes = [IO.File]::ReadAllBytes((Join-Path $script:WmManagedDir ($s.Path -replace '/', '\')))
                 $hash = ([BitConverter]::ToString($sha.ComputeHash($bytes))) -replace '-', ''
                 if ($hash -ne ([string]$s.Hash).ToUpperInvariant()) { throw (New-WmError 'logon.file_changed') }
-                $dst = Join-Path $script:WmLogonDir $name
+                $dst = Join-Path $Dir $name
                 [IO.File]::WriteAllBytes($dst, $bytes)
                 $copies[$s.Path] = $dst
                 $names[$name] = $true
             } catch {
-                Write-WmLog -Key 'logon.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
+                $errors[$s.Path] = Get-WmErrorText $_
             }
         }
     } finally {
         $sha.Dispose()
     }
-    foreach ($f in @(Get-ChildItem -LiteralPath $script:WmLogonDir -File -ErrorAction SilentlyContinue)) {
-        if (-not $names.ContainsKey($f.Name)) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
+    if (-not $Keep) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue)) {
+            if (-not $names.ContainsKey($f.Name)) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
+        }
     }
-    return $copies
+    return [pscustomobject]@{ Copies = $copies; Errors = $errors }
 }
 
 # Runs the sign-in scripts for every user session not served yet. Exit code 0 = done, anything else (or the time
@@ -827,37 +914,47 @@ function Invoke-WmLogonScripts {
     # Served before they run: a run that stops halfway doesn't repeat them for the same sign-in
     Save-WmTabState -Path $script:WmLogonServed -Map $served
     if ($new.Count -eq 0) { return }
-    $scripts = @(Get-WmLogonContent $Config)
-    if ($scripts.Count -eq 0) { return }
+    $content = Get-WmLogonContent $Config
+    $scripts = @($content.Scripts)
 
-    $secrets = Get-WmSecrets $Config
-    $mask = [string[]]@($secrets.Values)
-    $copies = Copy-WmLogonScripts $scripts
-    foreach ($u in $new) {
-        Write-WmLog -Key 'logon.user' -Arguments @($u.User, $u.SessionId, $scripts.Count)
+    if ($scripts.Count -gt 0) {
+        $secrets = Get-WmSecrets $Config
+        $mask = [string[]]@($secrets.Values)
+        $checked = Copy-WmCheckedScripts -Scripts $scripts -Dir $script:WmLogonDir
         foreach ($s in $scripts) {
-            if (-not $copies.ContainsKey($s.Path)) { continue }
-            $vars = @{ WMANAGER_GROUP = $s.Group; WMANAGER_COMPUTER = $script:WmHostName }
-            try { Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $copies[$s.Path] }
-            catch {
-                Write-WmLog -Key 'logon.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
-                continue
+            if ($checked.Errors.ContainsKey($s.Path)) {
+                Write-WmLog -Key 'logon.script_not_run' -Arguments @($s.Name, $checked.Errors[$s.Path]) -Level error -Task $s.Name
             }
-            try {
-                $r = Invoke-WmUserScript -SessionId $u.SessionId -File $copies[$s.Path] -Environment $vars -TimeoutMinutes $script:WmLogonTimeoutMinutes
-            } catch {
-                Write-WmLog -Key 'logon.start_failed' -Arguments @($s.Name, $u.User, (Get-WmErrorText $_)) -Level error -Task $s.Name
-                continue
-            }
-            Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask) -Task $s.Name
-            if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '  ! ' -Task $s.Name }
-            if ($null -eq $r.ExitCode) {
-                Write-WmLog -Key 'logon.script_timeout' -Arguments @($s.Name, $script:WmLogonTimeoutMinutes) -Level error -Task $s.Name
-            } elseif ($r.ExitCode -ne 0) {
-                Write-WmLog -Key 'logon.script_exit_code' -Arguments @($s.Name, $r.ExitCode) -Level error -Task $s.Name
-            } else {
-                Write-WmLog -Key 'logon.script_done' -Arguments @($s.Name) -Task $s.Name
+        }
+        foreach ($u in $new) {
+            Write-WmLog -Key 'logon.user' -Arguments @($u.User, $u.SessionId, $scripts.Count)
+            foreach ($s in $scripts) {
+                if (-not $checked.Copies.ContainsKey($s.Path)) { continue }
+                $copy = $checked.Copies[$s.Path]
+                $vars = @{ WMANAGER_GROUP = $s.Group; WMANAGER_COMPUTER = $script:WmHostName }
+                try { Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $copy }
+                catch {
+                    Write-WmLog -Key 'logon.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
+                    continue
+                }
+                try {
+                    $r = Invoke-WmUserScript -SessionId $u.SessionId -File $copy -Environment $vars -TimeoutMinutes $script:WmLogonTimeoutMinutes
+                } catch {
+                    Write-WmLog -Key 'logon.start_failed' -Arguments @($s.Name, $u.User, (Get-WmErrorText $_)) -Level error -Task $s.Name
+                    continue
+                }
+                Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask) -Task $s.Name
+                if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '  ! ' -Task $s.Name }
+                if ($null -eq $r.ExitCode) {
+                    Write-WmLog -Key 'logon.script_timeout' -Arguments @($s.Name, $script:WmLogonTimeoutMinutes) -Level error -Task $s.Name
+                } elseif ($r.ExitCode -ne 0) {
+                    Write-WmLog -Key 'logon.script_exit_code' -Arguments @($s.Name, $r.ExitCode) -Level error -Task $s.Name
+                } else {
+                    Write-WmLog -Key 'logon.script_done' -Arguments @($s.Name) -Task $s.Name
+                }
             }
         }
     }
+    # The scripts and jobs that run as the user, for the person who just signed in (wmanager-Jobs takes the lock)
+    if ($content.UserRuns) { Start-WmJobsTask }
 }
