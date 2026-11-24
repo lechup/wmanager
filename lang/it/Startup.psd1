@@ -6,4 +6,6 @@
     'startup.script_timeout'     = '{0}: tempo scaduto ({1} min), fermato.'
     'startup.script_not_run'     = '{0}: non eseguito: {1}.'
     'startup.run_failed'         = 'Gli script di avvio si sono fermati: {0}'
+    'startup.script_restart'     = '{0}: fatto; chiede un riavvio, che all''avvio non si fa.'
+    'startup.no_copy'            = 'Nessuna copia verificata della sorgente: gli script di avvio non sono stati eseguiti.'
 }

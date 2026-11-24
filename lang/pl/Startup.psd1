@@ -6,4 +6,6 @@
     'startup.script_timeout'     = '{0}: przekroczony czas ({1} min), zatrzymany.'
     'startup.script_not_run'     = '{0}: nie uruchomiony: {1}.'
     'startup.run_failed'         = 'Skrypty startowe zatrzymane: {0}'
+    'startup.script_restart'     = '{0}: gotowe; prosi o restart, którego przy starcie się nie robi.'
+    'startup.no_copy'            = 'Brak sprawdzonej kopii źródła: skrypty startowe się nie uruchomiły.'
 }

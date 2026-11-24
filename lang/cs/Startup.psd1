@@ -6,4 +6,6 @@
     'startup.script_timeout'     = '{0}: vypršel čas ({1} min), zastaven.'
     'startup.script_not_run'     = '{0}: nespuštěn: {1}.'
     'startup.run_failed'         = 'Spouštěcí skripty se zastavily: {0}'
+    'startup.script_restart'     = '{0}: hotovo; žádá o restart, který se při spuštění nedělá.'
+    'startup.no_copy'            = 'Žádná ověřená kopie zdroje: spouštěcí skripty se nespustily.'
 }

@@ -862,13 +862,16 @@ $script:StartupTemplate = @'
 # Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
 $ErrorActionPreference = 'Stop'
 
-# Waits up to 2 minutes for a network connection; $false without one
+# Waits up to 2 minutes for the Internet (IPv4 or IPv6); then a local network only is taken too (an office without
+# the Internet), though a virtual adapter may count as one. $false without any.
 function Wait-Network {
     for ($i = 0; $i -lt 24; $i++) {
-        if (Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.IPv4Connectivity -ne 'NoTraffic' }) { return $true }
+        if (Get-NetConnectionProfile -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPv4Connectivity -eq 'Internet' -or $_.IPv6Connectivity -eq 'Internet' }) { return $true }
         Start-Sleep -Seconds 5
     }
-    return $false
+    return [bool](Get-NetConnectionProfile -ErrorAction SilentlyContinue |
+        Where-Object { 'LocalNetwork', 'Subnet' -contains [string]$_.IPv4Connectivity -or 'LocalNetwork', 'Subnet' -contains [string]$_.IPv6Connectivity })
 }
 
 # TODO: what {{NAME}} does at every start, e.g. a service setting or a cleanup. Call Wait-Network first if it needs

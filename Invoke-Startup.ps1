@@ -10,6 +10,12 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Common.ps1')
 . (Join-Path $here 'lib\Choco.ps1')
 . (Join-Path $here 'lib\Managed.ps1')
+# A computer moved back to a wmanager release without startup scripts keeps this file and its task, but not the code:
+# the task goes, quietly, instead of an error at every start
+if (-not (Get-Command Invoke-WmStartupScripts -ErrorAction SilentlyContinue)) {
+    Unregister-ScheduledTask -TaskPath '\wmanager\' -TaskName 'wmanager-Startup' -Confirm:$false -ErrorAction SilentlyContinue
+    exit 0
+}
 Initialize-WmLanguage -Lang $Lang
 
 $config = Import-WmConfig (Join-Path $here 'provision.config.psd1')

@@ -843,8 +843,9 @@ $script:WmLogonDir = Join-Path $script:WmStateDir 'logon'
 $script:WmLogonServed = Join-Path $script:WmStateDir 'logon-served.txt'
 $script:WmLogonTimeoutMinutes = 5
 
-# From the verified copy, read only and without the lock: the files of its manifest (Files) and this computer's
-# groups (Groups); $null without a management source or a verified copy.
+# From the verified copy, read only and without the lock: the files of its manifest (Files), this computer's groups
+# (Groups) and the management settings (Settings); $null without a management source or a verified copy. Read through
+# Read-WmManagedSnapshot, which also checks the files against the manifest.
 function Get-WmVerifiedGroups {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
     $settings = Get-WmManagementSettings $Config
@@ -857,7 +858,25 @@ function Get-WmVerifiedGroups {
     if (-not $manifest) { return $null }
     $snap = Read-WmManagedSnapshot -Dir $script:WmManagedDir -Manifest $manifest
     $groups = Get-WmComputerGroups -Map $snap.Map -ComputerName $script:WmHostName
-    return [pscustomobject]@{ Files = $manifest.Files; Groups = @($groups) }
+    return [pscustomobject]@{ Files = $manifest.Files; Groups = @($groups); Settings = $settings }
+}
+
+# Logs what a sign-in or startup script did ($Prefix: logon or startup): its output (secrets as ***), then done, its
+# exit code or the time limit. -RestartIsDone: 3010 (done, a restart needed) is done too, without a restart.
+function Write-WmScriptResult {
+    param([Parameter(Mandatory = $true)][string]$Prefix, [Parameter(Mandatory = $true)][string]$Name,
+          [Parameter(Mandatory = $true)]$Result, [int]$TimeoutMinutes, [string[]]$Mask = @(), [switch]$RestartIsDone)
+    Write-WmScriptOutput (Hide-WmSecrets $Result.Output $Mask) -Task $Name
+    if ($Result.Errors -and $Result.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $Result.Errors $Mask) -Prefix '  ! ' -Task $Name }
+    if ($null -eq $Result.ExitCode) {
+        Write-WmLog -Key "$Prefix.script_timeout" -Arguments @($Name, $TimeoutMinutes) -Level error -Task $Name
+    } elseif ($Result.ExitCode -eq 3010 -and $RestartIsDone) {
+        Write-WmLog -Key "$Prefix.script_restart" -Arguments @($Name) -Task $Name
+    } elseif ($Result.ExitCode -ne 0) {
+        Write-WmLog -Key "$Prefix.script_exit_code" -Arguments @($Name, $Result.ExitCode) -Level error -Task $Name
+    } else {
+        Write-WmLog -Key "$Prefix.script_done" -Arguments @($Name) -Task $Name
+    }
 }
 
 # From the verified copy, read only: this computer's sign-in scripts (Scripts), and whether any of its scripts or jobs
@@ -958,15 +977,7 @@ function Invoke-WmLogonScripts {
                     Write-WmLog -Key 'logon.start_failed' -Arguments @($s.Name, $u.User, (Get-WmErrorText $_)) -Level error -Task $s.Name
                     continue
                 }
-                Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask) -Task $s.Name
-                if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '  ! ' -Task $s.Name }
-                if ($null -eq $r.ExitCode) {
-                    Write-WmLog -Key 'logon.script_timeout' -Arguments @($s.Name, $script:WmLogonTimeoutMinutes) -Level error -Task $s.Name
-                } elseif ($r.ExitCode -ne 0) {
-                    Write-WmLog -Key 'logon.script_exit_code' -Arguments @($s.Name, $r.ExitCode) -Level error -Task $s.Name
-                } else {
-                    Write-WmLog -Key 'logon.script_done' -Arguments @($s.Name) -Task $s.Name
-                }
+                Write-WmScriptResult -Prefix 'logon' -Name $s.Name -Result $r -TimeoutMinutes $script:WmLogonTimeoutMinutes -Mask $mask
             }
         }
     }
@@ -978,23 +989,47 @@ function Invoke-WmLogonScripts {
 # Startup scripts (groups/<group>/startup/*.ps1): at every start of the computer, as SYSTEM
 # ---------------------------------------------------------------------------
 # The wmanager-Startup task (SYSTEM, a minute after the computer starts, Invoke-Startup.ps1) runs them group by group
-# and by name, each in its own process with the secrets it names. Like the sign-in scripts they read the verified copy
-# without the lock (a scheduled update that catches up at startup may hold it for long) and run from copies checked
-# against the manifest, in state\startup. Exit code 0 = done, anything else (or ScriptTimeoutMinutes) is an error in
-# the log; the next start runs them again anyway.
+# and by name, each in its own process with the secrets it names. It has two triggers: the boot, and the boot event of
+# the System log (Kernel-Boot 27), which Windows logs at every start, also one from Fast Startup (the default "Shut
+# down", after which the boot trigger doesn't fire). A start is served once: by the record of that event. Like the
+# sign-in scripts they read the verified copy without the lock (a scheduled update that catches up at startup may hold
+# it for long, and may be swapping the copy: waited for, up to 2 minutes) and run from copies checked against the
+# manifest, in state\startup. Exit code 0 = done, 3010 = done (no restart is made at startup), anything else (or
+# ScriptTimeoutMinutes) is an error in the log; the next start runs them again anyway.
 
 $script:WmStartupDir = Join-Path $script:WmStateDir 'startup'
+$script:WmStartupServed = Join-Path $script:WmStateDir 'startup-served.txt'
+
+# This start: the record number of the newest boot event ('' when the log has none, e.g. cleared)
+function Get-WmBootMark {
+    $e = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Boot'; Id = 27 } `
+            -MaxEvents 1 -ErrorAction SilentlyContinue
+    if ($e) { return [string]$e.RecordId }
+    return ''
+}
 
 function Invoke-WmStartupScripts {
-    param([Parameter(Mandatory = $true)][hashtable]$Config)
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [int]$CopyWaitSeconds = 120)
+    # Served before they run: the other trigger of the same start finds it so
+    $mark = Get-WmBootMark
+    if ($mark) {
+        if ((Test-Path -LiteralPath $script:WmStartupServed) -and
+                ([IO.File]::ReadAllText($script:WmStartupServed).Trim() -eq $mark)) { return }
+        [IO.File]::WriteAllText($script:WmStartupServed, $mark)
+    }
     $verified = Get-WmVerifiedGroups $Config
-    if (-not $verified) { return }
+    $waited = 0
+    while (-not $verified -and $waited -lt $CopyWaitSeconds) {
+        Start-Sleep -Seconds 10; $waited += 10
+        $verified = Get-WmVerifiedGroups $Config
+    }
+    if (-not $verified) { Write-WmLog -Key 'startup.no_copy' -Level warn; return }
     $list = Get-WmGroupStartupScripts -Files $verified.Files -Groups ([string[]]$verified.Groups)
     $scripts = @($list)
     # Also with none: copies of scripts removed from the source go
     $checked = Copy-WmCheckedScripts -Scripts $scripts -Dir $script:WmStartupDir
     if ($scripts.Count -eq 0) { return }
-    $timeout = [int](Get-WmManagementSettings $Config).ScriptTimeoutMinutes
+    $timeout = [int]$verified.Settings.ScriptTimeoutMinutes
     if ($timeout -le 0) { $timeout = 15 }
     $secrets = Get-WmSecrets $Config
     $mask = [string[]]@($secrets.Values)
@@ -1006,20 +1041,14 @@ function Invoke-WmStartupScripts {
         }
         $copy = $checked.Copies[$s.Path]
         $vars = @{ WMANAGER_GROUP = $s.Group; WMANAGER_COMPUTER = $script:WmHostName }
-        try { Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $copy }
-        catch {
+        # One that can't start doesn't keep the ones after it from running
+        try {
+            Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $copy
+            $r = Invoke-WmScriptProcess -File $copy -Environment $vars -TimeoutMinutes $timeout
+        } catch {
             Write-WmLog -Key 'startup.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
             continue
         }
-        $r = Invoke-WmScriptProcess -File $copy -Environment $vars -TimeoutMinutes $timeout
-        Write-WmScriptOutput (Hide-WmSecrets $r.Output $mask) -Task $s.Name
-        if ($r.Errors -and $r.Errors.Trim()) { Write-WmScriptOutput (Hide-WmSecrets $r.Errors $mask) -Prefix '  ! ' -Task $s.Name }
-        if ($null -eq $r.ExitCode) {
-            Write-WmLog -Key 'startup.script_timeout' -Arguments @($s.Name, $timeout) -Level error -Task $s.Name
-        } elseif ($r.ExitCode -ne 0) {
-            Write-WmLog -Key 'startup.script_exit_code' -Arguments @($s.Name, $r.ExitCode) -Level error -Task $s.Name
-        } else {
-            Write-WmLog -Key 'startup.script_done' -Arguments @($s.Name) -Task $s.Name
-        }
+        Write-WmScriptResult -Prefix 'startup' -Name $s.Name -Result $r -TimeoutMinutes $timeout -Mask $mask -RestartIsDone
     }
 }

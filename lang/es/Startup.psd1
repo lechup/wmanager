@@ -6,4 +6,6 @@
     'startup.script_timeout'     = '{0}: tiempo agotado ({1} min), detenido.'
     'startup.script_not_run'     = '{0}: no se ejecutó: {1}.'
     'startup.run_failed'         = 'Los scripts de inicio se detuvieron: {0}'
+    'startup.script_restart'     = '{0}: hecho; pide un reinicio, que no se hace al iniciar.'
+    'startup.no_copy'            = 'No hay copia verificada de la fuente: los scripts de inicio no se ejecutaron.'
 }

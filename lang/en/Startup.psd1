@@ -6,4 +6,6 @@
     'startup.script_timeout'     = '{0}: timed out ({1} min), stopped.'
     'startup.script_not_run'     = '{0}: didn''t run: {1}.'
     'startup.run_failed'         = 'The startup scripts stopped: {0}'
+    'startup.script_restart'     = '{0}: done; it asks for a restart, which isn''t made at startup.'
+    'startup.no_copy'            = 'No verified copy of the source to read: the startup scripts didn''t run.'
 }

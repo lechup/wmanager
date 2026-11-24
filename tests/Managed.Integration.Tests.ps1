@@ -301,11 +301,17 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Register-WmTasks -Config (New-TestConfig (Join-Path $src 'v2'))
     }
 
-    It 'registers the startup task: SYSTEM, at every start, a minute later, never twice at once' {
+    It 'registers the startup task: SYSTEM, at every start (the boot, and the boot event for Fast Startup), a minute later, never twice at once' {
         $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskStartup
-        $trigger = $task.Triggers | Select-Object -First 1
-        $trigger.CimClass.CimClassName | Should -Be 'MSFT_TaskBootTrigger'
-        $trigger.Delay | Should -Be 'PT1M'
+        $triggers = @($task.Triggers)
+        $triggers.Count | Should -Be 2
+        $triggers[0].CimClass.CimClassName | Should -Be 'MSFT_TaskBootTrigger'
+        $triggers[0].Delay | Should -Be 'PT1M'
+        $triggers[1].CimClass.CimClassName | Should -Be 'MSFT_TaskEventTrigger'
+        $triggers[1].Subscription | Should -Match "Microsoft-Windows-Kernel-Boot'\] and EventID=27"
+        $triggers[1].Delay | Should -Be 'PT1M'
+        # The newest boot event of this runner, as a start's mark
+        Get-WmBootMark | Should -Match '^[0-9]+$'
         $task.Principal.UserId | Should -Be 'SYSTEM'
         $task.Settings.MultipleInstances | Should -Be 'IgnoreNew'
         $task.Actions[0].Arguments | Should -BeLike '*Invoke-Startup.ps1*'

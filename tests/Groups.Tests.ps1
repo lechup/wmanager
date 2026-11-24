@@ -465,6 +465,10 @@ Describe 'startup scripts' {
 
     It 'show lists them for a computer and counts them per group' {
         $src = New-Source
+        # None yet: (none), not an empty line (the lists stay one object, also when empty)
+        $r = Invoke-Tool $src show office-01
+        $r.Text | Should -Match 'Sign-in scripts, in this order[^\r\n]*\r?\n  \(none\)'
+        $r.Text | Should -Match 'Startup scripts, in this order[^\r\n]*\r?\n  \(none\)'
         Set-Text (Get-Path $src 'groups/accounting/startup/10-clean.ps1') "exit 0`r`n" -Bom
         Set-Text (Get-Path $src 'groups/all/startup/20-check.ps1') "exit 0`r`n" -Bom
         $r = Invoke-Tool $src show office-01

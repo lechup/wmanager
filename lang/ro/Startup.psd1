@@ -6,4 +6,6 @@
     'startup.script_timeout'     = '{0}: timp depășit ({1} min), oprit.'
     'startup.script_not_run'     = '{0}: nu a rulat: {1}.'
     'startup.run_failed'         = 'Scripturile de pornire s-au oprit: {0}'
+    'startup.script_restart'     = '{0}: gata; cere o repornire, care nu se face la pornire.'
+    'startup.no_copy'            = 'Nicio copie verificată a sursei: scripturile de pornire nu au rulat.'
 }

@@ -75,11 +75,13 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   network drives the library has a ready one, see [Network drives](#network-drives).
 - **Startup scripts:** `groups/<group>/startup/*.ps1` run as SYSTEM at every start of the computer, before anyone
   signs in as a rule: for what has to be in place from the start (a service setting, a cleanup, a check). The
-  `wmanager-Startup` task starts a minute after the computer does and runs them group by group and by name, hidden,
-  each at most `ScriptTimeoutMinutes`, from checked copies of the verified copy of the source (it never fetches at
-  startup). The network may not be up yet: the template (`tools/groups.ps1 <folder> new-startup <group> <name>`,
-  `tools/wm.ps1`: menu item 21) has a `Wait-Network` to call first when a script needs it. Keep them safe to repeat.
-  Exit code `0` = done, anything else is an error in the log (`logs\startup-YYYY-MM-DD.log`, and Loki with
+  `wmanager-Startup` task starts a minute after the computer does, also after a Fast Startup "Shut down" (the Windows
+  default, where Windows resumes rather than starts: the task also listens for the boot event Windows logs at every
+  start), and runs them once per start, group by group and by name, hidden, each at most `ScriptTimeoutMinutes`, from
+  checked copies of the verified copy of the source (it never fetches at startup). The network may not be up yet: the
+  template (`tools/groups.ps1 <folder> new-startup <group> <name>`, `tools/wm.ps1`: menu item 21) has a `Wait-Network`
+  to call first when a script needs it. Keep them safe to repeat. Exit code `0` = done, `3010` = done (no restart is
+  made at startup), anything else is an error in the log (`logs\startup-YYYY-MM-DD.log`, and Loki with
   `job="startup"`, sent as soon as the network allows); the next start runs them again anyway. Like sign-in scripts
   they get `WMANAGER_GROUP`, `WMANAGER_COMPUTER` and the secrets they name, but not the group's folder.
 - **For both:** the working folder is the system TEMP. Use `$PSScriptRoot` or `WMANAGER_GROUP_DIR` (the group's folder)

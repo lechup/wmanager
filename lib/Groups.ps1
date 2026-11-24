@@ -150,14 +150,15 @@ function Get-WmGroupFolderScripts {
 # Sign-in scripts: groups/<group>/logon/*.ps1, at every sign-in, as the user who signs in (Invoke-Logon.ps1)
 function Get-WmGroupLogonScripts {
     param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
-    return (Get-WmGroupFolderScripts -Files $Files -Groups $Groups -Folder 'logon')
+    # (not "return (...)": that would unroll the list, which has to stay one object, also when empty)
+    Get-WmGroupFolderScripts -Files $Files -Groups $Groups -Folder 'logon'
 }
 
 # Startup scripts: groups/<group>/startup/*.ps1, at every start of the computer, as SYSTEM, before anyone signs in
 # (Invoke-Startup.ps1)
 function Get-WmGroupStartupScripts {
     param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
-    return (Get-WmGroupFolderScripts -Files $Files -Groups $Groups -Folder 'startup')
+    Get-WmGroupFolderScripts -Files $Files -Groups $Groups -Folder 'startup'
 }
 
 # Jobs of the given groups: groups/<group>/jobs/hourly|daily|weekly/*.ps1. Name (group/file) labels the

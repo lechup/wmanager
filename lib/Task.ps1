@@ -27,17 +27,28 @@ function Register-WmLogonTask {
 }
 
 # The startup scripts of the groups (Invoke-Startup.ps1): SYSTEM at every start of the computer, a minute later (the
-# network comes up first), usually before anyone signs in
+# network comes up first), usually before anyone signs in. Two triggers: the boot, and the boot event Windows logs at
+# every start (System log, Kernel-Boot 27), also after a Fast Startup "Shut down", where the boot trigger doesn't fire;
+# a start both catch runs them once (lib\Managed.ps1). Each script has its own time limit, so the task's is only a
+# backstop.
+$script:WmBootEventQuery = '<QueryList><Query Id="0" Path="System"><Select Path="System">' +
+    '*[System[Provider[@Name=''Microsoft-Windows-Kernel-Boot''] and EventID=27]]</Select></Query></QueryList>'
+
 function Register-WmStartupTask {
     $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $startup = Join-Path $script:WmRoot 'Invoke-Startup.ps1'
     $a = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$startup`""
-    $t = New-ScheduledTaskTrigger -AtStartup
-    $t.Delay = 'PT1M'
+    $boot = New-ScheduledTaskTrigger -AtStartup
+    $boot.Delay = 'PT1M'
+    $bootEvent = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace 'Root/Microsoft/Windows/TaskScheduler' |
+        New-CimInstance -ClientOnly
+    $bootEvent.Enabled = $true
+    $bootEvent.Subscription = $script:WmBootEventQuery
+    $bootEvent.Delay = 'PT1M'
     $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
+            -ExecutionTimeLimit (New-TimeSpan -Hours 12) -MultipleInstances IgnoreNew
     $system = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskStartup -Action $a -Trigger $t `
+    Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskStartup -Action $a -Trigger @($boot, $bootEvent) `
         -Settings $s -Principal $system -Description 'wmanager: startup scripts of the groups, as SYSTEM' -Force -ErrorAction Stop | Out-Null
 }
 
