@@ -114,7 +114,8 @@ Describe 'Read-WmAccountPlan' {
 
 Describe 'Set-WmAccounts' {
     BeforeEach {
-        $script:WmDemotedFile = Join-Path $TestDrive 'accounts-demoted.txt'
+        # TestDrive is shared by the whole Describe: a file of its own for each test
+        $script:WmDemotedFile = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.txt')
         $script:log = New-Object System.Collections.Generic.List[string]
         Mock Write-WmLog { [void]$script:log.Add($(if ($Key) { Get-WmText -Key $Key -Arguments $Arguments -English } else { $Message })) }
         $script:admins = New-Object System.Collections.Generic.List[string]
