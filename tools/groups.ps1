@@ -809,19 +809,9 @@ $script:LogonTemplate = @'
 # Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
 $ErrorActionPreference = 'Stop'
 
-# TODO: what {{NAME}} does at sign-in. For example a network drive with each person's own login, which Windows
-# remembers: the first time the share opens and Windows asks for it (tick "Remember my credentials").
-# $drive = 'Z:'; $share = '\\nas\documents'
-# if (-not (Test-Path "$drive\")) {
-#     # New-SmbMapping doesn't ask (net use would wait for a login nobody can type here)
-#     try { $null = New-SmbMapping -LocalPath $drive -RemotePath $share -Persistent $true -ErrorAction Stop }
-#     catch { Start-Process explorer.exe $share }
-# }
-# The same with the shared login of the secrets (not on the command line, where the process list shows it):
-# if (-not (Test-Path "$drive\")) {
-#     $null = New-SmbMapping -LocalPath $drive -RemotePath $share -Persistent $true `
-#         -UserName $env:WMANAGER_SECRET_SHAREUSER -Password $env:WMANAGER_SECRET_SHAREPASSWORD
-# }
+# TODO: what {{NAME}} does at sign-in, e.g. a shortcut or a setting of the person. For network drives the library
+# has a ready one: pwsh tools/groups.ps1 <folder> enable network-drive <group>. Nothing here can answer a question
+# (the input is empty), so don't use commands that ask (net use without a remembered login).
 
 Write-Output "{{NAME}}: done for $env:USERNAME."
 exit 0
@@ -899,6 +889,7 @@ function Get-LibraryItems {
     $items = New-Object 'System.Collections.Generic.List[object]'
     $places = @(, @('script', '', 'scripts'))
     foreach ($e in @('hourly', 'daily', 'weekly')) { $places += , @('job', $e, "jobs/$e") }
+    $places += , @('logon', '', 'logon')
     foreach ($place in $places) {
         $dir = Get-FullPath $script:LibraryRoot $place[2]
         if (-not [IO.Directory]::Exists($dir)) { continue }
@@ -919,7 +910,7 @@ function Get-LibraryCopies {
     param([hashtable]$Files)
     $copies = New-Object 'System.Collections.Generic.List[object]'
     foreach ($p in @($Files.Keys | Sort-Object)) {
-        if ($p -notmatch '^groups/([^/]+)/(scripts/[^/]+|jobs/(hourly|daily|weekly)/[^/]+)\.ps1$') { continue }
+        if ($p -notmatch '^groups/([^/]+)/(scripts/[^/]+|jobs/(hourly|daily|weekly)/[^/]+|logon/[^/]+)\.ps1$') { continue }
         $group = $Matches[1]
         $h = Get-LibraryHeader (Read-TextFile $Files[$p]).Text
         if ($h) { $copies.Add([pscustomobject]@{ Path = $p; Group = $group; Name = $h.Name; Revision = $h.Revision }) }
@@ -933,10 +924,11 @@ function Show-Library {
     if ($items.Count -eq 0) { Write-Host "The library is empty or missing ($script:LibraryRoot)."; return }
     $copies = @(Get-LibraryCopies $Files)
     Write-Host 'Library (pwsh tools/groups.ps1 <folder> enable <name> <group>); the settings are at the top of each file:'
-    foreach ($kind in @('script', 'job')) {
+    foreach ($kind in @('script', 'job', 'logon')) {
         Write-Host ''
         if ($kind -eq 'script') { Write-Host 'Scripts (run once, and again whenever the file changes):' }
-        else { Write-Host 'Jobs (run on a schedule; enable takes another one as the last word):' }
+        elseif ($kind -eq 'job') { Write-Host 'Jobs (run on a schedule; enable takes another one as the last word):' }
+        else { Write-Host 'Sign-in scripts (at every sign-in, as the person who signs in):' }
         foreach ($i in @($items | Where-Object { $_.Kind -eq $kind })) {
             $when = ''
             if ($i.Every) { $when = $i.Every }
@@ -963,6 +955,9 @@ function Enable-LibraryItem {
     if ($item.Kind -eq 'script') {
         if ($Every) { throw "$($item.Name) is a script: it runs once (and again when the file changes), not on a schedule" }
         $rel = "groups/$Group/scripts/$(Get-NumberedName $Root $Group $item.Name).ps1"
+    } elseif ($item.Kind -eq 'logon') {
+        if ($Every) { throw "$($item.Name) is a sign-in script: it runs at every sign-in, not on a schedule" }
+        $rel = "groups/$Group/logon/$(Get-NumberedName $Root $Group $item.Name 'logon').ps1"
     } else {
         if (-not $Every) { $Every = $item.Every }
         if (@('hourly', 'daily', 'weekly') -notcontains $Every) { throw "a job runs hourly, daily or weekly, not '$Every'" }

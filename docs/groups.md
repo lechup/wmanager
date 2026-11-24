@@ -69,8 +69,8 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   Exit code `0` = done, anything else is an error in the log (`logs\logon-YYYY-MM-DD.log`, and Loki with
   `job="logon"`); the next sign-in runs them again anyway. They see the user's own environment plus
   `WMANAGER_GROUP` and `WMANAGER_COMPUTER`, but not the group's folder (the computer's copy of the source is private).
-  `tools/groups.ps1 <folder> new-logon <group> <name>` makes one from a template (`tools/wm.ps1`: menu item 20), with
-  a network drive as the example, see [Network drives](#network-drives).
+  `tools/groups.ps1 <folder> new-logon <group> <name>` makes one from a template (`tools/wm.ps1`: menu item 20); for
+  network drives the library has a ready one, see [Network drives](#network-drives).
 - **For both:** the working folder is the system TEMP. Use `$PSScriptRoot` or `WMANAGER_GROUP_DIR` (the group's folder)
   for the group's files; other variables: `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, and `WMANAGER_JOB` for jobs. The group
   folders are replaced with every new version of the source, so don't run programs or services from them: copy what
@@ -120,38 +120,27 @@ $password = $env:WMANAGER_SECRET_SHAREPASSWORD
 ### Network drives
 
 A drive that SYSTEM maps is SYSTEM's alone (Windows keeps each sign-in's network connections apart), so a group
-script can't give users a drive; a sign-in script can. Two ways:
+script can't give users a drive; a sign-in script can. The library has one ready, `network-drive`:
 
-- **Each person's own login** (no secret anywhere): the script maps the drive with what Windows remembers for the
-  user; the first time, when there is nothing yet, it opens the share, Windows asks for the login, and the person
-  ticks "Remember my credentials". From the next sign-in the drive is there.
+```bash
+pwsh tools/groups.ps1 $src enable network-drive office       # groups/office/logon/10-network-drive.ps1
+```
 
-  ```powershell
-  $ErrorActionPreference = 'Stop'
-  $drive = 'Z:'; $share = '\\nas\documents'
-  if (-not (Test-Path "$drive\")) {
-      try { $null = New-SmbMapping -LocalPath $drive -RemotePath $share -Persistent $true -ErrorAction Stop }
-      catch { Start-Process explorer.exe $share }
-  }
-  exit 0
-  ```
+At the top of the copy go the drives (`Z:` and `\\nas\documents`, one line each). At every sign-in it leaves a
+drive that is there and reachable as it is and maps any other, remembered like a drive mapped in Explorer. Two ways:
 
-  `New-SmbMapping` doesn't ask; `net use` would wait for a login nobody can type, since the script runs hidden (its
-  input is empty, so it fails at once rather than at the time limit).
+- **Each person's own login** (as it comes; no secret anywhere): it maps a drive with the login Windows remembers for
+  its server; when there is none, Windows shows its own "Enter network credentials" window, with "Remember my
+  credentials", and the drive is there from then on. Cancelled, the next sign-in asks again; not answered within the
+  5 minutes, the window closes, the log has an error and the next sign-in asks again.
+- **One login for everyone**: delete `off: ` in its line `# off: wmanager-secrets: ShareUser, SharePassword` and add
+  the two [secrets](#secrets-for-scripts) (`pwsh tools/wm.ps1 <company> secret ShareUser`); it then maps the drives
+  with that login, without asking. Every user of the group's computers can read it (see above): give it access to
+  these shares only.
 
-- **One login for everyone** from the [secrets](#secrets-for-scripts) (every user of the group's computers can read
-  it, see above): `New-SmbMapping` takes it without putting it on a command line, which the process list shows.
-
-  ```powershell
-  # wmanager-secrets: ShareUser, SharePassword
-  $ErrorActionPreference = 'Stop'
-  $drive = 'Z:'; $share = '\\nas\documents'
-  if (-not (Test-Path "$drive\")) {
-      $null = New-SmbMapping -LocalPath $drive -RemotePath $share -Persistent $true `
-          -UserName $env:WMANAGER_SECRET_SHAREUSER -Password $env:WMANAGER_SECRET_SHAREPASSWORD
-  }
-  exit 0
-  ```
+It uses `WNetAddConnection2`, which Explorer's "Map network drive" uses too. A script of your own should not use
+`net use` for a login Windows doesn't remember: it would ask on its input, which a sign-in script doesn't have (it is
+empty, so `net use` fails at once), and opening the share in Explorer doesn't ask for a login either.
 
 ## How a computer checks the source
 
@@ -309,6 +298,7 @@ pwsh tools/groups.ps1 $src library                           # what there is, an
 pwsh tools/groups.ps1 $src enable windows-update all         # groups/all/scripts/20-windows-update.ps1
 pwsh tools/groups.ps1 $src enable check-disk-space all       # groups/all/jobs/daily/check-disk-space.ps1
 pwsh tools/groups.ps1 $src enable check-updates all weekly   # a job on another schedule
+pwsh tools/groups.ps1 $src enable network-drive office       # groups/office/logon/10-network-drive.ps1
 tools/publish.sh $src
 ```
 
@@ -322,6 +312,7 @@ tools/publish.sh $src
 | `check-updates` | job, daily | Last successful Windows Update installation, a restart pending for too long (pending and the computer up for that many days); **fails** when behind | 40 days, 7 days |
 | `check-defender` | job, daily | Real-time protection, signature age, last scan, threats found; **fails** on a problem; passes when another antivirus is registered and Defender is passive | 3 days, 14 days, 1 day |
 | `system-report` | job, daily | The daily report described under **Jobs** above (no thresholds) | none |
+| `network-drive` | sign-in script | Network drives at every sign-in, see [Network drives](#network-drives): with each person's own login (Windows asks once, with "Remember my credentials") or, after one line is changed, a shared login from the secrets | the drives (letter and `\\server\share`) |
 
 - **Alerts:** a check job that finds a problem ends with exit code 1, which wmanager logs as an error with
   `job="jobs"`, so one Grafana alert covers every check, e.g. on

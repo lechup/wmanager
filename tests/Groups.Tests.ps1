@@ -563,7 +563,7 @@ Describe 'library and enable' {
 
     It 'passes check with every item enabled, and warns about a copy older than the library' {
         $src = New-Source
-        foreach ($name in @('windows-update', 'power', 'defender-hardening', 'network-hardening', 'check-disk-space', 'check-updates', 'check-defender')) {
+        foreach ($name in @('windows-update', 'power', 'defender-hardening', 'network-hardening', 'check-disk-space', 'check-updates', 'check-defender', 'network-drive')) {
             (Invoke-Tool $src enable $name all).Code | Should -Be 0
         }
         $r = Invoke-Tool $src check
@@ -596,7 +596,29 @@ Describe 'library and enable' {
             $names.ContainsKey($f.BaseName) | Should -BeFalse
             $names[$f.BaseName] = $true
         }
-        $names.Count | Should -Be 8
+        $names.Count | Should -Be 9
+    }
+
+    It 'puts the network-drive sign-in script in the group''s logon folder; its shared login is off until one line changes' {
+        $src = New-Source
+        $r = Invoke-Tool $src library
+        $r.Text | Should -Match '(?s)Sign-in scripts \(at every sign-in.*network-drive\s+r1'
+        (Invoke-Tool $src enable network-drive accounting).Code | Should -Be 0
+        $path = Get-Path $src 'groups/accounting/logon/10-network-drive.ps1'
+        Test-Bom $path | Should -BeTrue
+        Test-OnlyCrLf (Read-Text $path) | Should -BeTrue
+        (Invoke-Tool $src library).Text | Should -Match 'in groups/accounting/logon/10-network-drive\.ps1 \(r1\)'
+        (Invoke-Tool $src enable network-drive accounting).Code | Should -Be 1
+        (Invoke-Tool $src enable network-drive all daily).Code | Should -Be 1
+        (Invoke-Tool $src show office-01).Text | Should -Match 'groups/accounting/logon/10-network-drive\.ps1'
+        . (Join-Path (Join-Path $script:root 'lib') 'Lang.ps1')
+        . (Join-Path (Join-Path $script:root 'lib') 'Groups.ps1')
+        (Get-WmScriptSecretNames (Read-Text $path)).Count | Should -Be 0
+        $shared = (Read-Text $path).Replace('# off: wmanager-secrets:', '# wmanager-secrets:')
+        $names = Get-WmScriptSecretNames $shared
+        $names | Should -Be @('ShareUser', 'SharePassword')
+        Set-Text $path $shared -Bom
+        (Invoke-Tool $src check).Code | Should -Be 0
     }
 
     It 'keeps the example system report the same as the library''s' {
