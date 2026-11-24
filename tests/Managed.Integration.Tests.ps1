@@ -292,6 +292,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         Set-Content -LiteralPath (Join-Path $dir 'user.ps1') -Value @(
             '"user: $(whoami)"'
             '"variable: $env:WMANAGER_SECRET_CI"'
+            '"stdin: [$([Console]::In.ReadLine())]"'
             '[Console]::Error.WriteLine("on stderr")'
             'exit 7')
         Set-Content -LiteralPath (Join-Path $dir 'probe.ps1') -Value @(
@@ -325,6 +326,8 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         $text | Should -Match 'exit: 7'
         $text | Should -Match 'variable: ci-logon-4711'
         $text | Should -Match 'errors: on stderr'
+        # Its input is empty: what reads it gets nothing at once instead of waiting
+        $text | Should -Match 'stdin: \[\]'
         $text | Should -Not -Match 'user: nt authority'
     }
 
