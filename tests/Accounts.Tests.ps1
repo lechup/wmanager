@@ -321,6 +321,15 @@ Describe 'Disable-WmAutoLogon' {
         Should -Invoke Remove-WmLsaSecret -Times 0
     }
 
+    It 'still removes what it can of the password when one place refuses, then says what failed' {
+        Set-TestAutoLogon @{ AutoAdminLogon = '1'; DefaultUserName = 'anna'; DefaultPassword = 'old-right'; AutoLogonCount = 3 }
+        Mock Remove-ItemProperty { throw 'Access is denied' } -ParameterFilter { $Name -eq 'DefaultPassword' }
+        { Disable-WmAutoLogon -Name 'anna' } | Should -Throw '*DefaultPassword: Access is denied*'
+        (Get-ItemProperty -LiteralPath $script:WmWinlogonKey).AutoAdminLogon | Should -Be '0'
+        Get-TestNames | Should -Not -Contain 'AutoLogonCount'
+        Should -Invoke Remove-WmLsaSecret -Times 1
+    }
+
     It 'does nothing when automatic sign-in is off' {
         Set-TestAutoLogon @{ AutoAdminLogon = '0'; DefaultUserName = 'anna'; DefaultPassword = 'x' }
         Disable-WmAutoLogon -Name 'anna' | Should -BeFalse
@@ -386,6 +395,12 @@ Describe 'Set-WmAccounts, when something fails' {
 
 Describe 'Local accounts on Windows' -Tag 'Integration' -Skip:(-not $env:WM_CI_SOURCES) {
     BeforeAll {
+        # First: until then these name the computer's own automatic sign-in, which AfterAll would remove after a
+        # failure below
+        $script:ciWinlogonKey = 'HKLM:\SOFTWARE\wmanager-ci-winlogon'
+        $script:ciAutoLogonSecret = 'wmanager-ci-autologon'
+        $script:WmWinlogonKey = $script:ciWinlogonKey
+        $script:WmAutoLogonSecret = $script:ciAutoLogonSecret
         $script:WmDemotedFile = Join-Path $TestDrive 'accounts-demoted.txt'
         Mock Write-WmLog { }
         $script:names = @('wmci-admin', 'wmci-person', 'wmci-blank')
@@ -436,8 +451,6 @@ public static class WmTestLsa {
     }
 }
 '@
-        $script:WmWinlogonKey = 'HKLM:\SOFTWARE\wmanager-ci-winlogon'
-        $script:WmAutoLogonSecret = 'wmanager-ci-autologon'
         New-Item -Path $script:WmWinlogonKey -Force | Out-Null
         foreach ($v in @(@('AutoAdminLogon', '1'), @('DefaultUserName', 'wmci-person'), @('DefaultDomainName', $env:COMPUTERNAME),
                          @('DefaultPassword', $script:personOld))) {
@@ -449,8 +462,8 @@ public static class WmTestLsa {
         foreach ($n in $script:names) { Remove-LocalUser -Name $n -ErrorAction SilentlyContinue }
         Remove-ItemProperty -Path $script:WmHiddenAccountsKey -Name 'wmci-admin' -ErrorAction SilentlyContinue
         Remove-ItemProperty -Path $script:WmCredUiKey -Name 'EnumerateAdministrators' -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $script:WmWinlogonKey -Recurse -ErrorAction SilentlyContinue
-        try { Remove-WmLsaSecret -Name $script:WmAutoLogonSecret } catch { }
+        Remove-Item -LiteralPath $script:ciWinlogonKey -Recurse -ErrorAction SilentlyContinue
+        try { Remove-WmLsaSecret -Name $script:ciAutoLogonSecret } catch { }
     }
 
     It 'tells the current password from a wrong one' {

@@ -171,10 +171,15 @@ function Disable-WmAutoLogon {
     # A local account: the computer's name, or none; another domain has an account of the same name
     if ($user -ine $Name -or ($domain -and $domain -ne '.' -and $domain -ine $env:COMPUTERNAME)) { return $false }
     Set-ItemProperty -LiteralPath $script:WmWinlogonKey -Name 'AutoAdminLogon' -Value '0' -ErrorAction Stop
+    # Each removal is tried even when one before it fails, so a failure leaves as little of the password as it can
+    $failed = @()
     foreach ($v in @('DefaultPassword', 'AutoLogonCount')) {
-        if ($null -ne $values.$v) { Remove-ItemProperty -LiteralPath $script:WmWinlogonKey -Name $v -ErrorAction Stop }
+        if ($null -eq $values.$v) { continue }
+        try { Remove-ItemProperty -LiteralPath $script:WmWinlogonKey -Name $v -ErrorAction Stop }
+        catch { $failed += '{0}: {1}' -f $v, (Get-WmErrorText $_) }
     }
-    Remove-WmLsaSecret -Name $script:WmAutoLogonSecret
+    try { Remove-WmLsaSecret -Name $script:WmAutoLogonSecret } catch { $failed += Get-WmErrorText $_ }
+    if ($failed.Count -gt 0) { throw ($failed -join '; ') }
     return $true
 }
 

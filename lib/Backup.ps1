@@ -10,7 +10,8 @@
 #   manifest.txt                               which key went to which file, or that it did not exist
 # The undo journal state\backup\journal.jsonl is shared by all runs: for every registry value
 # wmanager changed, the state before the very first change (see Add-WmJournalEntry in Common.ps1).
-# Keep the key lists below in sync with lib\Debloat.ps1, lib\Privacy.ps1 and lib\Accounts.ps1.
+# Keep the key lists below in sync with lib\Debloat.ps1, lib\Privacy.ps1 and lib\Accounts.ps1. Not the Winlogon key
+# itself, where Disable-WmAutoLogon removes a password: an export would copy DefaultPassword (plain text) here.
 
 $script:WmOemAssocFile = Join-Path $env:SystemRoot 'System32\OEMDefaultAssociations.xml'
 
