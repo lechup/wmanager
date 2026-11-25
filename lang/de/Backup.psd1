@@ -6,4 +6,5 @@
     'backup.journal_foreign_owner'       = 'Das Änderungsjournal {0} hat einen fremden Besitzer ({1}).'
     'backup.journal_bad_line'            = 'Änderungsjournal: Eine beschädigte Zeile wird übersprungen.'
     'backup.value_restore_failed'        = '{0} konnte nicht wiederhergestellt werden: {1}'
+    'backup.key_not_removed'             = 'Der leere Schlüssel {0} bleibt: Windows hat das Entfernen nicht erlaubt ({1}); ein leerer Schlüssel ändert nichts.'
 }

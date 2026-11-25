@@ -188,8 +188,9 @@ function Stop-WmJournal {
 }
 
 # Puts one journal entry back: the old value, or no value if there was none. Keys wmanager created
-# are removed while empty, up to the nearest key that existed before. $HiveRoot (HKEY_USERS\<id>)
-# is the hive of the profile for user entries. Returns $true on success.
+# are removed while empty, up to the nearest key that existed before; an empty key Windows doesn't let go (e.g. the
+# Dsh policy key) stays, with a note in the log: an empty key changes nothing, so the entry still counts as restored.
+# $HiveRoot (HKEY_USERS\<id>) is the hive of the profile for user entries. Returns $true on success.
 function Restore-WmJournalEntry {
     param([Parameter(Mandatory = $true)]$Entry, [string]$HiveRoot = '')
     $keyPath = [string]$Entry.Key
@@ -229,8 +230,20 @@ function Restore-WmJournalEntry {
                     $empty = ($node.ValueCount -eq 0 -and $node.SubKeyCount -eq 0)
                     $node.Close()
                     if (-not $empty) { break }
-                    $parent = Open-WmRegKey -Path $path.Substring(0, $cut) -Writable
-                    if ($parent) { try { $parent.DeleteSubKey($path.Substring($cut + 1), $false) } finally { $parent.Close() } }
+                    $parent = $null
+                    try {
+                        $parent = Open-WmRegKey -Path $path.Substring(0, $cut) -Writable
+                        if ($parent) { $parent.DeleteSubKey($path.Substring($cut + 1), $false) }
+                    } catch {
+                        # Only a refusal (a key Windows protects); anything else is a failure like any other
+                        $why = $_.Exception.GetBaseException()
+                        if (-not ($why -is [UnauthorizedAccessException] -or $why -is [Security.SecurityException])) { throw }
+                        # Its parents aren't empty either, then
+                        Write-WmLog -Key 'backup.key_not_removed' -Arguments @($path, (Get-WmErrorText $_))
+                        break
+                    } finally {
+                        if ($parent) { $parent.Close() }
+                    }
                 }
                 $path = $path.Substring(0, $cut)
             }

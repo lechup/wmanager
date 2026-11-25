@@ -6,4 +6,5 @@
     'backup.journal_foreign_owner'       = 'Deník změn {0} má cizího vlastníka ({1}).'
     'backup.journal_bad_line'            = 'Deník změn: poškozený řádek se přeskakuje.'
     'backup.value_restore_failed'        = 'Nepodařilo se obnovit {0} : {1}'
+    'backup.key_not_removed'             = 'Prázdný klíč {0} zůstává: Windows nedovolil jeho odstranění ({1}); prázdný klíč nic nemění.'
 }

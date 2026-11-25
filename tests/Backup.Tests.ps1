@@ -24,17 +24,17 @@ BeforeAll {
         return ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject ([pscustomobject]$entry) -Compress -Depth 4)
     }
 
-    # Like a key Windows protects: the current user may read but not write
+    # Like a key Windows protects: the current user may read but not write, or ($Rights = 'Delete') not remove it
     # (through .NET: Get-Acl -LiteralPath doesn't find Registry:: paths in Windows PowerShell 5.1)
     function Set-TestKeyReadOnly {
-        param([string]$Path, [bool]$ReadOnly)
+        param([string]$Path, [bool]$ReadOnly, [string]$Rights = 'SetValue, CreateSubKey, Delete')
         $sub = $Path -replace '^HKEY_USERS\\', ''
         $k = [Microsoft.Win32.Registry]::Users.OpenSubKey($sub, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
             [System.Security.AccessControl.RegistryRights]'ReadPermissions, ChangePermissions')
         if (-not $k) { return }
         try {
             $acl = $k.GetAccessControl()
-            $rule = New-Object System.Security.AccessControl.RegistryAccessRule($script:me, 'SetValue, CreateSubKey, Delete', 'Deny')
+            $rule = New-Object System.Security.AccessControl.RegistryAccessRule($script:me, $Rights, 'Deny')
             # the key's only explicit rule for this user is the deny one (the rest is inherited)
             if ($ReadOnly) { $acl.AddAccessRule($rule) } else { $acl.PurgeAccessRules($script:me) }
             $k.SetAccessControl($acl)
@@ -112,6 +112,67 @@ Describe 'Restore-WmJournalEntry' {
         Restore-WmJournalEntry -Entry $entry | Should -BeFalse
         $script:warnings.Count | Should -Be 1
         $script:warnings[0] | Should -BeLike "Could not restore $script:key\Locked : *"
+    }
+
+    It 'counts a value as restored when Windows keeps the empty key wmanager created for it, with a note' {
+        # As the Dsh policy key: the value goes, the key may not
+        $sub = "$script:key\Policy"
+        New-Item -Path "Registry::$sub" -Force | Out-Null
+        $entry = Get-TestEntry -Path $sub -Name 'Allow'
+        $entry.KeyExisted = $false
+        $entry.Ancestor = $script:key
+        New-ItemProperty -LiteralPath "Registry::$sub" -Name 'Allow' -Value 0 -PropertyType DWord | Out-Null
+        Set-TestKeyReadOnly -Path $sub -ReadOnly $true -Rights 'Delete'
+        try {
+            Restore-WmJournalEntry -Entry $entry | Should -BeTrue
+            $script:warnings | Should -BeNullOrEmpty
+            Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'backup.key_not_removed' -and $Arguments[0] -like '*\Policy' }
+            (Get-Item -LiteralPath "Registry::$sub").GetValueNames() | Should -Not -Contain 'Allow'
+        } finally {
+            Set-TestKeyReadOnly -Path $sub -ReadOnly $false
+        }
+        # Without the protection the empty key goes, up to the key that existed before
+        Restore-WmJournalEntry -Entry $entry | Should -BeTrue
+        Test-Path -LiteralPath "Registry::$sub" | Should -BeFalse
+        Test-Path -LiteralPath "Registry::$script:key" | Should -BeTrue
+    }
+
+    It 'removes the empty keys below a protected one, and stops at it' {
+        $mid = "$script:key\A"
+        $leaf = "$mid\B"
+        New-Item -Path "Registry::$leaf" -Force | Out-Null
+        $entry = Get-TestEntry -Path $leaf -Name 'Allow'
+        $entry.KeyExisted = $false
+        $entry.Ancestor = $script:key
+        New-ItemProperty -LiteralPath "Registry::$leaf" -Name 'Allow' -Value 0 -PropertyType DWord | Out-Null
+        Set-TestKeyReadOnly -Path $mid -ReadOnly $true -Rights 'Delete'
+        try {
+            Restore-WmJournalEntry -Entry $entry | Should -BeTrue
+            Test-Path -LiteralPath "Registry::$leaf" | Should -BeFalse
+            Test-Path -LiteralPath "Registry::$mid" | Should -BeTrue
+            Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'backup.key_not_removed' -and $Arguments[0] -like '*\A' }
+            $script:warnings | Should -BeNullOrEmpty
+        } finally {
+            Set-TestKeyReadOnly -Path $mid -ReadOnly $false
+        }
+    }
+
+    It 'still reports a key it fails to remove for another reason than a refusal' {
+        $sub = "$script:key\Policy"
+        New-Item -Path "Registry::$sub" -Force | Out-Null
+        $entry = Get-TestEntry -Path $sub -Name 'Allow'
+        $entry.KeyExisted = $false
+        $entry.Ancestor = $script:key
+        # As when something adds a subkey between the check and the removal
+        $script:fake = [pscustomobject]@{}
+        $script:fake | Add-Member -MemberType ScriptMethod -Name DeleteValue -Value { param($n, $t) }
+        $script:fake | Add-Member -MemberType ScriptMethod -Name DeleteSubKey -Value { param($n, $t) throw (New-Object InvalidOperationException 'has subkeys') }
+        $script:fake | Add-Member -MemberType ScriptMethod -Name Close -Value { }
+        Mock Open-WmRegKey { $script:fake } -ParameterFilter { $Writable }
+        Restore-WmJournalEntry -Entry $entry | Should -BeFalse
+        Should -Invoke Write-WmLog -Times 0 -ParameterFilter { $Key -eq 'backup.key_not_removed' }
+        $script:warnings.Count | Should -Be 1
+        $script:warnings[0] | Should -BeLike "Could not restore *Policy\Allow : *"
     }
 }
 

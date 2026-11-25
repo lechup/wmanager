@@ -6,4 +6,5 @@
     'backup.journal_foreign_owner'       = 'Dziennik zmian {0} ma obcego właściciela ({1}).'
     'backup.journal_bad_line'            = 'Dziennik zmian: pomijam uszkodzoną linię.'
     'backup.value_restore_failed'        = 'Nie udało się przywrócić {0} : {1}'
+    'backup.key_not_removed'             = 'Pusty klucz {0} został: Windows nie pozwolił go usunąć ({1}); pusty klucz niczego nie zmienia.'
 }
