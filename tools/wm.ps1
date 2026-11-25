@@ -1328,7 +1328,7 @@ function Get-SourceSecretNeeds {
     $needs = [ordered]@{}
     if (-not [IO.Directory]::Exists($Company.Source)) { return $needs }
     foreach ($rel in @(Get-SignedFiles $Company.Source | Sort-Object)) {
-        if ($rel -notmatch '^groups/[^/]+/(scripts|jobs|logon|startup)/.*\.ps1$') { continue }
+        if ($rel -notmatch '^groups/[^/]+/(scripts|jobs|logon|startup|events)/.*\.ps1$') { continue }
         try { $names = Get-WmScriptSecretNames ([IO.File]::ReadAllText((Join-Path $Company.Source $rel))) } catch { continue }
         foreach ($n in $names) {
             $key = @($needs.Keys | Where-Object { $_ -ieq $n }) | Select-Object -First 1
@@ -2033,19 +2033,19 @@ function Open-Editor {
 # A new script (runs once, and again when it changes) or job (hourly, daily or weekly) for a group: the file from
 # the tools/groups.ps1 template, opened in the editor, then the check of the source until it passes or you leave it
 function New-GroupFileStep {
-    param($Company, [ValidateSet('script', 'job', 'logon', 'startup')][string]$Kind)
+    param($Company, [ValidateSet('script', 'job', 'logon', 'startup', 'event')][string]$Kind)
     $group = @(Read-Groups $Company 'For the group (a new name makes a new group)')
     if ($group.Count -ne 1) { return $false }
     $arguments = @($group[0])
-    $dir = Join-Path (Join-Path (Join-Path $Company.Source 'groups') $group[0]) $(if ($Kind -in @('logon', 'startup')) { $Kind } else { 'scripts' })
+    $dir = Join-Path (Join-Path (Join-Path $Company.Source 'groups') $group[0]) $(if ($Kind -in @('logon', 'startup')) { $Kind } elseif ($Kind -eq 'event') { 'events' } else { 'scripts' })
     if ($Kind -eq 'job') {
         $every = [string](Read-Line 'How often: hourly, daily or weekly (Enter = daily)')
         if (-not $every) { $every = 'daily' }
         $arguments += $every
         $dir = Join-Path (Join-Path (Join-Path (Join-Path $Company.Source 'groups') $group[0]) 'jobs') $every
     }
-    $example = @{ script = 'install-printer'; job = 'check-backup'; logon = 'network-drive'; startup = 'clean-temp' }[$Kind]
-    $what = @{ script = 'script'; job = 'job'; logon = 'sign-in script'; startup = 'startup script' }[$Kind]
+    $example = @{ script = 'install-printer'; job = 'check-backup'; logon = 'network-drive'; startup = 'clean-temp'; event = 'after-wake' }[$Kind]
+    $what = @{ script = 'script'; job = 'job'; logon = 'sign-in script'; startup = 'startup script'; event = 'event script' }[$Kind]
     $name = [string](Read-Line "Name of the $what, e.g. $example")
     if (-not $name) { return $false }
     $before = @(if ([IO.Directory]::Exists($dir)) { Get-ChildItem -LiteralPath $dir -File -Filter '*.ps1' | ForEach-Object FullName })
@@ -2125,6 +2125,7 @@ function Get-GroupFiles {
         elseif ($rel -imatch '^groups/[^/]+/jobs/(hourly|daily|weekly)/[^/]+\.ps1$') { $kind = 'job' }
         elseif ($rel -imatch '^groups/[^/]+/logon/[^/]+\.ps1$') { $kind = 'logon' }
         elseif ($rel -imatch '^groups/[^/]+/startup/[^/]+\.ps1$') { $kind = 'startup' }
+        elseif ($rel -imatch '^groups/[^/]+/events/[^/]+\.ps1$') { $kind = 'event' }
         else { continue }
         [pscustomobject]@{ Rel = $rel; Path = Join-Path $Company.Source $rel; Kind = $kind }
     })
@@ -2135,7 +2136,7 @@ function Edit-GroupFileStep {
     param($Company)
     Assert-Source $Company
     $files = @(Get-GroupFiles $Company)
-    if ($files.Count -eq 0) { Write-Host '  The groups have no scripts or jobs yet (7, 8, 20 and 21 make new ones).'; return $false }
+    if ($files.Count -eq 0) { Write-Host '  The groups have no scripts or jobs yet (7, 8, 20, 21 and 22 make new ones).'; return $false }
     $rel = Read-Choice @($files | ForEach-Object Rel) 'Which one (number; Enter = none)'
     if (-not $rel) { return $false }
     $file = $files | Where-Object { $_.Rel -ceq $rel } | Select-Object -First 1
@@ -2219,6 +2220,7 @@ function Invoke-CompanyMenu {
         Write-Host ' 19) secrets for scripts (passwords in the configuration, not in the source)'
         Write-Host ' 20) new sign-in script for a group: runs as the user at every sign-in (e.g. a network drive)'
         Write-Host ' 21) new startup script for a group: runs as SYSTEM at every start of the computer'
+        Write-Host ' 22) new event script for a group: runs as SYSTEM at an event (network, wake, lock, unlock, a log)'
         Write-Host '  b) back'
         $answer = Read-Line 'Choose'
         if ($null -eq $answer -or $answer -eq 'b' -or $answer -eq 'q') { return }
@@ -2252,6 +2254,7 @@ function Invoke-CompanyMenu {
                 '19' { Edit-SecretsStep $Company }
                 '20' { $changed = New-GroupFileStep $Company 'logon' }
                 '21' { $changed = New-GroupFileStep $Company 'startup' }
+                '22' { $changed = New-GroupFileStep $Company 'event' }
                 '17' {
                     $folder = [string](Read-Line "Folder for the archive (Enter = $($script:BackupRoot))")
                     $null = Backup-Company $Company $folder

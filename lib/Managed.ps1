@@ -11,6 +11,7 @@
 #   groups/<group>/jobs/<when>/*.ps1       run as SYSTEM on a schedule: hourly, daily or weekly (Invoke-Jobs.ps1)
 #   groups/<group>/logon/*.ps1             run at every sign-in as the user who signs in (Invoke-Logon.ps1)
 #   groups/<group>/startup/*.ps1           run as SYSTEM at every start of the computer (Invoke-Startup.ps1)
+#   groups/<group>/events/*.ps1            run as SYSTEM when the events they name happen (Invoke-Event.ps1)
 #   groups/<group>/...                     any other files the scripts use
 #
 # The manifest lists every file with its SHA256. A computer accepts a manifest only when its Authenticode
@@ -517,6 +518,7 @@ function Resolve-WmManagedContent {
         Scripts      = $content.Scripts
         Jobs         = $content.Jobs
         LogonScripts = $content.LogonScripts
+        EventScripts = $content.EventScripts
         Wmanager     = $content.Wmanager
     }
 }
@@ -1077,6 +1079,26 @@ function Get-WmBootMark {
     return ''
 }
 
+# The verified copy (Get-WmVerifiedGroups), waited for up to $Seconds: the scheduled update may be swapping it
+function Wait-WmVerifiedGroups {
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [int]$Seconds = 120)
+    $verified = Get-WmVerifiedGroups $Config
+    $waited = 0
+    while (-not $verified -and $waited -lt $Seconds) {
+        Start-Sleep -Seconds 10; $waited += 10
+        $verified = Get-WmVerifiedGroups $Config
+    }
+    return $verified
+}
+
+# The time limit of one script: ScriptTimeoutMinutes of the management settings, 15 without it
+function Get-WmScriptTimeout {
+    param($Settings)
+    $timeout = [int]$Settings.ScriptTimeoutMinutes
+    if ($timeout -le 0) { $timeout = 15 }
+    return $timeout
+}
+
 function Invoke-WmStartupScripts {
     param([Parameter(Mandatory = $true)][hashtable]$Config, [int]$CopyWaitSeconds = 120)
     # Served before they run: the other trigger of the same start finds it so
@@ -1086,20 +1108,14 @@ function Invoke-WmStartupScripts {
                 ([IO.File]::ReadAllText($script:WmStartupServed).Trim() -eq $mark)) { return }
         [IO.File]::WriteAllText($script:WmStartupServed, $mark)
     }
-    $verified = Get-WmVerifiedGroups $Config
-    $waited = 0
-    while (-not $verified -and $waited -lt $CopyWaitSeconds) {
-        Start-Sleep -Seconds 10; $waited += 10
-        $verified = Get-WmVerifiedGroups $Config
-    }
+    $verified = Wait-WmVerifiedGroups -Config $Config -Seconds $CopyWaitSeconds
     if (-not $verified) { Write-WmLog -Key 'startup.no_copy' -Level warn; return }
     $list = Get-WmGroupStartupScripts -Files $verified.Files -Groups ([string[]]$verified.Groups)
     $scripts = @($list)
     # Also with none: copies of scripts removed from the source go
     $checked = Copy-WmCheckedScripts -Scripts $scripts -Dir $script:WmStartupDir
     if ($scripts.Count -eq 0) { return }
-    $timeout = [int]$verified.Settings.ScriptTimeoutMinutes
-    if ($timeout -le 0) { $timeout = 15 }
+    $timeout = Get-WmScriptTimeout $verified.Settings
     $secrets = Get-WmSecrets $Config
     $mask = [string[]]@($secrets.Values)
     Write-WmLog -Key 'startup.scripts' -Arguments @($scripts.Count)
@@ -1119,5 +1135,163 @@ function Invoke-WmStartupScripts {
             continue
         }
         Write-WmScriptResult -Prefix 'startup' -Name $s.Name -Result $r -TimeoutMinutes $timeout -Mask $mask -RestartIsDone
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Event scripts (groups/<group>/events/*.ps1): as SYSTEM when the events they name happen
+# ---------------------------------------------------------------------------
+# Each event a script names (Get-WmEventSpecs) has its own task (lib\Task.ps1), which the hourly run keeps as the
+# source says (Get-WmEventTaskList, Sync-WmEventTasks). The task runs Invoke-Event.ps1 with the script and which of its
+# events it is. Like startup scripts they read the verified copy without the lock and run from checked copies (in
+# state\events). One event script runs at a time, on the whole computer (a second one waits, up to 30 minutes), and a
+# script doesn't run again within its gap (5 minutes by default) after its last run, whichever of its events comes:
+# a burst of events (a network that comes and goes) runs it once, and a run within the gap of the copy it ran from
+# last time ends before it verifies or waits for anything. Exit code 0 = done, 3010 = done (no restart is made for an
+# event), anything else (or ScriptTimeoutMinutes) is an error in the log.
+
+$script:WmEventsDir = Join-Path $script:WmStateDir 'events'
+$script:WmEventsState = Join-Path $script:WmStateDir 'events-state.txt'   # script path -> its last run (UTC)
+
+$script:WmEventsMutex = 'Global\wmanager-events'
+
+# A short key of an event's text (8 hex digits of its SHA256). The task passes it rather than the event's place in
+# the script, so a run finds its event also when the lines were reordered since the task was made.
+function Get-WmEventKey {
+    param([Parameter(Mandatory = $true)][string]$Text)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)) } finally { $sha.Dispose() }
+    return ([BitConverter]::ToString($hash, 0, 4) -replace '-', '').ToLowerInvariant()
+}
+
+# The tasks the event scripts of $Content (Get-WmManagedContent) need: Script (group/name), Index (of the event in the
+# script, from 1, for the task's name), Key, Spec and Description. A script whose events can't be read gets none (an
+# error in the log says why; its tasks go).
+function Get-WmEventTaskList {
+    param([Parameter(Mandatory = $true)]$Content)
+    $list = @()
+    foreach ($s in @($Content.EventScripts | Where-Object { $_ })) {
+        try { $specs = Get-WmEventSpecs ([IO.File]::ReadAllText((Join-Path $script:WmManagedDir ($s.Path -replace '/', '\')))) }
+        catch {
+            Write-WmLog -Key 'events.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
+            continue
+        }
+        $i = 0
+        foreach ($e in @($specs.Events)) {
+            $i++
+            $list += [pscustomobject]@{
+                Script      = $s.Name
+                Index       = $i
+                Key         = Get-WmEventKey $e.Text
+                Spec        = $e
+                # What the task is for: a change of the event (or of this layout, v1) registers it again
+                Description = 'wmanager: event script {0}, at "{1}" (v1)' -f $s.Name, $e.Text
+            }
+        }
+    }
+    return $list
+}
+
+# The last run of the event script $Path (UTC) in $State; $null without one
+function Get-WmEventLastRun {
+    param([hashtable]$State, [string]$Path)
+    $parsed = [datetime]::MinValue
+    if ($State[$Path] -and [datetime]::TryParse($State[$Path], [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $parsed.ToUniversalTime() }
+    return $null
+}
+
+# Within the gap of $Gap minutes after the last run? A last run in the future (the clock went back) doesn't hold it.
+function Test-WmEventInGap {
+    param($LastRun, [int]$Gap, [Parameter(Mandatory = $true)][datetime]$Now)
+    if ($Gap -le 0 -or $null -eq $LastRun) { return $false }
+    return ($LastRun -le $Now -and ($Now - $LastRun) -lt [TimeSpan]::FromMinutes($Gap))
+}
+
+# Runs the event script $Name (group/name) for its event $Key (Get-WmEventKey); $Record and $Log: the event's record
+# number and log, as the task passes them; -Session: a lock or unlock, whose session at the screen is read first.
+function Invoke-WmEventScript {
+    param([Parameter(Mandatory = $true)][hashtable]$Config, [Parameter(Mandatory = $true)][string]$Name, [string]$Key = '',
+          [string]$Record = '', [string]$Log = '', [switch]$Session, [int]$CopyWaitSeconds = 120, [int]$WaitMinutes = 30)
+    # The person at the screen before any waiting: later it may be someone else
+    $console = $null
+    if ($Session) { try { $console = Get-WmConsoleSession } catch { } }
+    # Within the gap of the copy it ran from last time: nothing to verify or wait for
+    $parts = $Name.Split('/', 2)
+    if ($parts.Count -eq 2) {
+        try {
+            $last = Get-WmEventLastRun (Read-WmTabState $script:WmEventsState) "groups/$($parts[0])/events/$($parts[1]).ps1"
+            $old = Join-Path $script:WmEventsDir ('{0}-events-{1}.ps1' -f $parts[0], $parts[1])
+            if ($last -and [IO.File]::Exists($old) -and
+                    (Test-WmEventInGap $last (Get-WmEventSpecs ([IO.File]::ReadAllText($old))).Gap ([DateTime]::UtcNow))) { return }
+        } catch { }   # a state or a copy it can't read: the full run decides
+    }
+
+    $mutex = New-Object System.Threading.Mutex($false, $script:WmEventsMutex)
+    $held = $false
+    try {
+        try { $held = $mutex.WaitOne([TimeSpan]::FromMinutes($WaitMinutes)) }
+        catch [System.Threading.AbandonedMutexException] { $held = $true }   # a run that was killed: free now
+        if (-not $held) { Write-WmLog -Key 'events.busy' -Arguments @($Name, $WaitMinutes) -Level warn -Task $Name; return }
+
+        $verified = Wait-WmVerifiedGroups -Config $Config -Seconds $CopyWaitSeconds
+        if (-not $verified) { Write-WmLog -Key 'events.no_copy' -Arguments @($Name) -Level warn -Task $Name; return }
+        $list = Get-WmGroupEventScripts -Files $verified.Files -Groups ([string[]]$verified.Groups)
+        $scripts = @($list)
+        $s = $scripts | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
+        # Gone from the source, or the computer left its group: the hourly run removes its tasks
+        if (-not $s) { Write-WmLog -Key 'events.not_here' -Arguments @($Name) -Task $Name; return }
+        # All of them: copies of scripts removed from the source go
+        $checked = Copy-WmCheckedScripts -Scripts $scripts -Dir $script:WmEventsDir
+        if ($checked.Errors.ContainsKey($s.Path)) {
+            Write-WmLog -Key 'events.script_not_run' -Arguments @($s.Name, $checked.Errors[$s.Path]) -Level error -Task $s.Name
+            return
+        }
+        $copy = $checked.Copies[$s.Path]
+        try { $specs = Get-WmEventSpecs ([IO.File]::ReadAllText($copy)) }
+        catch {
+            Write-WmLog -Key 'events.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
+            return
+        }
+        $spec = @($specs.Events | Where-Object { (Get-WmEventKey $_.Text) -eq $Key }) | Select-Object -First 1
+        # Its event is gone from its lines since the task was made: the hourly run makes the tasks again
+        if (-not $spec) { Write-WmLog -Key 'events.changed' -Arguments @($s.Name) -Task $s.Name; return }
+
+        $state = Read-WmTabState $script:WmEventsState
+        foreach ($k in @($state.Keys)) { if (-not ($scripts | Where-Object { $_.Path -eq $k })) { $state.Remove($k) } }
+        $now = [DateTime]::UtcNow
+        if (Test-WmEventInGap (Get-WmEventLastRun $state $s.Path) $specs.Gap $now) { return }
+        # Recorded before it runs: a run that is killed still counts
+        $state[$s.Path] = $now.ToString('o')
+        Save-WmTabState -Path $script:WmEventsState -Map $state
+
+        $vars = @{ WMANAGER_GROUP = $s.Group; WMANAGER_COMPUTER = $script:WmHostName; WMANAGER_EVENT = $spec.Text }
+        if ('lock', 'unlock' -contains $spec.Name) {
+            # The person at the screen: who locked or unlocked the computer (a task without -Session: read now)
+            if (-not $Session) { try { $console = Get-WmConsoleSession } catch { } }
+            if ($console) {
+                $vars['WMANAGER_EVENT_SESSION'] = [string]$console.SessionId
+                if ($console.User) { $vars['WMANAGER_EVENT_USER'] = $(if ($console.Domain) { "$($console.Domain)\$($console.User)" } else { $console.User }) }
+            }
+        } else {
+            # Values Task Scheduler didn't fill in stay as "$(Record)": left out
+            if ($Record -match '^[0-9]+$') { $vars['WMANAGER_EVENT_RECORD'] = $Record }
+            if ($Log -and $Log -notmatch '^\$\(') { $vars['WMANAGER_EVENT_LOG'] = $Log }
+        }
+        $timeout = Get-WmScriptTimeout $verified.Settings
+        $secrets = Get-WmSecrets $Config
+        $mask = [string[]]@($secrets.Values)
+        Write-WmLog -Key 'events.starting' -Arguments @($s.Name, $spec.Text) -Task $s.Name
+        try {
+            Add-WmScriptSecrets -Environment $vars -Secrets $secrets -File $copy
+            $r = Invoke-WmScriptProcess -File $copy -Environment $vars -TimeoutMinutes $timeout
+        } catch {
+            Write-WmLog -Key 'events.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
+            return
+        }
+        Write-WmScriptResult -Prefix 'events' -Name $s.Name -Result $r -TimeoutMinutes $timeout -Mask $mask -RestartIsDone
+    } finally {
+        if ($held) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
     }
 }

@@ -11,6 +11,7 @@
     'step.schedule'                 = 'Harmonogram zadań'
     'step.group_jobs'               = 'Joby grup'
     'step.jobs_times'               = 'Godziny zadań'
+    'step.event_tasks'              = 'Zadania skryptów zdarzeń'
     'step.packages'                 = 'Paczki'
     'step.privacy'                  = 'Prywatność'
     'step.group_scripts'            = 'Skrypty grup'

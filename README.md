@@ -92,6 +92,7 @@ changing anything.
 | `Invoke-Jobs.ps1` | Group jobs, every hour (`wmanager-Jobs`, only with a management source) |
 | `Invoke-Logon.ps1` | The groups' sign-in scripts, as the user who signs in (`wmanager-Logon`, only with a management source) |
 | `Invoke-Startup.ps1` | The groups' startup scripts, as SYSTEM at every start (`wmanager-Startup`, only with a management source) |
+| `Invoke-Event.ps1` | The groups' event scripts, as SYSTEM at their events (`wmanager-Event-*`, only with a management source) |
 | `Notify-User.ps1` | Restart notification and a one-time prompt to set the default browser (`wmanager-Notify`) |
 | `Restore-Backup.ps1` | Undoes the registry changes made by provisioning (see [Backup and restore](docs/provisioning.md#backup-and-restore)) |
 | `provision.config.example.psd1` | Configuration template; the real `provision.config.psd1` stays out of the repo |

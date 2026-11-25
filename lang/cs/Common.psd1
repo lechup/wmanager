@@ -11,6 +11,7 @@
     'step.schedule'                 = 'Plánovač úloh'
     'step.group_jobs'               = 'Úkoly skupin'
     'step.jobs_times'               = 'Časy úloh'
+    'step.event_tasks'              = 'Úlohy skriptů událostí'
     'step.packages'                 = 'Balíčky'
     'step.privacy'                  = 'Ochrana osobních údajů'
     'step.group_scripts'            = 'Skripty skupin'

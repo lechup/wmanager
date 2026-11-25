@@ -14,6 +14,7 @@
 #   pwsh tools/groups.ps1 <folder> new-job <group> <hourly|daily|weekly> <name>
 #   pwsh tools/groups.ps1 <folder> new-logon <group> <name>
 #   pwsh tools/groups.ps1 <folder> new-startup <group> <name>
+#   pwsh tools/groups.ps1 <folder> new-event <group> <name>
 #   pwsh tools/groups.ps1 <folder> set-version <version> [<group>] [-Url <address>] [-Zip <file>]
 #   pwsh tools/groups.ps1 <folder> unset-version [<group>]
 #   pwsh tools/groups.ps1 <folder> library
@@ -74,6 +75,7 @@ usage: pwsh tools/groups.ps1 <folder> <command> ...
   new-job <group> <hourly|daily|weekly> <name>  new job groups/<group>/jobs/<when>/<name>.ps1 from a template
   new-logon <group> <name>                    new sign-in script groups/<group>/logon/<NN>-<name>.ps1 from a template
   new-startup <group> <name>                  new startup script groups/<group>/startup/<NN>-<name>.ps1 from a template
+  new-event <group> <name>                    new event script groups/<group>/events/<name>.ps1 from a template
   set-version <version> [<group>]             the wmanager release the computers (or a group's) switch to, e.g. v0.2.0
       [-Url <address>] [-Zip <file>]          where they fetch it (default: the GitHub release); a local copy to read
   unset-version [<group>]                     drop that version (the computers keep the one they have)
@@ -280,6 +282,7 @@ function Get-ComputerView {
         Jobs     = @($c.Jobs)
         Logon    = @($c.LogonScripts)
         Startup  = @($c.StartupScripts)
+        Events   = @($c.EventScripts)
         Wmanager = $c.Wmanager
         Messages = $script:MergeMessages.ToArray()   # not @(...): PowerShell 7 fails on @() of a List[object]
     }
@@ -302,6 +305,19 @@ function Format-Package {
 function Get-RunAsNote {
     param([hashtable]$Files, [string]$Path)
     try { if ((Get-WmScriptRunAs (Read-TextFile $Files[$Path]).Text) -eq 'user') { return '   (as each signed-in person)' } } catch { }
+    return ''
+}
+
+# For show: the events of an event script, and its gap when it isn't the usual 5 minutes ('' when they can't be read;
+# check reports them)
+function Get-EventNote {
+    param([hashtable]$Files, [string]$Path)
+    try {
+        $specs = Get-WmEventSpecs (Read-TextFile $Files[$Path]).Text
+        $note = '   at ' + (@($specs.Events | ForEach-Object { $_.Text }) -join ', ')
+        if ($specs.Gap -ne 5) { $note += " (gap $($specs.Gap) min)" }
+        return $note
+    } catch { }
     return ''
 }
 
@@ -341,6 +357,10 @@ function Show-Computer {
     Write-Host 'Startup scripts, in this order (at every start of the computer, as SYSTEM):'
     if ($v.Startup.Count -eq 0) { Write-Host '  (none)' }
     foreach ($l in $v.Startup) { Write-Host "  $($l.Path)" }
+    Write-Host ''
+    Write-Host 'Event scripts (at their events, as SYSTEM):'
+    if ($v.Events.Count -eq 0) { Write-Host '  (none)' }
+    foreach ($l in $v.Events) { Write-Host "  $($l.Path)$(Get-EventNote $Files $l.Path)" }
     $notes = @($v.Messages | Where-Object { -not $_.Warning })
     if ($notes.Count -gt 0) {
         Write-Host ''
@@ -391,14 +411,15 @@ function Show-Overview {
         $lg = @($logon).Count
         $startup = Get-WmGroupStartupScripts -Files $Files -Groups @($g)
         $st = @($startup).Count
+        $ev = @(Get-WmGroupEventScripts -Files $Files -Groups @($g)).Count
         $hasFiles = @($Files.Keys | Where-Object { $_.StartsWith("groups/$g/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
         $extra = ''
         # Short, so the line fits 120 columns (Windows PowerShell wraps it there)
         if (-not $hasFiles) {
-            $extra = '   (no folder yet)'
-            if (Test-WmGroupHasVersion $Versions $g) { $extra = '   (only a wmanager version)' }
+            $extra = '  (no folder yet)'
+            if (Test-WmGroupHasVersion $Versions $g) { $extra = '  (version only)' }
         }
-        Write-Host ('  {0,-15} {1,-14} packages: {2}  scripts: {3}  jobs: {4}  sign-in: {5}  startup: {6}{7}' -f $g, $members, $pk, $sc, $jb, $lg, $st, $extra)
+        Write-Host ('  {0,-15} {1,-14} packages: {2} scripts: {3} jobs: {4} sign-in: {5} startup: {6} events: {7}{8}' -f $g, $members, $pk, $sc, $jb, $lg, $st, $ev, $extra)
     }
 }
 
@@ -459,7 +480,7 @@ function Invoke-Check {
         if (-not $file.Bom -and $file.Text -match '[^\x00-\x7F]') {
             Write-Problem warning "$p has non-ASCII characters but no BOM; save it as UTF-8 with BOM (Windows PowerShell 5.1 reads it as ANSI)"
         }
-        if ($p -match '^groups/[^/]+/(scripts|jobs|logon|startup)/.*\.ps1$') {
+        if ($p -match '^groups/[^/]+/(scripts|jobs|logon|startup|events)/.*\.ps1$') {
             $tokens = $null
             $errs = $null
             $ast = [System.Management.Automation.Language.Parser]::ParseInput($file.Text, [ref]$tokens, [ref]$errs)
@@ -477,11 +498,20 @@ function Invoke-Check {
             } elseif ($file.Text -match '(?m)^\s*#\s*wmanager-at\s*:') {
                 Write-Problem warning "${p}: wmanager-at does nothing here: it gives a daily or weekly job its time"
             }
+            # The events of an event script; anywhere else the lines do nothing
+            if ($p -match '^groups/[^/]+/events/[^/]+$') {
+                try { $null = Get-WmEventSpecs $file.Text } catch { Write-Problem error "${p}: $(Format-WmErrorText $_ -English)" }
+            } elseif ($file.Text -match '(?m)^\s*#\s*wmanager-event(-gap)?\s*:') {
+                Write-Problem warning "${p}: wmanager-event does nothing here: it names the events of a script in groups/<group>/events/"
+            }
             if ($p -match '^groups/[^/]+/logon/' -and $file.Text -match '(?m)^\s*#\s*wmanager-run-as\s*:') {
                 Write-Problem error "${p}: a sign-in script always runs as the user who signs in; remove its wmanager-run-as line"
             }
             if ($p -match '^groups/[^/]+/startup/' -and $file.Text -match '(?m)^\s*#\s*wmanager-run-as\s*:') {
                 Write-Problem error "${p}: a startup script always runs as SYSTEM, before anyone signs in; remove its wmanager-run-as line"
+            }
+            if ($p -match '^groups/[^/]+/events/' -and $file.Text -match '(?m)^\s*#\s*wmanager-run-as\s*:') {
+                Write-Problem error "${p}: an event script always runs as SYSTEM; remove its wmanager-run-as line"
             }
         }
         if ($p -match '^groups/[^/]+/scripts/.+/.+\.ps1$') {
@@ -492,6 +522,9 @@ function Invoke-Check {
         }
         if ($p -match '^groups/[^/]+/startup/.+/.+\.ps1$') {
             Write-Problem warning "$p is not run: startup scripts go directly in groups/<group>/startup/"
+        }
+        if ($p -match '^groups/[^/]+/events/.+/.+\.ps1$') {
+            Write-Problem warning "$p is not run: event scripts go directly in groups/<group>/events/"
         }
         if ($p -match '^groups/[^/]+/jobs/.*\.ps1$' -and $p -notmatch '^groups/[^/]+/jobs/(hourly|daily|weekly)/[^/]+$') {
             Write-Problem warning "$p is not run: jobs go directly in jobs/hourly, jobs/daily or jobs/weekly"
@@ -554,7 +587,7 @@ function Invoke-Check {
         $seen = @{}
         foreach ($c in (@($computers) + '*')) {
             $v = Get-ComputerView -Files $Files -Map $map -Lists @{ '' = @() } -Computer $c
-            $paths = @(@($v.Scripts) + @($v.Jobs) + @($v.Logon) + @($v.Startup) | ForEach-Object { $_.Path } | Where-Object { $byPath.ContainsKey($_) })
+            $paths = @(@($v.Scripts) + @($v.Jobs) + @($v.Logon) + @($v.Startup) + @($v.Events) | ForEach-Object { $_.Path } | Where-Object { $byPath.ContainsKey($_) })
             foreach ($name in @($paths | ForEach-Object { $byPath[$_] } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })) {
                 $twice = @($paths | Where-Object { $byPath[$_] -eq $name })
                 $key = $twice -join ' '
@@ -896,6 +929,34 @@ Write-Output "{{NAME}}: done."
 exit 0
 '@
 
+$script:EventTemplate = @'
+# Event script of group {{GROUP}}. wmanager runs it as SYSTEM when one of its events happens (hidden, Windows
+# PowerShell 5.1, at most ScriptTimeoutMinutes, 15 by default): one event script at a time on the computer, and not
+# again within 5 minutes of its last run, whichever of its events comes (a network that comes and goes runs it once).
+# Its events: a line "wmanager-event: <event>" after a # at the start of a line for each, the event being one of
+#   network  a network connected (also after a start or a wake)    wake    back from sleep or hibernation
+#   lock     a session locked (Win+L, the screen saver)             unlock  a session unlocked
+# or any event of a Windows log: its log, its id and, if you like, its source, e.g. System 7040 Service Control Manager
+# (a log name with spaces goes in double quotes). Another shortest time between two runs: a line
+# "wmanager-event-gap: 10" after a # (minutes, 0 = none).
+# Exit code 0 = done, anything else (or an exception) is an error in the log; its output goes to the log and Loki.
+# Environment: SYSTEM's, and WMANAGER_GROUP, WMANAGER_COMPUTER, WMANAGER_EVENT (the event that came, as its line
+# writes it); for an event of a log WMANAGER_EVENT_LOG and WMANAGER_EVENT_RECORD, which read it:
+#   Get-WinEvent -LogName $env:WMANAGER_EVENT_LOG -FilterXPath "*[System[EventRecordID=$env:WMANAGER_EVENT_RECORD]]"
+# and for lock and unlock WMANAGER_EVENT_SESSION and WMANAGER_EVENT_USER (the session at the screen and its user).
+# It runs from a checked copy, not from the group's folder.
+# Secrets: put a line "wmanager-secrets: Name" after a # at the start of a line; it comes as $env:WMANAGER_SECRET_NAME
+# (pwsh tools/wm.ps1 <company> secret <name>).
+# Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
+# wmanager-event: network
+$ErrorActionPreference = 'Stop'
+
+# TODO: what {{NAME}} does at its events, e.g. connect a network drive or check a service.
+
+Write-Output "{{NAME}}: done ($env:WMANAGER_EVENT)."
+exit 0
+'@
+
 # Scripts run in name order: the next number in tens after the last script of the group (10-x, 20-y...) in its
 # folder (scripts, or logon or startup for those scripts)
 function Get-NumberedName {
@@ -930,6 +991,10 @@ function New-GroupFile {
         $dirRel = "groups/$Group/startup"
         if ($base -notmatch '^[0-9]+-') { $base = Get-NumberedName $Root $Group $base 'startup' }
         $text = $script:StartupTemplate
+    } elseif ($Kind -eq 'event') {
+        # Not numbered: an event script runs at its events, not in an order
+        $dirRel = "groups/$Group/events"
+        $text = $script:EventTemplate
     } else {
         if (@('hourly', 'daily', 'weekly') -notcontains $Every) { throw "a job runs hourly, daily or weekly, not '$Every'" }
         $dirRel = "groups/$Group/jobs/$Every"
@@ -967,13 +1032,15 @@ function Get-LibraryHeader {
     return [pscustomobject]@{ Name = $name; Revision = $revision; Summary = $summary }
 }
 
-# The items of the library: Name, Revision, Summary, Kind (script or job), Every (a job's schedule), Path, Rel
+# The items of the library: Name, Revision, Summary, Kind (script, job, logon, startup or event), Every (a job's
+# schedule), Path, Rel
 function Get-LibraryItems {
     $items = New-Object 'System.Collections.Generic.List[object]'
     $places = @(, @('script', '', 'scripts'))
     foreach ($e in @('hourly', 'daily', 'weekly')) { $places += , @('job', $e, "jobs/$e") }
     $places += , @('logon', '', 'logon')
     $places += , @('startup', '', 'startup')
+    $places += , @('event', '', 'events')
     foreach ($place in $places) {
         $dir = Get-FullPath $script:LibraryRoot $place[2]
         if (-not [IO.Directory]::Exists($dir)) { continue }
@@ -994,7 +1061,7 @@ function Get-LibraryCopies {
     param([hashtable]$Files)
     $copies = New-Object 'System.Collections.Generic.List[object]'
     foreach ($p in @($Files.Keys | Sort-Object)) {
-        if ($p -notmatch '^groups/([^/]+)/(scripts/[^/]+|jobs/(hourly|daily|weekly)/[^/]+|logon/[^/]+|startup/[^/]+)\.ps1$') { continue }
+        if ($p -notmatch '^groups/([^/]+)/(scripts/[^/]+|jobs/(hourly|daily|weekly)/[^/]+|logon/[^/]+|startup/[^/]+|events/[^/]+)\.ps1$') { continue }
         $group = $Matches[1]
         $h = Get-LibraryHeader (Read-TextFile $Files[$p]).Text
         if ($h) { $copies.Add([pscustomobject]@{ Path = $p; Group = $group; Name = $h.Name; Revision = $h.Revision }) }
@@ -1008,14 +1075,15 @@ function Show-Library {
     if ($items.Count -eq 0) { Write-Host "The library is empty or missing ($script:LibraryRoot)."; return }
     $copies = @(Get-LibraryCopies $Files)
     Write-Host 'Library (pwsh tools/groups.ps1 <folder> enable <name> <group>); the settings are at the top of each file:'
-    foreach ($kind in @('script', 'job', 'logon', 'startup')) {
+    foreach ($kind in @('script', 'job', 'logon', 'startup', 'event')) {
         $of = @($items | Where-Object { $_.Kind -eq $kind })
-        if ($of.Count -eq 0 -and $kind -eq 'startup') { continue }
+        if ($of.Count -eq 0 -and 'startup', 'event' -contains $kind) { continue }
         Write-Host ''
         if ($kind -eq 'script') { Write-Host 'Scripts (run once, and again whenever the file changes):' }
         elseif ($kind -eq 'job') { Write-Host 'Jobs (run on a schedule; enable takes another one as the last word):' }
         elseif ($kind -eq 'logon') { Write-Host 'Sign-in scripts (at every sign-in, as the person who signs in):' }
-        else { Write-Host 'Startup scripts (at every start of the computer, as SYSTEM):' }
+        elseif ($kind -eq 'startup') { Write-Host 'Startup scripts (at every start of the computer, as SYSTEM):' }
+        else { Write-Host 'Event scripts (at their events, as SYSTEM):' }
         foreach ($i in $of) {
             $when = ''
             if ($i.Every) { $when = $i.Every }
@@ -1048,6 +1116,9 @@ function Enable-LibraryItem {
     } elseif ($item.Kind -eq 'startup') {
         if ($Every) { throw "$($item.Name) is a startup script: it runs at every start of the computer, not on a schedule" }
         $rel = "groups/$Group/startup/$(Get-NumberedName $Root $Group $item.Name 'startup').ps1"
+    } elseif ($item.Kind -eq 'event') {
+        if ($Every) { throw "$($item.Name) is an event script: it runs at its events, not on a schedule" }
+        $rel = "groups/$Group/events/$($item.Name).ps1"
     } else {
         if (-not $Every) { $Every = $item.Every }
         if (@('hourly', 'daily', 'weekly') -notcontains $Every) { throw "a job runs hourly, daily or weekly, not '$Every'" }
@@ -1310,6 +1381,10 @@ try {
         'new-startup' {
             if ($args1.Count -ne 2) { throw 'usage: new-startup <group> <name>' }
             New-GroupFile -Root $root -Group $args1[0] -Kind 'startup' -Name $args1[1]
+        }
+        'new-event' {
+            if ($args1.Count -ne 2) { throw 'usage: new-event <group> <name>' }
+            New-GroupFile -Root $root -Group $args1[0] -Kind 'event' -Name $args1[1]
         }
         'set-version' {
             if ($args1.Count -lt 1 -or $args1.Count -gt 2) { throw 'usage: set-version <version> [<group>] [-Url <address>] [-Zip <file>]' }

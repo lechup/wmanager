@@ -23,6 +23,11 @@
     'managed.at_hourly'                  = 'un job orario gira ogni ora: wmanager-at è per i job giornalieri e settimanali'
     'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': un job settimanale indica un giorno, es. Fri 17:00'
     'managed.job_first_time'             = 'Il job {0} gira alle {1}: la prima volta allora.'
+    'managed.event_none'                 = 'uno script di evento nomina il suo evento in una riga "# wmanager-event: network" (network, wake, lock, unlock, o un registro e un ID evento)'
+    'managed.event_bad'                  = 'wmanager-event: ''{0}'' non è network, wake, lock, unlock né un registro e un ID evento come System 7040 [origine]'
+    'managed.event_twice'                = 'wmanager-event: ''{0}'' compare due volte'
+    'managed.event_gap_bad'              = 'wmanager-event-gap: ''{0}'' non è un numero di minuti da 0 a 1440'
+    'managed.event_gap_twice'            = 'più di una riga wmanager-event-gap'
 
     'managed.cert_missing'               = 'Certificato di firma non trovato: {0}'
     'managed.cert_private_key'           = '{0} contiene una chiave privata; sui computer va solo il .cer pubblico'

@@ -412,6 +412,76 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         }
     }
 
+    It 'registers a task for each event an event script names, and changes or removes them as the source does' {
+        $list = @(Get-WmEventTaskList -Content (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'v2')) -CachedOnly))
+        $list.Count | Should -Be 1
+        $list[0].Script | Should -Be 'ci/on-test'
+        $lockSpec = (Get-WmEventSpecs '# wmanager-event: lock').Events[0]
+        $wanted = @($list[0], [pscustomobject]@{ Script = 'ci/on-test'; Index = 2; Key = (Get-WmEventKey 'lock'); Spec = $lockSpec
+                                                 Description = 'wmanager: event script ci/on-test, at "lock" (v1)' })
+        Sync-WmEventTasks -Wanted $wanted
+        $byEvent = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci+on-test-1'
+        $trigger = $byEvent.Triggers | Select-Object -First 1
+        $trigger.CimClass.CimClassName | Should -Be 'MSFT_TaskEventTrigger'
+        $trigger.Subscription | Should -Match 'Path="Application"'
+        $trigger.Subscription | Should -Match ([regex]::Escape("Provider[@Name='wmanager-ci'] and EventID=4242"))
+        @($trigger.ValueQueries | ForEach-Object { "$($_.Name)=$($_.Value)" } | Sort-Object) |
+            Should -Be @('Log=Event/System/Channel', 'Record=Event/System/EventRecordID')
+        $byEvent.Actions[0].Arguments | Should -BeLike ('*Invoke-Event.ps1" -Script "ci/on-test" -Key {0} -Record "$(Record)" -Log "$(Log)"' -f (Get-WmEventKey 'Application 4242 wmanager-ci'))
+        $byEvent.Principal.UserId | Should -Be 'SYSTEM'
+        $byEvent.Settings.MultipleInstances | Should -Be 'IgnoreNew'
+        $byLock = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci+on-test-2'
+        $trigger = $byLock.Triggers | Select-Object -First 1
+        $trigger.CimClass.CimClassName | Should -Be 'MSFT_TaskSessionStateChangeTrigger'
+        [int]$trigger.StateChange | Should -Be 7
+        [string]$trigger.UserId | Should -BeNullOrEmpty
+        $byLock.Actions[0].Arguments | Should -BeLike ('*Invoke-Event.ps1" -Script "ci/on-test" -Key {0} -Session' -f (Get-WmEventKey 'lock'))
+        # The same again changes nothing; one event less removes its task
+        Mock Register-ScheduledTask { }
+        Sync-WmEventTasks -Wanted $wanted
+        Should -Invoke Register-ScheduledTask -Times 0
+        Sync-WmEventTasks -Wanted @($list[0])
+        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci+on-test-2' -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci+on-test-1' | Should -Not -BeNullOrEmpty
+    }
+
+    It 'runs the event script from its task at its event, as SYSTEM: the event''s log and record, the secret hidden in the log' {
+        # The task runs the installed copy, with its configuration
+        . (Join-Path $root 'lib\SelfUpdate.ps1')
+        Copy-WmProgramFiles -From $root -To $script:WmRoot
+        $configFile = Join-Path $script:WmRoot 'provision.config.psd1'
+        @(
+            '@{'
+            "    Management = @{ Source = '$(Join-Path $src 'v2')'; SourceId = '$id'; Certificate = 'wmanager-signing.cer' }"
+            "    Secrets = @{ CiShare = '$secretValue' }"
+            '}'
+        ) | Set-Content -LiteralPath $configFile -Encoding UTF8
+        $file = 'C:\wm-ci\event.txt'
+        Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue
+        $task = 'wmanager-Event-ci+on-test-1'
+        try {
+            Sync-WmEventTasks -Wanted (Get-WmEventTaskList -Content (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'v2')) -CachedOnly))
+            if (-not [Diagnostics.EventLog]::SourceExists('wmanager-ci')) { New-EventLog -LogName Application -Source 'wmanager-ci' }
+            Write-EventLog -LogName Application -Source 'wmanager-ci' -EventId 4242 -EntryType Information -Message 'wmanager CI: an event for an event script'
+            $record = (Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'wmanager-ci'; Id = 4242 } -MaxEvents 1).RecordId
+            for ($i = 0; $i -lt 60 -and -not (Test-Path -LiteralPath $file); $i++) { Start-Sleep -Seconds 2 }
+            for ($i = 0; $i -lt 30 -and (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $task).State -eq 'Running'; $i++) { Start-Sleep -Seconds 2 }
+            $info = Get-ScheduledTaskInfo -TaskPath $script:WmTaskPath -TaskName $task
+            Write-Host "Task: last run $($info.LastRunTime), result $($info.LastTaskResult)"
+            @(Get-Content -LiteralPath $file) | Should -Be @("ci|Application 4242 wmanager-ci|Application|$record|$secretValue")
+            $info.LastTaskResult | Should -Be 0
+            $log = Get-ChildItem -LiteralPath $script:WmLogDir -Filter 'events-*.log' | Sort-Object LastWriteTime | Select-Object -Last 1
+            $text = [IO.File]::ReadAllText($log.FullName)
+            $text | Should -Match 'ci/on-test \(Application 4242 wmanager-ci\): starting'
+            $text | Should -Match 'event secret: \*\*\*'
+            $text | Should -Match 'ci/on-test: done'
+            $text | Should -Not -Match ([regex]::Escape($secretValue))
+        } finally {
+            Remove-Item -LiteralPath $configFile -Force -ErrorAction SilentlyContinue
+            Sync-WmEventTasks -Wanted @()
+        }
+    }
+
     It 'runs a program from SYSTEM in the session of the signed-in user, with variables, output and exit code' {
         $dir = 'C:\wm-ci\logon'
         New-Item -ItemType Directory -Force -Path $dir | Out-Null

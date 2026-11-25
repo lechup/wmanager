@@ -18,6 +18,7 @@ groups/<group>/scripts/*.ps1         scripts run as SYSTEM when their content ch
 groups/<group>/jobs/<when>/*.ps1     jobs run as SYSTEM on a schedule: hourly, daily, weekly (optional)
 groups/<group>/logon/*.ps1           sign-in scripts, run as the user at every sign-in (optional)
 groups/<group>/startup/*.ps1         startup scripts, run as SYSTEM at every start of the computer (optional)
+groups/<group>/events/*.ps1          event scripts, run as SYSTEM at the events they name (optional)
 groups/<group>/...                   other files the scripts use (installers, drivers...)
 ```
 
@@ -86,13 +87,33 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   `wmanager-Startup` task starts a minute after the computer does, also after a Fast Startup "Shut down" (the Windows
   default, where Windows resumes rather than starts: the task also listens for the boot event Windows logs at every
   start; the system's boot time, `LastBootUpTime`, then stays that of the last full start, so don't take it for the
-  time the computer was switched on), and runs them once per start, group by group and by name, hidden, each at most `ScriptTimeoutMinutes`, from
-  checked copies of the verified copy of the source (it never fetches at startup). The network may not be up yet: the
+  time the computer was switched on), and runs them once per start, group by group and by name, hidden, each at most
+  `ScriptTimeoutMinutes`, from checked copies of the verified copy of the source (it never fetches at startup). The
+  network may not be up yet: the
   template (`tools/groups.ps1 <folder> new-startup <group> <name>`, `tools/wm.ps1`: menu item 21) has a `Wait-Network`
   to call first when a script needs it. Keep them safe to repeat. Exit code `0` = done, `3010` = done (no restart is
   made at startup), anything else is an error in the log (`logs\startup-YYYY-MM-DD.log`, and Loki with
   `job="startup"`, sent as soon as the network allows); the next start runs them again anyway. Like sign-in scripts
   they get `WMANAGER_GROUP`, `WMANAGER_COMPUTER` and the secrets they name, but not the group's folder.
+- **Event scripts:** `groups/<group>/events/*.ps1` run as SYSTEM when something happens on the computer. A script
+  names its events, a line each: `# wmanager-event: network` (a network connected, also after a start or a wake),
+  `wake` (back from sleep or hibernation), `lock` and `unlock` (a session of any user), or any event of a Windows log:
+  its log, its id and, if you like, its source (`# wmanager-event: System 7040 Service Control Manager`, a service's
+  start type changed; a log name with spaces goes in double quotes). Check first that Windows logs it at all
+  (`Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 7040 } -MaxEvents 1`): Windows 11 no longer logs some
+  well-known ones, such as 7036 for a service that starts or stops. Each event gets its own task,
+  `wmanager-Event-<group>+<name>-<n>` (SYSTEM), which `wmanager-Jobs` makes, changes and removes as the source says, at
+  every run. One event script runs at a time on the computer, and a script doesn't run again within 5 minutes of its
+  last run, whichever of its events comes (`# wmanager-event-gap: <minutes>` for another gap, `0` for none): a burst
+  of events (a network that comes and goes) runs it once. It gets `WMANAGER_EVENT`, the event that came as its line writes it; for an event of a log
+  `WMANAGER_EVENT_LOG` and `WMANAGER_EVENT_RECORD`, which read that event:
+  `Get-WinEvent -LogName $env:WMANAGER_EVENT_LOG -FilterXPath "*[System[EventRecordID=$env:WMANAGER_EVENT_RECORD]]"`;
+  for `lock` and `unlock` `WMANAGER_EVENT_SESSION` and `WMANAGER_EVENT_USER`, the session at the screen and its user
+  (Windows doesn't say which session it was, so with a remote desktop session it may be another one). Like startup
+  scripts they run hidden, each at most `ScriptTimeoutMinutes`, from checked copies, with `WMANAGER_GROUP`,
+  `WMANAGER_COMPUTER` and the secrets they name; exit code `0` or `3010` = done (no restart is made for an event),
+  anything else is an error in the log (`logs\events-YYYY-MM-DD.log`, and Loki with `job="events"`). A template:
+  `tools/groups.ps1 <folder> new-event <group> <name>` (`tools/wm.ps1`: menu item 22).
 - **For both:** the working folder is the system TEMP. Use `$PSScriptRoot` or `WMANAGER_GROUP_DIR` (the group's folder)
   for the group's files; other variables: `WMANAGER_GROUP`, `WMANAGER_COMPUTER`, and `WMANAGER_JOB` for jobs. The group
   folders are replaced with every new version of the source, so don't run programs or services from them: copy what

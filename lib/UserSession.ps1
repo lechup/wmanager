@@ -187,6 +187,22 @@ namespace Wmanager
             return result;
         }
 
+        [DllImport("kernel32.dll")]
+        static extern int WTSGetActiveConsoleSessionId();
+
+        // The session at the computer's screen (the console) and its user ("" at the sign-in screen); null while none
+        // is attached to it (a moment while switching between users)
+        public static UserSessionInfo GetConsoleSession()
+        {
+            int id = WTSGetActiveConsoleSessionId();
+            if (id == -1) return null;
+            UserSessionInfo u = new UserSessionInfo();
+            u.SessionId = id;
+            u.User = QueryString(id, WTSUserName);
+            u.Domain = QueryString(id, WTSDomainName);
+            return u;
+        }
+
         static Dictionary<string, string> ReadEnvironment(IntPtr block)
         {
             Dictionary<string, string> env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -300,6 +316,12 @@ namespace Wmanager
 function Get-WmUserSessions {
     Initialize-WmUserSession
     return @([Wmanager.UserSession]::GetActiveSessions())
+}
+
+# The session at the computer's screen: SessionId, User and Domain (empty at the sign-in screen); $null while none is
+function Get-WmConsoleSession {
+    Initialize-WmUserSession
+    return [Wmanager.UserSession]::GetConsoleSession()
 }
 
 # Runs a Windows PowerShell script as the user of session $SessionId, hidden, with $Environment added to the user's

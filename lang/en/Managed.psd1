@@ -23,6 +23,11 @@
     'managed.at_hourly'                  = 'an hourly job runs every hour: wmanager-at is for daily and weekly jobs'
     'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': a weekly job names one day, e.g. Fri 17:00'
     'managed.job_first_time'             = 'Job {0} runs at {1}: the first time then.'
+    'managed.event_none'                 = 'an event script names its event in a line "# wmanager-event: network" (network, wake, lock, unlock, or a log and an event id)'
+    'managed.event_bad'                  = 'wmanager-event: ''{0}'' is neither network, wake, lock, unlock nor a log and an event id like System 7040 [source]'
+    'managed.event_twice'                = 'wmanager-event: ''{0}'' is named twice'
+    'managed.event_gap_bad'              = 'wmanager-event-gap: ''{0}'' is not a number of minutes from 0 to 1440'
+    'managed.event_gap_twice'            = 'more than one wmanager-event-gap line'
 
     'managed.cert_missing'               = 'Signing certificate not found: {0}'
     'managed.cert_private_key'           = '{0} contains a private key; only the public .cer goes to the computers'

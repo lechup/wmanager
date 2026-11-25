@@ -1,5 +1,5 @@
 ﻿# Task Scheduler tasks: scheduled update (every day by default), retry at sign-in, notification, group jobs, the
-# groups' sign-in scripts and startup scripts.
+# groups' sign-in scripts, startup scripts and event scripts.
 
 $script:WmTaskPath   = '\wmanager\'
 $script:WmTaskUpdate = 'wmanager-Update'
@@ -8,6 +8,7 @@ $script:WmTaskNotify = 'wmanager-Notify'
 $script:WmTaskJobs   = 'wmanager-Jobs'
 $script:WmTaskLogon  = 'wmanager-Logon'
 $script:WmTaskStartup = 'wmanager-Startup'
+$script:WmTaskEventPrefix = 'wmanager-Event-'
 $script:WmAllDays    = @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
 
 # The sign-in scripts of the groups (Invoke-Logon.ps1): SYSTEM at every sign-in of any user, half a minute later
@@ -50,6 +51,103 @@ function Register-WmStartupTask {
     $system = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskStartup -Action $a -Trigger @($boot, $bootEvent) `
         -Settings $s -Principal $system -Description 'wmanager: startup scripts of the groups, as SYSTEM' -Force -ErrorAction Stop | Out-Null
+}
+
+# The event scripts of the groups (Invoke-Event.ps1): one task per event a script names (Get-WmEventTaskList),
+# wmanager-Event-<group>+<name>-<n>, SYSTEM, at that event, never twice at once. The action passes which of the
+# script's events it is (-Key, from the event's text, so a reordered list doesn't mix them up) and, for an event of a
+# log, the event's record number and log ($(Record), $(Log): values Task Scheduler takes from the event), for lock
+# and unlock -Session (the session at the screen is read first). The description says what the task is for; a task
+# whose description differs from the wanted one is registered again.
+$script:WmTaskNs = 'Root/Microsoft/Windows/TaskScheduler'
+
+# The query of an event trigger: a ready name's event, or the log, id and (if given) source of a raw one
+function Get-WmEventQuery {
+    param([Parameter(Mandatory = $true)]$Spec)
+    switch ($Spec.Name) {
+        'network' { $log = 'Microsoft-Windows-NetworkProfile/Operational'; $provider = 'Microsoft-Windows-NetworkProfile'; $id = 10000 }
+        'wake'    { $log = 'System'; $provider = 'Microsoft-Windows-Power-Troubleshooter'; $id = 1 }
+        default   { $log = [string]$Spec.Log; $provider = [string]$Spec.Provider; $id = [int]$Spec.Id }
+    }
+    $l = [Security.SecurityElement]::Escape($log)
+    $select = if ($provider) { "*[System[Provider[@Name='$([Security.SecurityElement]::Escape($provider))'] and EventID=$id]]" } else { "*[System[EventID=$id]]" }
+    return "<QueryList><Query Id=""0"" Path=""$l""><Select Path=""$l"">$select</Select></Query></QueryList>"
+}
+
+function New-WmEventTaskTrigger {
+    param([Parameter(Mandatory = $true)]$Spec)
+    if ('lock', 'unlock' -contains $Spec.Name) {
+        $t = Get-CimClass -ClassName MSFT_TaskSessionStateChangeTrigger -Namespace $script:WmTaskNs | New-CimInstance -ClientOnly
+        $t.Enabled = $true
+        $t.StateChange = $(if ($Spec.Name -eq 'lock') { 7 } else { 8 })   # TASK_SESSION_LOCK, TASK_SESSION_UNLOCK; any user
+        return $t
+    }
+    $t = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace $script:WmTaskNs | New-CimInstance -ClientOnly
+    $t.Enabled = $true
+    $t.Subscription = Get-WmEventQuery $Spec
+    $class = Get-CimClass -ClassName MSFT_TaskNamedValue -Namespace $script:WmTaskNs
+    $t.ValueQueries = [CimInstance[]]@(
+        (New-CimInstance -CimClass $class -ClientOnly -Property @{ Name = 'Record'; Value = 'Event/System/EventRecordID' }),
+        (New-CimInstance -CimClass $class -ClientOnly -Property @{ Name = 'Log'; Value = 'Event/System/Channel' }))
+    return $t
+}
+
+# wmanager-Event-<group>+<name>-<n>: the group, the name and the number of the event in the script. '+' can't be in a
+# group's or a file's name, so two scripts never get the same task (office/wifi-up and office-wifi/up)
+function Get-WmEventTaskName {
+    param([Parameter(Mandatory = $true)]$Task)
+    return '{0}{1}-{2}' -f $script:WmTaskEventPrefix, ($Task.Script -replace '/', '+'), $Task.Index
+}
+
+function Register-WmEventTask {
+    param([Parameter(Mandatory = $true)]$Task)
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $runner = Join-Path $script:WmRoot 'Invoke-Event.ps1'
+    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runner`" -Script `"$($Task.Script)`" -Key $($Task.Key)"
+    if ('lock', 'unlock' -contains $Task.Spec.Name) { $arguments += ' -Session' }
+    else { $arguments += ' -Record "$(Record)" -Log "$(Log)"' }
+    $a = New-ScheduledTaskAction -Execute $ps -Argument $arguments
+    # The script has its own time limit, after waiting for another event script: the task's is only a backstop
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Hours 12) -MultipleInstances IgnoreNew
+    $system = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName (Get-WmEventTaskName $Task) -Action $a -Trigger (New-WmEventTaskTrigger $Task.Spec) `
+        -Settings $s -Principal $system -Description $Task.Description -Force -ErrorAction Stop | Out-Null
+}
+
+# The tasks of the event scripts as $Wanted says (Get-WmEventTaskList): new or changed ones registered, the others
+# removed. One that fails (e.g. a log this computer doesn't have) is a warning and doesn't hold up the others. Logs
+# the number when anything changed.
+function Sync-WmEventTasks {
+    param([AllowEmptyCollection()][object[]]$Wanted = @())
+    $have = @{}
+    foreach ($t in @(Get-ScheduledTask -TaskPath $script:WmTaskPath -ErrorAction SilentlyContinue)) {
+        if ($t.TaskName.StartsWith($script:WmTaskEventPrefix, [StringComparison]::OrdinalIgnoreCase)) { $have[$t.TaskName] = $t }
+    }
+    $names = @{}
+    $changed = $false
+    foreach ($w in $Wanted) {
+        $name = Get-WmEventTaskName $w
+        $names[$name] = $true
+        $t = $have[$name]
+        if ($t -and [string]$t.Description -ceq $w.Description) { continue }
+        try {
+            Register-WmEventTask $w
+            $changed = $true
+        } catch {
+            Write-WmLog -Key 'task.event_task_failed' -Arguments @($name, (Get-WmErrorText $_)) -Level warn
+        }
+    }
+    foreach ($n in @($have.Keys)) {
+        if ($names.ContainsKey($n)) { continue }
+        try {
+            Unregister-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $n -Confirm:$false -ErrorAction Stop
+            $changed = $true
+        } catch {
+            Write-WmLog -Key 'task.event_task_failed' -Arguments @($n, (Get-WmErrorText $_)) -Level warn
+        }
+    }
+    if ($changed) { Write-WmLog -Key 'task.events_synced' -Arguments @(@($Wanted).Count) }
 }
 
 function Get-WmUsersGroupName {
@@ -174,7 +272,8 @@ function Register-WmTasks {
                 -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
         Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Action $a4 -Trigger $t4 `
             -Settings $s4 -Principal $system -Description 'wmanager: group scripts and jobs from the management source (hourly)' -Force -ErrorAction Stop | Out-Null
-        # 5. The groups' sign-in scripts, at every sign-in; 6. their startup scripts, at every start
+        # 5. The groups' sign-in scripts, at every sign-in; 6. their startup scripts, at every start. (The tasks of
+        #    their event scripts follow the source at every run of wmanager-Jobs: Sync-WmEventTasks.)
         Register-WmLogonTask
         Register-WmStartupTask
     } else {
@@ -184,6 +283,7 @@ function Register-WmTasks {
                 if ($name -eq $script:WmTaskJobs) { Write-WmLog -Key 'task.jobs_removed' }
             }
         }
+        Sync-WmEventTasks -Wanted @()
     }
 
     $days = Format-WmUpdateDays (Get-WmUpdateDays $Config)

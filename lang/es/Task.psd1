@@ -10,5 +10,7 @@
     'task.logon_registered' = 'Tarea wmanager-Logon registrada: los scripts de inicio de sesión de los grupos.'
     'task.jobs_times' = 'Las horas de los trabajos como desencadenadores de wmanager-Jobs: {0}'
     'task.startup_registered' = 'Tarea wmanager-Startup registrada: los scripts de inicio de los grupos.'
+    'task.events_synced'      = 'Las tareas de los scripts de evento siguen la fuente: {0}.'
+    'task.event_task_failed'  = 'No se pudo configurar la tarea {0} de un script de evento: {1}'
     'task.jobs_start_failed' = 'No se pudo iniciar wmanager-Jobs: {0}'
 }

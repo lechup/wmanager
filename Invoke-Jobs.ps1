@@ -36,6 +36,8 @@ try {
     $null = Invoke-WmStep 'step.group_jobs' { Invoke-WmGroupJobs -Config $config -Content $content }
     # The jobs with a time start at it: their times as triggers of this task
     $null = Invoke-WmStep 'step.jobs_times' { Sync-WmJobsTaskTimes -Times (Get-WmJobTimes -Content $content) }
+    # The event scripts start at their events: a task for each, as the source says
+    $null = Invoke-WmStep 'step.event_tasks' { Sync-WmEventTasks -Wanted (Get-WmEventTaskList -Content $content) }
     if ($script:WmScriptsNeedReboot) {
         Set-WmRebootFlag
         Write-WmLog -Key 'jobs.reboot_needed'

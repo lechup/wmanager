@@ -11,6 +11,7 @@
     'step.schedule'                 = 'Agendador de Tarefas'
     'step.group_jobs'               = 'Trabalhos de grupo'
     'step.jobs_times'               = 'Horas das tarefas'
+    'step.event_tasks'              = 'Tarefas dos scripts de evento'
     'step.packages'                 = 'Pacotes'
     'step.privacy'                  = 'Privacidade'
     'step.group_scripts'            = 'Scripts de grupo'
