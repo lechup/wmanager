@@ -127,6 +127,23 @@ function Get-WmFileSigner {
     return [pscustomobject]@{ Valid = ([string]$sig.Status -eq 'Valid'); Name = $name; Why = [string]$sig.Status }
 }
 
+# The SHA-256 checksum (lower case) of a file whose Authenticode signature is valid and by $Signer (the CN): Hash,
+# else $null; Name (the signer), Why (the status, and the signer when it is someone else). The file stays open, others
+# may only read it, from the signature to the checksum, so it can't be replaced in between.
+function Get-WmSignedFileHash {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Signer)
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        $by = Get-WmFileSigner -Path $Path
+        if (-not $by.Valid -or $by.Name -ine $Signer) {
+            $why = if ($by.Name) { '{0}, {1}' -f $by.Why, $by.Name } else { $by.Why }
+            return [pscustomobject]@{ Hash = $null; Name = $by.Name; Why = $why }
+        }
+        $hash = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
+        return [pscustomobject]@{ Hash = $hash; Name = $by.Name; Why = $by.Why }
+    } finally { $stream.Dispose() }
+}
+
 # choco install or upgrade of a package from the list ($Arguments), with its exit code. When the package's install
 # script refuses a download whose checksum doesn't match the package (a new version at the same address before the
 # package is updated, as Chrome's often is), the download's Authenticode signature vouches for it instead: valid, and
@@ -162,24 +179,19 @@ function Invoke-WmChocoPackage {
                 return $code
             }
         }
-        # Open, so nobody can change or replace the file between the signature and the checksum: choco checks the
-        # copy it uses against this checksum, so what it installs is the file whose signature was checked
-        $stream = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-        try {
-            $by = Get-WmFileSigner -Path $file
-            if (-not $by.Valid -or $by.Name -ine $signer) {
-                $why = if ($by.Name) { '{0}, {1}' -f $by.Why, $by.Name } else { $by.Why }
-                Write-WmLog -Key 'choco.signature_bad' -Arguments @($name, $leaf, $signer, $why) -Level error
-                return $code
-            }
-            $hash = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
-        } finally { $stream.Dispose() }
+        # choco checks the copy it uses against this checksum, so what it installs is the file whose signature was checked
+        $checked = Get-WmSignedFileHash -Path $file -Signer $signer
+        if (-not $checked.Hash) {
+            Write-WmLog -Key 'choco.signature_bad' -Arguments @($name, $leaf, $signer, $checked.Why) -Level error
+            return $code
+        }
+        $hash = $checked.Hash
     } catch {
         # Never the end of the other packages
         Write-WmLog -Key 'choco.signature_check_failed' -Arguments @($name, $leaf, (Get-WmErrorText $_)) -Level error
         return $code
     }
-    Write-WmLog -Key 'choco.signature_ok' -Arguments @($name, $leaf, $by.Name)
+    Write-WmLog -Key 'choco.signature_ok' -Arguments @($name, $leaf, $checked.Name)
     return (Invoke-WmChoco ($Arguments + @("--checksum=$hash", "--checksum64=$hash", '--checksumtype=sha256', '--checksumtype64=sha256')))
 }
 

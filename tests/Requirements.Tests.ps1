@@ -344,6 +344,21 @@ Copy-Item -LiteralPath `$file -Destination '$($script:installed)' -Force
         $script:log -join "`n" | Should -Match 'signed.psd1 is not validly signed by Someone Else \(Valid, wmanager CI\)'
     }
 
+    It 'reads the signature of a signed MSI while it holds the file open' {
+        # Windows checks the signature of an MSI (Chrome's) with a module of its own, not the one of PowerShell files;
+        # the runner keeps the MSIs of its programs here
+        $msi = $null
+        foreach ($f in @(Get-ChildItem -LiteralPath "$env:SystemRoot\Installer" -Filter '*.msi' -File -ErrorAction SilentlyContinue | Sort-Object Length | Select-Object -First 40)) {
+            $by = Get-WmFileSigner -Path $f.FullName
+            if ($by.Valid -and $by.Name) { $msi = $f.FullName; $name = $by.Name; break }
+        }
+        if (-not $msi) { Set-ItResult -Skipped -Because 'no signed MSI on this computer'; return }
+        Write-Host "  MSI: $msi, signed by $name"
+        $checked = Get-WmSignedFileHash -Path $msi -Signer $name
+        $checked.Hash | Should -Be (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
+        (Get-WmSignedFileHash -Path $msi -Signer 'Someone Else').Hash | Should -BeNullOrEmpty
+    }
+
     It 'installs it once the signature of the publisher given vouches for it' {
         $script:log.Clear()
         $code = Invoke-WmChocoPackage ([pscustomobject]@{ Name = 'wmci-signed'; Signer = 'wmanager CI' }) $script:installArgs
