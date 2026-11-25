@@ -3,8 +3,9 @@
     'choco.line_no_package'          = 'Riga {0}: nome del pacchetto mancante'
     'choco.line_bad_name'            = 'Riga {0}: nome del pacchetto ''{1}'' non valido'
     'choco.line_bad_version'         = 'Riga {0}: versione ''{1}'' non valida per ''{2}'''
-    'choco.line_unknown_option'      = 'Riga {0}: opzione sconosciuta ''{1}'' (consentite: !noupdate e i parametri di choco dopo il segno |)'
+    'choco.line_unknown_option'      = 'Riga {0}: opzione sconosciuta ''{1}'' (consentite: !noupdate, !signer="editore" e i parametri di choco dopo il segno |)'
     'choco.line_duplicate'           = 'Riga {0}: il pacchetto ''{1}'' compare una seconda volta (la prima alla riga {2})'
+    'choco.line_bad_signer'          = 'Riga {0}: !signer richiede il nome dell''editore, una sola volta, tra virgolette se contiene spazi (es. !signer="Google LLC")'
 
     'choco.reqs_file_missing'        = 'file non trovato: {0}'
     'choco.reqs_loaded'              = 'Elenco dei pacchetti caricato da: {0}'
@@ -30,6 +31,14 @@
     'choco.action_install'           = 'l''installazione'
     'choco.action_install_version'   = 'l''installazione della versione {0}'
     'choco.action_upgrade'           = 'l''aggiornamento'
+
+    # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_no_signer'       = '{0}: il file scaricato non corrisponde al checksum del pacchetto (spesso una nuova versione allo stesso indirizzo prima che il pacchetto venga aggiornato; il prossimo aggiornamento riproverà). Con !signer="editore" nella sua riga dell''elenco, wmanager controlla invece la firma del file.'
+    'choco.checksum_check_signature' = '{0}: {1} non corrisponde al checksum del pacchetto; si controlla invece la sua firma di {2}.'
+    'choco.signature_no_file'        = '{0}: il file da controllare non c''è più ({1}) e il suo indirizzo non è noto.'
+    'choco.signature_download_failed' = '{0}: non è stato possibile scaricare da {1} il file da controllare: {2}'
+    'choco.signature_bad'            = '{0}: {1} non ha una firma valida di {2} ({3}): non installato.'
+    'choco.signature_ok'             = '{0}: {1} è firmato da {2}: installazione con il suo checksum.'
 
     'choco.packages_section'         = '--- Pacchetti ({0} nell''elenco) ---'
     'choco.running_version_deferred' = '{0}: il programma è in esecuzione, cambio di versione rimandato.'

@@ -293,6 +293,7 @@ function Format-Package {
     $s = $Item.Name
     if ($Item.Version) { $s += '@' + $Item.Version }
     if ($Item.NoUpdate) { $s += ' !noupdate' }
+    if ($Item.Signer) { $s += ' !signer="' + $Item.Signer + '"' }
     if (@($Item.ExtraArgs).Count -gt 0) { $s += ' | ' + (@($Item.ExtraArgs) -join ' ') }
     return $s
 }

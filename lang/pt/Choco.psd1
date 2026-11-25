@@ -3,8 +3,9 @@
     'choco.line_no_package'          = 'Linha {0}: sem nome de pacote'
     'choco.line_bad_name'            = 'Linha {0}: nome de pacote inválido ''{1}'''
     'choco.line_bad_version'         = 'Linha {0}: versão inválida ''{1}'' para ''{2}'''
-    'choco.line_unknown_option'      = 'Linha {0}: opção desconhecida ''{1}'' (permitidos: !noupdate e parâmetros do choco depois do sinal |)'
+    'choco.line_unknown_option'      = 'Linha {0}: opção desconhecida ''{1}'' (permitidos: !noupdate, !signer="editor" e parâmetros do choco depois do sinal |)'
     'choco.line_duplicate'           = 'Linha {0}: o pacote ''{1}'' aparece pela segunda vez (a primeira na linha {2})'
+    'choco.line_bad_signer'          = 'Linha {0}: !signer precisa do nome do editor, uma só vez, entre aspas se tiver espaços (p. ex. !signer="Google LLC")'
 
     'choco.reqs_file_missing'        = 'ficheiro não encontrado: {0}'
     'choco.reqs_loaded'              = 'Lista de pacotes carregada de: {0}'
@@ -30,6 +31,14 @@
     'choco.action_install'           = 'a instalação'
     'choco.action_install_version'   = 'a instalação da versão {0}'
     'choco.action_upgrade'           = 'a atualização'
+
+    # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_no_signer'       = '{0}: o ficheiro transferido não corresponde à soma de verificação do pacote (muitas vezes uma versão nova no mesmo endereço antes de o pacote ser atualizado; a próxima atualização tenta de novo). Com !signer="editor" na sua linha da lista, o wmanager verifica antes a assinatura do ficheiro.'
+    'choco.checksum_check_signature' = '{0}: {1} não corresponde à soma de verificação do pacote; verifica-se antes a sua assinatura de {2}.'
+    'choco.signature_no_file'        = '{0}: o ficheiro a verificar já não existe ({1}) e o seu endereço não é conhecido.'
+    'choco.signature_download_failed' = '{0}: não foi possível transferir de {1} o ficheiro a verificar: {2}'
+    'choco.signature_bad'            = '{0}: {1} não tem uma assinatura válida de {2} ({3}): não instalado.'
+    'choco.signature_ok'             = '{0}: {1} está assinado por {2}: a instalar com a sua própria soma de verificação.'
 
     'choco.packages_section'         = '--- Pacotes ({0} na lista) ---'
     'choco.running_version_deferred' = '{0}: o programa está em execução, alteração de versão adiada.'
