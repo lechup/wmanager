@@ -78,9 +78,10 @@ Then, after the backup, in this order:
 
 If the computer signs in automatically as an account whose password was just changed (the person, or an
 administrator account that existed), automatic sign-in is turned off: with the old password it would fail at the next
-start, and keeping the new one would leave it stored on the computer. Windows keeps that password as plain text in
-the registry (`DefaultPassword` in `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`, which any user can
-read) or in the LSA secret of that name (netplwiz, Sysinternals Autologon). Provisioning sets `AutoAdminLogon = 0`
+start, and keeping the new one would leave it stored on the computer. Windows keeps that password in the LSA secret
+`DefaultPassword` (set up by Windows Setup, netplwiz or Sysinternals Autologon), or as plain text in the registry
+value of that name in `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon` (set by hand or by a script;
+any user can read that key). Provisioning sets `AutoAdminLogon = 0`
 and removes `DefaultPassword` from both places, and `AutoLogonCount`; the log says so. Automatic sign-in as another
 account, or when no password changes, stays as it is. `Restore-Backup.ps1` doesn't turn it on again (the old password
 no longer works); set it up again by hand if it's needed.

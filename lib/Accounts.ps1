@@ -12,8 +12,8 @@ $script:WmAdminsSid = 'S-1-5-32-544'
 $script:WmDemotedFile = Join-Path $script:WmStateDir 'accounts-demoted.txt'
 $script:WmHiddenAccountsKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
 $script:WmCredUiKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\CredUI'
-# Automatic sign-in: the account in the Winlogon key, its password in the value DefaultPassword there (plain text) or
-# in the LSA secret of that name (netplwiz, Sysinternals Autologon)
+# Automatic sign-in: the account in the Winlogon key, its password in the LSA secret DefaultPassword (Windows Setup,
+# netplwiz, Sysinternals Autologon) or in the value of that name there (plain text, set by hand or by a script)
 $script:WmWinlogonKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 $script:WmAutoLogonSecret = 'DefaultPassword'
 # Accounts Windows makes itself, by the end of their SID: Administrator, Guest, DefaultAccount, WDAGUtilityAccount
@@ -157,7 +157,7 @@ function Remove-WmLsaSecret {
 
 # Turns off automatic sign-in when it is set for the local account $Name, after wmanager changed its password: at the
 # next start Windows would sign in with the old one and fail, and keeping the new one would leave it stored on the
-# computer (the value DefaultPassword in the Winlogon key is plain text that any user can read). AutoAdminLogon 0, and
+# computer (and the value DefaultPassword in the Winlogon key is plain text that any user can read). AutoAdminLogon 0, and
 # the old password removed from both places Windows keeps it; AutoLogonCount too, which would turn off an automatic
 # sign-in set up again later. Not journaled: Restore-Backup.ps1 would only bring back a password that no longer works.
 # $true when it was on for that account.
