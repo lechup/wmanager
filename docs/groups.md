@@ -98,12 +98,14 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
 - **Event scripts:** `groups/<group>/events/*.ps1` run as SYSTEM when something happens on the computer. A script
   names its events, a line each: `# wmanager-event: network` (a network connected, also after a start or a wake),
   `wake` (back from sleep or hibernation), `lock` and `unlock` (a session of any user), or any event of a Windows log:
-  its log, its id and, if you like, its source (`# wmanager-event: System 7036 Service Control Manager`; a log name
-  with spaces goes in double quotes). Each event gets its own task, `wmanager-Event-<group>+<name>-<n>` (SYSTEM), which
-  `wmanager-Jobs` makes, changes and removes as the source says, at every run. One event script runs at a time on the
-  computer, and a script doesn't run again within 5 minutes of its last run, whichever of its events comes
-  (`# wmanager-event-gap: <minutes>` for another gap, `0` for none): a burst of events (a network that comes and goes)
-  runs it once. It gets `WMANAGER_EVENT`, the event that came as its line writes it; for an event of a log
+  its log, its id and, if you like, its source (`# wmanager-event: System 7040 Service Control Manager`, a service's
+  start type changed; a log name with spaces goes in double quotes). Check first that Windows logs it at all
+  (`Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 7040 } -MaxEvents 1`): Windows 11 no longer logs some
+  well-known ones, such as 7036 for a service that starts or stops. Each event gets its own task,
+  `wmanager-Event-<group>+<name>-<n>` (SYSTEM), which `wmanager-Jobs` makes, changes and removes as the source says, at
+  every run. One event script runs at a time on the computer, and a script doesn't run again within 5 minutes of its
+  last run, whichever of its events comes (`# wmanager-event-gap: <minutes>` for another gap, `0` for none): a burst
+  of events (a network that comes and goes) runs it once. It gets `WMANAGER_EVENT`, the event that came as its line writes it; for an event of a log
   `WMANAGER_EVENT_LOG` and `WMANAGER_EVENT_RECORD`, which read that event:
   `Get-WinEvent -LogName $env:WMANAGER_EVENT_LOG -FilterXPath "*[System[EventRecordID=$env:WMANAGER_EVENT_RECORD]]"`;
   for `lock` and `unlock` `WMANAGER_EVENT_SESSION` and `WMANAGER_EVENT_USER`, the session at the screen and its user

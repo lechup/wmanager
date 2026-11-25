@@ -839,12 +839,12 @@ Describe 'Get-WmEventSpecs' {
         @($specs.Events | ForEach-Object { $_.Name }) | Should -Be @('network', 'unlock')
         $specs.Events[0].Text | Should -Be 'Network'
         $specs.Gap | Should -Be 5
-        $raw = (Get-WmEventSpecs "# wmanager-event: System 7036 Service Control Manager`r`n# wmanager-event-gap: 0").Events[0]
+        $raw = (Get-WmEventSpecs "# wmanager-event: System 7040 Service Control Manager`r`n# wmanager-event-gap: 0").Events[0]
         $raw.Log | Should -Be 'System'
-        $raw.Id | Should -Be 7036
+        $raw.Id | Should -Be 7040
         $raw.Provider | Should -Be 'Service Control Manager'
         $raw.Name | Should -Be ''
-        (Get-WmEventSpecs "# wmanager-event: System 7036 Service Control Manager`r`n# wmanager-event-gap: 0").Gap | Should -Be 0
+        (Get-WmEventSpecs "# wmanager-event: System 7040 Service Control Manager`r`n# wmanager-event-gap: 0").Gap | Should -Be 0
         $q = (Get-WmEventSpecs '# wmanager-event: "Windows PowerShell" 400').Events[0]
         $q.Log | Should -Be 'Windows PowerShell'
         $q.Provider | Should -Be ''
@@ -853,11 +853,11 @@ Describe 'Get-WmEventSpecs' {
 
     It 'refuses a script without an event, a line it can''t read, an event twice and a bad or second gap' {
         { Get-WmEventSpecs "exit 0`r`n" } | Should -Throw '*names its event*'
-        foreach ($bad in @('thunder', 'System', 'System x', 'System 70000', '"System 7036', "System 7036 it's", 'System 7036 <x>', '')) {
+        foreach ($bad in @('thunder', 'System', 'System x', 'System 70000', '"System 7040', "System 7040 it's", 'System 7040 <x>', '')) {
             { Get-WmEventSpecs "# wmanager-event: $bad" } | Should -Throw '*is neither network*' -Because $bad
         }
         { Get-WmEventSpecs "# wmanager-event: lock`r`n# wmanager-event: LOCK" } | Should -Throw '*twice*'
-        { Get-WmEventSpecs "# wmanager-event: System 7036`r`n# wmanager-event: system 7036" } | Should -Throw '*twice*'
+        { Get-WmEventSpecs "# wmanager-event: System 7040`r`n# wmanager-event: system 7040" } | Should -Throw '*twice*'
         foreach ($gap in @('1441', '-1', '5 min', '')) {
             { Get-WmEventSpecs "# wmanager-event: wake`r`n# wmanager-event-gap: $gap" } | Should -Throw '*number of minutes*' -Because $gap
         }
@@ -919,15 +919,15 @@ Describe 'Event scripts' {
 
     It 'runs the script for its event, with the event, its log and record, and only the secrets it names, hidden in the log' {
         Set-EventFiles @{
-            'groups/office/events/drives.ps1' = "# wmanager-event: network`r`n# wmanager-event: System 7036 Service Control Manager`r`n# wmanager-secrets: ShareUser`r`nexit 0`r`n"
+            'groups/office/events/drives.ps1' = "# wmanager-event: network`r`n# wmanager-event: System 7040 Service Control Manager`r`n# wmanager-secrets: ShareUser`r`nexit 0`r`n"
         }
-        Invoke-WmEventScript -Config $cfg -Name 'office/drives' -Key (Get-WmEventKey 'System 7036 Service Control Manager') -Record '123' -Log 'System'
+        Invoke-WmEventScript -Config $cfg -Name 'office/drives' -Key (Get-WmEventKey 'System 7040 Service Control Manager') -Record '123' -Log 'System'
         Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly -ParameterFilter {
-            $File -like '*office-events-drives.ps1' -and $Environment['WMANAGER_EVENT'] -eq 'System 7036 Service Control Manager' -and
+            $File -like '*office-events-drives.ps1' -and $Environment['WMANAGER_EVENT'] -eq 'System 7040 Service Control Manager' -and
             $Environment['WMANAGER_EVENT_RECORD'] -eq '123' -and $Environment['WMANAGER_EVENT_LOG'] -eq 'System' -and
             $Environment['WMANAGER_SECRET_SHAREUSER'] -eq 'office' -and -not $Environment.ContainsKey('WMANAGER_SECRET_SHAREPASSWORD') -and
             $Environment['WMANAGER_GROUP'] -eq 'office' -and $Environment['WMANAGER_COMPUTER'] -eq 'PC-1' -and $TimeoutMinutes -eq 7 }
-        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'events.starting' -and $Arguments[1] -eq 'System 7036 Service Control Manager' }
+        Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'events.starting' -and $Arguments[1] -eq 'System 7040 Service Control Manager' }
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'events.script_done' -and $Arguments[0] -eq 'office/drives' }
         Should -Invoke Write-WmLog -Times 0 -ParameterFilter { "$Message" -match 'office with' }
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { "$Message" -match 'mapped as \*\*\* with' }

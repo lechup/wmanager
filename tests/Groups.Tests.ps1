@@ -559,9 +559,9 @@ Describe 'event scripts' {
         $r = Invoke-Tool $src show office-01
         $r.Text | Should -Match 'Event scripts \(at their events, as SYSTEM\):[^\r\n]*\r?\n  \(none\)'
         Set-Text (Get-Path $src 'groups/accounting/events/drives.ps1') "# wmanager-event: network`r`n# wmanager-event: wake`r`nexit 0`r`n" -Bom
-        Set-Text (Get-Path $src 'groups/all/events/service.ps1') "# wmanager-event: System 7036 Service Control Manager`r`n# wmanager-event-gap: 0`r`nexit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/events/service.ps1') "# wmanager-event: System 7040 Service Control Manager`r`n# wmanager-event-gap: 0`r`nexit 0`r`n" -Bom
         $r = Invoke-Tool $src show office-01
-        $r.Text | Should -Match 'groups/all/events/service\.ps1   at System 7036 Service Control Manager \(gap 0 min\)'
+        $r.Text | Should -Match 'groups/all/events/service\.ps1   at System 7040 Service Control Manager \(gap 0 min\)'
         $r.Text | Should -Match 'groups/accounting/events/drives\.ps1   at network, wake\r?\n'
         (Invoke-Tool $src show office-99).Text | Should -Not -Match 'drives\.ps1'
         $r = Invoke-Tool $src show

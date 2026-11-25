@@ -24,7 +24,7 @@
     'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': týdenní úloha uvádí jeden den, např. Fri 17:00'
     'managed.job_first_time'             = 'Úloha {0} běží v {1}: poprvé tehdy.'
     'managed.event_none'                 = 'skript události uvádí svou událost na řádku "# wmanager-event: network" (network, wake, lock, unlock nebo protokol a ID události)'
-    'managed.event_bad'                  = 'wmanager-event: ''{0}'' není network, wake, lock, unlock ani protokol a ID události jako System 7036 [zdroj]'
+    'managed.event_bad'                  = 'wmanager-event: ''{0}'' není network, wake, lock, unlock ani protokol a ID události jako System 7040 [zdroj]'
     'managed.event_twice'                = 'wmanager-event: ''{0}'' je uvedena dvakrát'
     'managed.event_gap_bad'              = 'wmanager-event-gap: ''{0}'' není počet minut od 0 do 1440'
     'managed.event_gap_twice'            = 'více než jeden řádek wmanager-event-gap'

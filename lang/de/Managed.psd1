@@ -24,7 +24,7 @@
     'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': ein wöchentlicher Job nennt einen Tag, z. B. Fri 17:00'
     'managed.job_first_time'             = 'Job {0} läuft um {1}: das erste Mal dann.'
     'managed.event_none'                 = 'ein Ereignisskript nennt sein Ereignis in einer Zeile "# wmanager-event: network" (network, wake, lock, unlock oder ein Protokoll und eine Ereignis-ID)'
-    'managed.event_bad'                  = 'wmanager-event: ''{0}'' ist weder network, wake, lock, unlock noch ein Protokoll und eine Ereignis-ID wie System 7036 [Quelle]'
+    'managed.event_bad'                  = 'wmanager-event: ''{0}'' ist weder network, wake, lock, unlock noch ein Protokoll und eine Ereignis-ID wie System 7040 [Quelle]'
     'managed.event_twice'                = 'wmanager-event: ''{0}'' steht zweimal da'
     'managed.event_gap_bad'              = 'wmanager-event-gap: ''{0}'' ist keine Zahl von Minuten von 0 bis 1440'
     'managed.event_gap_twice'            = 'mehr als eine wmanager-event-gap-Zeile'

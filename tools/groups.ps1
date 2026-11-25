@@ -936,7 +936,7 @@ $script:EventTemplate = @'
 # Its events: a line "wmanager-event: <event>" after a # at the start of a line for each, the event being one of
 #   network  a network connected (also after a start or a wake)    wake    back from sleep or hibernation
 #   lock     a session locked (Win+L, the screen saver)             unlock  a session unlocked
-# or any event of a Windows log: its log, its id and, if you like, its source, e.g. System 7036 Service Control Manager
+# or any event of a Windows log: its log, its id and, if you like, its source, e.g. System 7040 Service Control Manager
 # (a log name with spaces goes in double quotes). Another shortest time between two runs: a line
 # "wmanager-event-gap: 10" after a # (minutes, 0 = none).
 # Exit code 0 = done, anything else (or an exception) is an error in the log; its output goes to the log and Loki.

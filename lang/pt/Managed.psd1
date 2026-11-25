@@ -24,7 +24,7 @@
     'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': uma tarefa semanal indica um dia, p. ex. Fri 17:00'
     'managed.job_first_time'             = 'A tarefa {0} corre às {1}: a primeira vez nessa altura.'
     'managed.event_none'                 = 'um script de evento indica o seu evento numa linha "# wmanager-event: network" (network, wake, lock, unlock, ou um registo e um ID de evento)'
-    'managed.event_bad'                  = 'wmanager-event: ''{0}'' não é network, wake, lock, unlock nem um registo e um ID de evento como System 7036 [origem]'
+    'managed.event_bad'                  = 'wmanager-event: ''{0}'' não é network, wake, lock, unlock nem um registo e um ID de evento como System 7040 [origem]'
     'managed.event_twice'                = 'wmanager-event: ''{0}'' aparece duas vezes'
     'managed.event_gap_bad'              = 'wmanager-event-gap: ''{0}'' não é um número de minutos de 0 a 1440'
     'managed.event_gap_twice'            = 'mais de uma linha wmanager-event-gap'
