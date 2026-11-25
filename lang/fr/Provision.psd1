@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'Ce n''est pas le mot de passe actuel de {0} ; encore une fois.'
     'provision.user_password_kept'               = 'Trois fois pas le mot de passe actuel : le mot de passe de {0} reste tel quel.'
     'provision.password_not_changed'             = 'Le mot de passe de {0} n''a pas été changé (il reste l''ancien) : {1}'
+    'provision.autologon_off'                    = 'Connexion automatique en tant que {0} désactivée : elle échouerait avec l''ancien mot de passe, et le nouveau n''est pas conservé sur l''ordinateur.'
+    'provision.autologon_failed'                 = 'La connexion automatique en tant que {0} n''a pas pu être désactivée : {1}. Vérifiez AutoAdminLogon et DefaultPassword dans HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'le nouveau mot de passe ne respecte pas les règles de mot de passe de cet ordinateur (longueur, complexité ou historique)'
     'provision.admin_account_builtin'            = 'AdminAccount : ''{0}'' est un compte que Windows crée lui-même (Administrateur, Invité...) ; indiquez-en un autre'
     'provision.admin_password_needed'            = 'Le compte administrateur {0} est désactivé ou n''a pas de mot de passe : un nouveau mot de passe (masqué)'

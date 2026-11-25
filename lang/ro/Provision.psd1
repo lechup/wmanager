@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'Nu este parola actuală a lui {0}; încă o dată.'
     'provision.user_password_kept'               = 'De trei ori nu este parola actuală: parola lui {0} rămâne cum este.'
     'provision.password_not_changed'             = 'Parola lui {0} nu a fost schimbată (rămâne cea veche): {1}'
+    'provision.autologon_off'                    = 'Conectarea automată ca {0} a fost dezactivată: ar eșua cu parola veche, iar cea nouă nu este păstrată pe computer.'
+    'provision.autologon_failed'                 = 'Conectarea automată ca {0} nu a putut fi dezactivată: {1}. Verificați AutoAdminLogon și DefaultPassword în HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'parola nouă nu respectă regulile de parole ale acestui computer (lungime, complexitate sau istoric)'
     'provision.admin_account_builtin'            = 'AdminAccount: ''{0}'' este un cont pe care Windows îl creează singur (Administrator, Guest...); indicați altul'
     'provision.admin_password_needed'            = 'Contul de administrator {0} este dezactivat sau nu are parolă: o parolă nouă (ascunsă)'

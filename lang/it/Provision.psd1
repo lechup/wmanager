@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'Non è la password attuale di {0}; di nuovo.'
     'provision.user_password_kept'               = 'Tre volte non la password attuale: la password di {0} resta com''è.'
     'provision.password_not_changed'             = 'La password di {0} non è stata cambiata (resta quella di prima): {1}'
+    'provision.autologon_off'                    = 'Accesso automatico come {0} disattivato: con la vecchia password fallirebbe, e la nuova non viene conservata sul computer.'
+    'provision.autologon_failed'                 = 'Non è stato possibile disattivare l''accesso automatico come {0}: {1}. Controllare AutoAdminLogon e DefaultPassword in HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'la nuova password non rispetta le regole delle password di questo computer (lunghezza, complessità o cronologia)'
     'provision.admin_account_builtin'            = 'AdminAccount: ''{0}'' è un account che Windows crea da sé (Administrator, Guest...); indicarne un altro'
     'provision.admin_password_needed'            = 'L''account amministratore {0} è disattivato o non ha password: una nuova password (nascosta)'

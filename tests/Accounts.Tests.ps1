@@ -171,6 +171,7 @@ Describe 'Set-WmAccounts' {
         Mock Remove-WmAdminMember { [void]$script:admins.Remove($Sid) }
         Mock Set-WmRegValue { $true }
         Mock Set-WmAccountPassword { }
+        Mock Disable-WmAutoLogon { $false }
         $script:plan = [pscustomobject]@{
             Admin = 'it-admin'; AdminPassword = (New-TestSecret 'Adm-1'); Skip = ''
             User = [pscustomobject]@{ Name = 'PC1\anna'; Sid = 'S-1-5-21-1-2-3-1001'; ShortName = 'anna'; Microsoft = $false }
@@ -240,6 +241,103 @@ Describe 'Set-WmAccounts' {
         Should -Invoke Remove-WmAdminMember -Times 0
         $script:log -join "`n" | Should -Match 'PC1\\anna is not in the Administrators group'
     }
+
+    It 'turns off automatic sign-in as the person after changing their password, and says so' {
+        Mock Disable-WmAutoLogon { $Name -eq 'anna' }
+        Set-WmAccounts -Plan $script:plan
+        Should -Invoke Disable-WmAutoLogon -Times 1 -ParameterFilter { $Name -eq 'anna' }
+        # a new administrator account can't be the one signing in automatically
+        Should -Invoke Disable-WmAutoLogon -Times 0 -ParameterFilter { $Name -eq 'it-admin' }
+        $script:log -join "`n" | Should -Match 'Automatic sign-in as PC1\\anna turned off'
+    }
+
+    It 'leaves automatic sign-in alone when the person''s password stays' {
+        Mock Set-WmAccountPassword { throw 'the new password does not meet the password rules (error 2245)' }
+        Set-WmAccounts -Plan $script:plan
+        $script:plan.UserPassword = $null
+        Set-WmAccounts -Plan $script:plan
+        Should -Invoke Disable-WmAutoLogon -Times 0
+    }
+
+    It 'turns it off for an administrator account that exists when its password was typed' {
+        Mock Get-LocalUser { $script:adminUser } -ParameterFilter { $Name }
+        Set-WmAccounts -Plan $script:plan
+        Should -Invoke Disable-WmAutoLogon -Times 1 -ParameterFilter { $Name -eq 'it-admin' }
+        $script:log -join "`n" | Should -Not -Match 'Automatic sign-in'   # it wasn't on
+    }
+
+    It 'warns and goes on when automatic sign-in can''t be turned off' {
+        Mock Disable-WmAutoLogon { throw 'LSA secret DefaultPassword: Access is denied (error 5)' }
+        Set-WmAccounts -Plan $script:plan
+        $script:log -join "`n" | Should -Match 'Turning off automatic sign-in as PC1\\anna failed: .*\(error 5\)'
+        $script:log -join "`n" | Should -Not -Match "wasn't changed"
+        Should -Invoke Remove-WmAdminMember -Times 1
+    }
+}
+
+Describe 'Disable-WmAutoLogon' {
+    BeforeEach {
+        $script:WmWinlogonKey = 'TestRegistry:\winlogon-' + [guid]::NewGuid().ToString('N')
+        New-Item -Path $script:WmWinlogonKey -Force | Out-Null
+        Mock Remove-WmLsaSecret { }
+        function Set-TestAutoLogon {
+            param([hashtable]$Values)
+            foreach ($k in $Values.Keys) {
+                $type = if ($Values[$k] -is [int]) { 'DWord' } else { 'String' }
+                New-ItemProperty -LiteralPath $script:WmWinlogonKey -Name $k -Value $Values[$k] -PropertyType $type -Force | Out-Null
+            }
+        }
+        function Get-TestNames { @((Get-ItemProperty -LiteralPath $script:WmWinlogonKey).PSObject.Properties.Name) }
+    }
+
+    It 'turns it off for the account, and removes the old password from both places Windows keeps it' {
+        Set-TestAutoLogon @{ AutoAdminLogon = '1'; DefaultUserName = 'anna'; DefaultDomainName = $env:COMPUTERNAME
+                             DefaultPassword = 'old-right'; AutoLogonCount = 9999 }
+        Disable-WmAutoLogon -Name 'Anna' | Should -BeTrue
+        (Get-ItemProperty -LiteralPath $script:WmWinlogonKey).AutoAdminLogon | Should -Be '0'
+        Get-TestNames | Should -Not -Contain 'DefaultPassword'
+        Get-TestNames | Should -Not -Contain 'AutoLogonCount'
+        (Get-ItemProperty -LiteralPath $script:WmWinlogonKey).DefaultUserName | Should -Be 'anna'
+        Should -Invoke Remove-WmLsaSecret -Times 1 -ParameterFilter { $Name -eq 'DefaultPassword' }
+    }
+
+    It 'knows the local account written as <User> with the domain "<Domain>"' -ForEach @(
+        @{ User = 'anna'; Domain = '' }, @{ User = 'anna'; Domain = '.' }, @{ User = '.\anna'; Domain = '' }
+        @{ User = "$env:COMPUTERNAME\anna"; Domain = 'OFFICE' }
+    ) {
+        Set-TestAutoLogon @{ AutoAdminLogon = '1'; DefaultUserName = $User; DefaultDomainName = $Domain }
+        Disable-WmAutoLogon -Name 'anna' | Should -BeTrue
+        (Get-ItemProperty -LiteralPath $script:WmWinlogonKey).AutoAdminLogon | Should -Be '0'
+    }
+
+    It 'leaves automatic sign-in as <User> with the domain "<Domain>" alone' -ForEach @(
+        @{ User = 'piotr'; Domain = $env:COMPUTERNAME }, @{ User = 'anna'; Domain = 'OFFICE' }
+        @{ User = 'OFFICE\anna'; Domain = $env:COMPUTERNAME }
+    ) {
+        Set-TestAutoLogon @{ AutoAdminLogon = '1'; DefaultUserName = $User; DefaultDomainName = $Domain; DefaultPassword = 'x' }
+        Disable-WmAutoLogon -Name 'anna' | Should -BeFalse
+        (Get-ItemProperty -LiteralPath $script:WmWinlogonKey).AutoAdminLogon | Should -Be '1'
+        Get-TestNames | Should -Contain 'DefaultPassword'
+        Should -Invoke Remove-WmLsaSecret -Times 0
+    }
+
+    It 'still removes what it can of the password when one place refuses, then says what failed' {
+        Set-TestAutoLogon @{ AutoAdminLogon = '1'; DefaultUserName = 'anna'; DefaultPassword = 'old-right'; AutoLogonCount = 3 }
+        Mock Remove-ItemProperty { throw 'Access is denied' } -ParameterFilter { $Name -eq 'DefaultPassword' }
+        { Disable-WmAutoLogon -Name 'anna' } | Should -Throw '*DefaultPassword: Access is denied*'
+        (Get-ItemProperty -LiteralPath $script:WmWinlogonKey).AutoAdminLogon | Should -Be '0'
+        Get-TestNames | Should -Not -Contain 'AutoLogonCount'
+        Should -Invoke Remove-WmLsaSecret -Times 1
+    }
+
+    It 'does nothing when automatic sign-in is off' {
+        Set-TestAutoLogon @{ AutoAdminLogon = '0'; DefaultUserName = 'anna'; DefaultPassword = 'x' }
+        Disable-WmAutoLogon -Name 'anna' | Should -BeFalse
+        Get-TestNames | Should -Contain 'DefaultPassword'
+        Remove-Item -LiteralPath $script:WmWinlogonKey
+        Disable-WmAutoLogon -Name 'anna' | Should -BeFalse
+        Should -Invoke Remove-WmLsaSecret -Times 0
+    }
 }
 
 Describe 'Set-WmAccounts, when something fails' {
@@ -259,6 +357,7 @@ Describe 'Set-WmAccounts, when something fails' {
         Mock Remove-WmAdminMember { [void]$script:admins.Remove($Sid) }
         Mock Set-WmRegValue { $true }
         Mock Set-WmAccountPassword { }
+        Mock Disable-WmAutoLogon { $false }
         $script:plan = [pscustomobject]@{
             Admin = 'it-admin'; AdminPassword = (New-TestSecret 'Adm-1'); Skip = ''; UserError = ''
             User = [pscustomobject]@{ Name = 'PC1\anna'; Sid = 'S-1-5-21-1-2-3-1001'; ShortName = 'anna'; Microsoft = $false }
@@ -296,6 +395,12 @@ Describe 'Set-WmAccounts, when something fails' {
 
 Describe 'Local accounts on Windows' -Tag 'Integration' -Skip:(-not $env:WM_CI_SOURCES) {
     BeforeAll {
+        # First: until then these name the computer's own automatic sign-in, which AfterAll would remove after a
+        # failure below
+        $script:ciWinlogonKey = 'HKLM:\SOFTWARE\wmanager-ci-winlogon'
+        $script:ciAutoLogonSecret = 'wmanager-ci-autologon'
+        $script:WmWinlogonKey = $script:ciWinlogonKey
+        $script:WmAutoLogonSecret = $script:ciAutoLogonSecret
         $script:WmDemotedFile = Join-Path $TestDrive 'accounts-demoted.txt'
         Mock Write-WmLog { }
         $script:names = @('wmci-admin', 'wmci-person', 'wmci-blank')
@@ -306,11 +411,59 @@ Describe 'Local accounts on Windows' -Tag 'Integration' -Skip:(-not $env:WM_CI_S
         Add-LocalGroupMember -SID 'S-1-5-32-544' -Member $person.SID.Value
         $script:person = [pscustomobject]@{ Name = "$env:COMPUTERNAME\wmci-person"; Sid = $person.SID.Value
                                             ShortName = 'wmci-person'; Local = $person; Microsoft = $false }
+
+        # Automatic sign-in as the person, in a key and an LSA secret of the test's own (the runner's own automatic
+        # sign-in stays as it is)
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WmTestLsa {
+    [StructLayout(LayoutKind.Sequential)]
+    struct Attributes { public int Length; public IntPtr Root; public IntPtr Name; public uint Flags; public IntPtr Sd; public IntPtr Qos; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct LsaString { public ushort Length; public ushort MaximumLength; [MarshalAs(UnmanagedType.LPWStr)] public string Buffer; }
+    [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr system, ref Attributes attributes, uint access, out IntPtr policy);
+    [DllImport("advapi32.dll")] static extern uint LsaStorePrivateData(IntPtr policy, ref LsaString key, ref LsaString data);
+    [DllImport("advapi32.dll")] static extern uint LsaRetrievePrivateData(IntPtr policy, ref LsaString key, out IntPtr data);
+    [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr buffer);
+    [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
+    static LsaString Text(string s) { LsaString l = new LsaString(); l.Buffer = s; l.Length = (ushort)(s.Length * 2); l.MaximumLength = (ushort)(s.Length * 2 + 2); return l; }
+    static IntPtr Open() {
+        Attributes a = new Attributes(); a.Length = Marshal.SizeOf(typeof(Attributes)); IntPtr p;
+        uint status = LsaOpenPolicy(IntPtr.Zero, ref a, 0x24, out p);   // POLICY_CREATE_SECRET | POLICY_GET_PRIVATE_INFORMATION
+        if (status != 0) throw new Exception("LsaOpenPolicy 0x" + status.ToString("X8"));
+        return p;
+    }
+    public static void Store(string name, string value) {
+        IntPtr p = Open();
+        try { LsaString k = Text(name); LsaString v = Text(value); uint s = LsaStorePrivateData(p, ref k, ref v); if (s != 0) throw new Exception("LsaStorePrivateData 0x" + s.ToString("X8")); }
+        finally { LsaClose(p); }
+    }
+    public static bool Exists(string name) {
+        IntPtr p = Open();
+        try {
+            LsaString k = Text(name); IntPtr data;
+            uint s = LsaRetrievePrivateData(p, ref k, out data);
+            if (s == 0) { LsaFreeMemory(data); return true; }
+            if (s == 0xC0000034) return false;   // STATUS_OBJECT_NAME_NOT_FOUND
+            throw new Exception("LsaRetrievePrivateData 0x" + s.ToString("X8"));
+        } finally { LsaClose(p); }
+    }
+}
+'@
+        New-Item -Path $script:WmWinlogonKey -Force | Out-Null
+        foreach ($v in @(@('AutoAdminLogon', '1'), @('DefaultUserName', 'wmci-person'), @('DefaultDomainName', $env:COMPUTERNAME),
+                         @('DefaultPassword', $script:personOld))) {
+            New-ItemProperty -LiteralPath $script:WmWinlogonKey -Name $v[0] -Value $v[1] -PropertyType String -Force | Out-Null
+        }
+        [WmTestLsa]::Store($script:WmAutoLogonSecret, $script:personOld)
     }
     AfterAll {
         foreach ($n in $script:names) { Remove-LocalUser -Name $n -ErrorAction SilentlyContinue }
         Remove-ItemProperty -Path $script:WmHiddenAccountsKey -Name 'wmci-admin' -ErrorAction SilentlyContinue
         Remove-ItemProperty -Path $script:WmCredUiKey -Name 'EnumerateAdministrators' -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:ciWinlogonKey -Recurse -ErrorAction SilentlyContinue
+        try { Remove-WmLsaSecret -Name $script:ciAutoLogonSecret } catch { }
     }
 
     It 'tells the current password from a wrong one' {
@@ -334,6 +487,19 @@ Describe 'Local accounts on Windows' -Tag 'Integration' -Skip:(-not $env:WM_CI_S
         Test-WmAccountPassword -Name 'wmci-person' -Password (New-TestSecret 'New-pass-2026!') | Should -BeTrue
         Test-WmAccountPassword -Name 'wmci-person' -Password (New-TestSecret $script:personOld) | Should -BeFalse
         Get-Content -LiteralPath $script:WmDemotedFile | Should -Be $script:person.Sid
+        # automatic sign-in with the old password: off, and that password gone from the registry and from LSA
+        $winlogon = Get-ItemProperty -LiteralPath $script:WmWinlogonKey
+        $winlogon.AutoAdminLogon | Should -Be '0'
+        $winlogon.PSObject.Properties.Name | Should -Not -Contain 'DefaultPassword'
+        [WmTestLsa]::Exists($script:WmAutoLogonSecret) | Should -BeFalse
+    }
+
+    It 'removes an LSA secret, and says nothing when there is none' {
+        [WmTestLsa]::Store($script:WmAutoLogonSecret, 'x')
+        [WmTestLsa]::Exists($script:WmAutoLogonSecret) | Should -BeTrue
+        Remove-WmLsaSecret -Name $script:WmAutoLogonSecret
+        [WmTestLsa]::Exists($script:WmAutoLogonSecret) | Should -BeFalse
+        { Remove-WmLsaSecret -Name $script:WmAutoLogonSecret } | Should -Not -Throw
     }
 
     It 'makes the person an administrator again (Restore-Backup.ps1)' {
