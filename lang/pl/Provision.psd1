@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'To nie jest obecne hasło {0}; jeszcze raz.'
     'provision.user_password_kept'               = 'Trzy razy nie to obecne hasło: hasło {0} zostaje bez zmian.'
     'provision.password_not_changed'             = 'Nie zmieniono hasła {0} (zostaje dotychczasowe): {1}'
+    'provision.autologon_off'                    = 'Wyłączono automatyczne logowanie jako {0}: ze starym hasłem by się nie udało, a nowe nie jest przechowywane na komputerze.'
+    'provision.autologon_failed'                 = 'Nie udało się wyłączyć automatycznego logowania jako {0}: {1}. Sprawdź AutoAdminLogon i DefaultPassword w HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'nowe hasło nie spełnia zasad haseł tego komputera (długość, złożoność albo historia)'
     'provision.admin_account_builtin'            = 'AdminAccount: ''{0}'' to konto, które Windows tworzy sam (Administrator, Gość...); podaj inne'
     'provision.admin_password_needed'            = 'Konto administratora {0} jest wyłączone albo nie ma hasła: nowe hasło (niewidoczne)'

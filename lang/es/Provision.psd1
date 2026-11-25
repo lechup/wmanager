@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'Esa no es la contraseña actual de {0}; otra vez.'
     'provision.user_password_kept'               = 'Tres veces no es la contraseña actual: la contraseña de {0} queda como está.'
     'provision.password_not_changed'             = 'La contraseña de {0} no se cambió (sigue la anterior): {1}'
+    'provision.autologon_off'                    = 'Inicio de sesión automático como {0} desactivado: fallaría con la contraseña anterior, y la nueva no se guarda en el equipo.'
+    'provision.autologon_failed'                 = 'No se pudo desactivar el inicio de sesión automático como {0}: {1}. Compruebe AutoAdminLogon y DefaultPassword en HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'la nueva contraseña no cumple las reglas de contraseña de este equipo (longitud, complejidad o historial)'
     'provision.admin_account_builtin'            = 'AdminAccount: ''{0}'' es una cuenta que Windows crea por sí mismo (Administrador, Invitado...); indique otra'
     'provision.admin_password_needed'            = 'La cuenta de administrador {0} está deshabilitada o no tiene contraseña: una nueva contraseña (oculta)'

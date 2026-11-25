@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'Dat is niet het huidige wachtwoord van {0}; nog eens.'
     'provision.user_password_kept'               = 'Drie keer niet het huidige wachtwoord: het wachtwoord van {0} blijft zoals het is.'
     'provision.password_not_changed'             = 'Het wachtwoord van {0} is niet gewijzigd (het blijft het oude): {1}'
+    'provision.autologon_off'                    = 'Automatisch aanmelden als {0} uitgeschakeld: met het oude wachtwoord zou het mislukken, en het nieuwe wordt niet op de computer bewaard.'
+    'provision.autologon_failed'                 = 'Automatisch aanmelden als {0} kon niet worden uitgeschakeld: {1}. Controleer AutoAdminLogon en DefaultPassword in HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'het nieuwe wachtwoord voldoet niet aan de wachtwoordregels van deze computer (lengte, complexiteit of geschiedenis)'
     'provision.admin_account_builtin'            = 'AdminAccount: ''{0}'' is een account dat Windows zelf maakt (Administrator, Gast...); geef een ander op'
     'provision.admin_password_needed'            = 'Het beheerdersaccount {0} is uitgeschakeld of heeft geen wachtwoord: een nieuw wachtwoord (verborgen)'

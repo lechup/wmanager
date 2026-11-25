@@ -6,18 +6,22 @@
 # account is created and checked first; the person is made a standard user only then, so a failure never leaves the
 # computer without a way to administrator rights. Restore-Backup.ps1 makes those people administrators again
 # (state\accounts-demoted.txt); the hidden flag and the UAC prompt asking for a name are registry values of the undo
-# journal.
+# journal. Automatic sign-in as an account whose password changed is turned off (Disable-WmAutoLogon).
 
 $script:WmAdminsSid = 'S-1-5-32-544'
 $script:WmDemotedFile = Join-Path $script:WmStateDir 'accounts-demoted.txt'
 $script:WmHiddenAccountsKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
 $script:WmCredUiKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\CredUI'
+# Automatic sign-in: the account in the Winlogon key, its password in the value DefaultPassword there (plain text) or
+# in the LSA secret of that name (netplwiz, Sysinternals Autologon)
+$script:WmWinlogonKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+$script:WmAutoLogonSecret = 'DefaultPassword'
 # Accounts Windows makes itself, by the end of their SID: Administrator, Guest, DefaultAccount, WDAGUtilityAccount
 $script:WmBuiltinRids = @(500, 501, 503, 504)
 
 # LogonUser checks a password without signing in (a network logon: no profile, no session); NetUserChangePassword
 # changes one with the current one; NetValidatePasswordPolicy checks a new one against the password rules of this
-# computer (length, complexity) before anything is set.
+# computer (length, complexity) before anything is set; LsaStorePrivateData without data removes an LSA secret.
 function Initialize-WmAccountNative {
     if ('WmAccountNative' -as [type]) { return }
     Add-Type -TypeDefinition @'
@@ -50,6 +54,22 @@ public static class WmAccountNative {
     [DllImport("netapi32.dll")]
     static extern int NetValidatePasswordPolicyFree(ref IntPtr output);
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct LsaObjectAttributes {
+        public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes;
+        public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService;
+    }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct LsaString { public ushort Length; public ushort MaximumLength; [MarshalAs(UnmanagedType.LPWStr)] public string Buffer; }
+    [DllImport("advapi32.dll")]
+    static extern uint LsaOpenPolicy(IntPtr system, ref LsaObjectAttributes attributes, uint access, out IntPtr policy);
+    [DllImport("advapi32.dll")]
+    static extern uint LsaStorePrivateData(IntPtr policy, ref LsaString key, IntPtr data);
+    [DllImport("advapi32.dll")]
+    static extern uint LsaClose(IntPtr policy);
+    [DllImport("advapi32.dll")]
+    static extern int LsaNtStatusToWinError(uint status);
+
     // 0 when the password of the local account is right, else the Windows error of the logon
     public static int CheckPassword(string user, string password) {
         IntPtr token;
@@ -69,6 +89,21 @@ public static class WmAccountNative {
         if (NetValidatePasswordPolicy(null, IntPtr.Zero, 3, ref input, out output) != 0) return -1;   // NetValidatePasswordReset
         try { return (int)((Output)Marshal.PtrToStructure(output, typeof(Output))).ValidationStatus; }
         finally { NetValidatePasswordPolicyFree(ref output); }
+    }
+    // 0 when the LSA secret $name is removed, 2 when there was none, else the Windows error
+    public static int RemoveSecret(string name) {
+        LsaObjectAttributes attributes = new LsaObjectAttributes();
+        attributes.Length = Marshal.SizeOf(typeof(LsaObjectAttributes));
+        IntPtr policy;
+        uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, 0x20, out policy);   // POLICY_CREATE_SECRET
+        if (status != 0) return LsaNtStatusToWinError(status);
+        try {
+            LsaString key = new LsaString();
+            key.Buffer = name;
+            key.Length = (ushort)(name.Length * 2);
+            key.MaximumLength = (ushort)(name.Length * 2 + 2);
+            return LsaNtStatusToWinError(LsaStorePrivateData(policy, ref key, IntPtr.Zero));
+        } finally { LsaClose(policy); }
     }
 }
 '@
@@ -109,6 +144,49 @@ function Set-WmAccountPassword {
     # 2245 is a NetAPI error the system messages don't have
     $why = if ($code -eq 2245) { Get-WmText 'provision.password_policy' -English } else { (New-Object ComponentModel.Win32Exception $code).Message }
     throw "$why (error $code)"
+}
+
+# Removes the LSA secret $Name; nothing when there is none
+function Remove-WmLsaSecret {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    Initialize-WmAccountNative
+    $code = [WmAccountNative]::RemoveSecret($Name)
+    if ($code -eq 0 -or $code -eq 2) { return }
+    throw ('LSA secret {0}: {1} (error {2})' -f $Name, (New-Object ComponentModel.Win32Exception $code).Message, $code)
+}
+
+# Turns off automatic sign-in when it is set for the local account $Name, after wmanager changed its password: at the
+# next start Windows would sign in with the old one and fail, and keeping the new one would leave it stored on the
+# computer (the value DefaultPassword in the Winlogon key is plain text that any user can read). AutoAdminLogon 0, and
+# the old password removed from both places Windows keeps it; AutoLogonCount too, which would turn off an automatic
+# sign-in set up again later. Not journaled: Restore-Backup.ps1 would only bring back a password that no longer works.
+# $true when it was on for that account.
+function Disable-WmAutoLogon {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $values = Get-ItemProperty -LiteralPath $script:WmWinlogonKey -ErrorAction SilentlyContinue
+    if (-not $values -or [string]$values.AutoAdminLogon -ne '1') { return $false }
+    $user = [string]$values.DefaultUserName
+    $domain = [string]$values.DefaultDomainName
+    if ($user -match '^(?<domain>[^\\]*)\\(?<user>.+)$') { $domain = $Matches['domain']; $user = $Matches['user'] }
+    # A local account: the computer's name, or none; another domain has an account of the same name
+    if ($user -ine $Name -or ($domain -and $domain -ne '.' -and $domain -ine $env:COMPUTERNAME)) { return $false }
+    Set-ItemProperty -LiteralPath $script:WmWinlogonKey -Name 'AutoAdminLogon' -Value '0' -ErrorAction Stop
+    foreach ($v in @('DefaultPassword', 'AutoLogonCount')) {
+        if ($null -ne $values.$v) { Remove-ItemProperty -LiteralPath $script:WmWinlogonKey -Name $v -ErrorAction Stop }
+    }
+    Remove-WmLsaSecret -Name $script:WmAutoLogonSecret
+    return $true
+}
+
+# After a password change of $Name: automatic sign-in as that account off, said in the log; a failure is a warning
+# (the accounts are ready by then, so the step goes on)
+function Update-WmAutoLogon {
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Display)
+    try {
+        if (Disable-WmAutoLogon -Name $Name) { Write-WmLog -Key 'provision.autologon_off' -Arguments @($Display) }
+    } catch {
+        Write-WmLog -Key 'provision.autologon_failed' -Arguments @($Display, (Get-WmErrorText $_)) -Level warn
+    }
 }
 
 # The members of the local Administrators group (by its SID, so in every language): Sid, and Group ($true for a group,
@@ -244,6 +322,7 @@ function Set-WmAccounts {
         if ($Plan.AdminPassword) {
             Set-LocalUser -SID $account.SID.Value -Password $Plan.AdminPassword -ErrorAction Stop
             Write-WmLog -Key 'provision.password_changed' -Arguments @($Plan.Admin)
+            Update-WmAutoLogon -Name $Plan.Admin -Display $Plan.Admin
         }
         if (-not $account.Enabled) { Enable-LocalUser -SID $account.SID.Value -ErrorAction Stop }
     }
@@ -273,6 +352,7 @@ function Set-WmAccounts {
         try {
             Set-WmAccountPassword -Name $user.ShortName -Old $Plan.UserOldPassword -New $Plan.UserPassword
             Write-WmLog -Key 'provision.password_changed' -Arguments @($user.Name)
+            Update-WmAutoLogon -Name $user.ShortName -Display $user.Name
         } catch {
             Write-WmLog -Key 'provision.password_not_changed' -Arguments @($user.Name, (Get-WmErrorText $_)) -Level warn
         }

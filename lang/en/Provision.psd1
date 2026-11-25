@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'That is not the current password of {0}; once more.'
     'provision.user_password_kept'               = 'Not the current password three times: the password of {0} stays as it is.'
     'provision.password_not_changed'             = 'The password of {0} wasn''t changed (it stays as it was): {1}'
+    'provision.autologon_off'                    = 'Automatic sign-in as {0} turned off: it would fail with the old password, and the new one is not stored on the computer.'
+    'provision.autologon_failed'                 = 'Turning off automatic sign-in as {0} failed: {1}. Check AutoAdminLogon and DefaultPassword in HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'the new password doesn''t meet the password rules of this computer (length, complexity or history)'
     'provision.admin_account_builtin'            = 'AdminAccount: ''{0}'' is an account Windows makes itself (Administrator, Guest...); name another one'
     'provision.admin_password_needed'            = 'The administrator account {0} is disabled or has no password: a new password for it (not shown)'

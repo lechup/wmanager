@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'Das ist nicht das aktuelle Kennwort von {0}; noch einmal.'
     'provision.user_password_kept'               = 'Dreimal nicht das aktuelle Kennwort: das Kennwort von {0} bleibt, wie es ist.'
     'provision.password_not_changed'             = 'Das Kennwort von {0} wurde nicht geändert (es bleibt das bisherige): {1}'
+    'provision.autologon_off'                    = 'Automatische Anmeldung als {0} ausgeschaltet: mit dem alten Kennwort würde sie fehlschlagen, und das neue wird nicht auf dem Computer gespeichert.'
+    'provision.autologon_failed'                 = 'Die automatische Anmeldung als {0} konnte nicht ausgeschaltet werden: {1}. Prüfen Sie AutoAdminLogon und DefaultPassword in HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'das neue Kennwort erfüllt die Kennwortregeln dieses Computers nicht (Länge, Komplexität oder Verlauf)'
     'provision.admin_account_builtin'            = 'AdminAccount: ''{0}'' ist ein Konto, das Windows selbst anlegt (Administrator, Gast...); ein anderes angeben'
     'provision.admin_password_needed'            = 'Das Administratorkonto {0} ist deaktiviert oder hat kein Kennwort: ein neues Kennwort (unsichtbar)'

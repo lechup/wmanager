@@ -76,6 +76,15 @@ Then, after the backup, in this order:
   says so and their password stays as it was.
 - The person is written down for the restore (`state\accounts-demoted.txt`) and removed from the Administrators group.
 
+If the computer signs in automatically as an account whose password was just changed (the person, or an
+administrator account that existed), automatic sign-in is turned off: with the old password it would fail at the next
+start, and keeping the new one would leave it stored on the computer. Windows keeps that password as plain text in
+the registry (`DefaultPassword` in `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`, which any user can
+read) or in the LSA secret of that name (netplwiz, Sysinternals Autologon). Provisioning sets `AutoAdminLogon = 0`
+and removes `DefaultPassword` from both places, and `AutoLogonCount`; the log says so. Automatic sign-in as another
+account, or when no password changes, stays as it is. `Restore-Backup.ps1` doesn't turn it on again (the old password
+no longer works); set it up again by hand if it's needed.
+
 Nobody becomes a standard user when nobody is signed in, when the person signed in can't be determined (a cloud
 account offline, for example), when the administrator account itself is signed in, or when the answer was no. Without a console (provisioning not run by a person at the computer, e.g. over SSH) nothing is asked
 and the accounts stay as they are; the log has a warning. Only membership of the Administrators group itself is
@@ -122,7 +131,7 @@ It asks whether to make the people provisioning made standard users administrato
 [Administrator account](#administrator-account)).
 
 Not undone: removed Store apps (reinstall from the Store) and OneDrive (reinstall from Microsoft), installed
-Chocolatey packages, what group scripts changed, the computer name, the administrator account (it stays) and passwords. Settings the scheduled update applies to profiles created after provisioning
+Chocolatey packages, what group scripts changed, the computer name, the administrator account (it stays), passwords and automatic sign-in turned off with them. Settings the scheduled update applies to profiles created after provisioning
 are not in the journal, nor are `UScheduler_Oobe` entries that Windows created after provisioning and the scheduled update deleted. Programs and system files can be rolled back with the system restore point.
 
 ## choco-reqs.txt

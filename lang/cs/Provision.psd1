@@ -66,6 +66,8 @@
     'provision.user_old_password_wrong'          = 'To není současné heslo {0}; ještě jednou.'
     'provision.user_password_kept'               = 'Třikrát to nebylo současné heslo: heslo {0} zůstává, jak je.'
     'provision.password_not_changed'             = 'Heslo {0} nebylo změněno (zůstává dosavadní): {1}'
+    'provision.autologon_off'                    = 'Automatické přihlášení jako {0} vypnuto: se starým heslem by selhalo a nové se v počítači neukládá.'
+    'provision.autologon_failed'                 = 'Automatické přihlášení jako {0} se nepodařilo vypnout: {1}. Zkontrolujte AutoAdminLogon a DefaultPassword v HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon.'
     'provision.password_policy'                  = 'nové heslo nesplňuje pravidla hesel tohoto počítače (délka, složitost nebo historie)'
     'provision.admin_account_builtin'            = 'AdminAccount: ''{0}'' je účet, který Windows vytváří sám (Administrator, Host...); zadejte jiný'
     'provision.admin_password_needed'            = 'Účet správce {0} je vypnutý nebo nemá heslo: nové heslo (skryté)'
