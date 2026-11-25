@@ -33,12 +33,15 @@
     'choco.action_upgrade'           = 'aktualizacja'
 
     # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: pobrany plik nie zgadza się z sumą kontrolną przypiętej wersji {1}: pod adresem jest już inna wersja, więc nie zainstalowano (przypięta wersja to tylko plik tej wersji).'
+    'choco.checksum_own'             = '{0}: pobrany plik nie zgadza się z sumą kontrolną podaną po | na liście: nie zainstalowano.'
     'choco.checksum_no_signer'       = '{0}: pobrany plik nie zgadza się z sumą kontrolną paczki (często nowa wersja pod tym samym adresem, zanim paczkę zaktualizowano; następna aktualizacja spróbuje znowu). Z !signer="wydawca" w jej linii na liście wmanager sprawdza zamiast tego podpis pliku.'
     'choco.checksum_check_signature' = '{0}: {1} nie zgadza się z sumą kontrolną paczki; zamiast niej sprawdzam podpis {2}.'
     'choco.signature_no_file'        = '{0}: pliku do sprawdzenia już nie ma ({1}), a jego adres nie jest znany.'
     'choco.signature_download_failed' = '{0}: nie udało się pobrać pliku do sprawdzenia z {1}: {2}'
     'choco.signature_bad'            = '{0}: {1} nie ma ważnego podpisu {2} ({3}): nie zainstalowano.'
     'choco.signature_ok'             = '{0}: {1} ma podpis {2}: instaluję go z jego własną sumą kontrolną.'
+    'choco.signature_check_failed'   = '{0}: nie udało się sprawdzić podpisu {1}: {2}'
 
     'choco.packages_section'         = '--- Paczki ({0} na liście) ---'
     'choco.running_version_deferred' = '{0}: program działa, zmiana wersji odłożona.'

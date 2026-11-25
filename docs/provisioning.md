@@ -159,6 +159,11 @@ again; by then the package has usually been updated.
 Checksums given this way are not kept for later upgrades: each one is checked anew. `--ignore-checksums` after `|`
 also gets such a package installed, but then nothing checks the download at all.
 
+Not for a pinned version (`7zip@24.8.0`): the address then serves another version, which choco would record as the
+pinned one, so the package is not installed and the log says why. Nor when the line gives a checksum of its own after
+`|`. The checksum given applies to every download of the package, so a package that downloads several files, one of
+them still matching the package, fails the second run too: then nothing is installed.
+
 The list sources (`ReqsSources`) are tried in order: URL, share, file next to the script.
 The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.txt` and is used when no source responds.
 

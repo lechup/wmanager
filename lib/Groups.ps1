@@ -524,12 +524,13 @@ function ConvertFrom-WmRequirements {
         }
 
         # !signer="Publisher": whose signature vouches for a download whose checksum doesn't match the package
-        # (Invoke-WmChocoPackage in Choco.ps1); in quotes when the name has spaces
+        # (Invoke-WmChocoPackage in Choco.ps1); in quotes (" or ') when the name has spaces
         $signer = $null
-        $found = [regex]::Matches($line, '(?:^|\s)!signer=(?:"(?<quoted>[^"]*)"|(?<plain>[^\s"]+))(?=\s|$)')
+        $found = [regex]::Matches($line, '(?:^|\s)!signer=(?:"(?<quoted>[^"]*)"|''(?<single>[^'']*)''|(?<plain>[^\s"'']+))(?=\s|$)')
         if ($found.Count -gt 1) { throw (New-WmError 'choco.line_bad_signer' @($lineNo)) }
         if ($found.Count -eq 1) {
-            $signer = ($found[0].Groups['quoted'].Value + $found[0].Groups['plain'].Value).Trim()
+            $g = $found[0].Groups
+            $signer = ($g['quoted'].Value + $g['single'].Value + $g['plain'].Value).Trim()
             if (-not $signer) { throw (New-WmError 'choco.line_bad_signer' @($lineNo)) }
             $line = $line.Remove($found[0].Index, $found[0].Length).Trim()
         }

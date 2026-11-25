@@ -33,12 +33,15 @@
     'choco.action_upgrade'           = 'la mise à niveau'
 
     # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0} : le fichier téléchargé ne correspond pas à la somme de contrôle de la version épinglée {1} : l''adresse fournit maintenant une autre version, il n''est donc pas installé (une version épinglée, c''est uniquement le fichier de cette version).'
+    'choco.checksum_own'             = '{0} : le fichier téléchargé ne correspond pas à la somme de contrôle donnée après | dans la liste : non installé.'
     'choco.checksum_no_signer'       = '{0} : le fichier téléchargé ne correspond pas à la somme de contrôle du package (souvent une nouvelle version à la même adresse avant la mise à jour du package ; la prochaine mise à jour réessaiera). Avec !signer="éditeur" sur sa ligne de la liste, wmanager vérifie plutôt la signature du fichier.'
     'choco.checksum_check_signature' = '{0} : {1} ne correspond pas à la somme de contrôle du package ; vérification de sa signature par {2} à la place.'
     'choco.signature_no_file'        = '{0} : le fichier à vérifier n''existe plus ({1}) et son adresse est inconnue.'
     'choco.signature_download_failed' = '{0} : le fichier à vérifier n''a pas pu être téléchargé depuis {1} : {2}'
     'choco.signature_bad'            = '{0} : {1} n''est pas valablement signé par {2} ({3}) : non installé.'
     'choco.signature_ok'             = '{0} : {1} est signé par {2} : installation avec sa propre somme de contrôle.'
+    'choco.signature_check_failed'   = '{0} : la signature de {1} n''a pas pu être vérifiée : {2}'
 
     'choco.packages_section'         = '--- Packages ({0} dans la liste) ---'
     'choco.running_version_deferred' = '{0} : le programme est en cours d''exécution, changement de version reporté.'

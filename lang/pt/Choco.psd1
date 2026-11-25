@@ -33,12 +33,15 @@
     'choco.action_upgrade'           = 'a atualização'
 
     # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: o ficheiro transferido não corresponde à soma de verificação da versão fixada {1}: o endereço serve agora outra versão, por isso não é instalado (uma versão fixada é só o ficheiro dessa versão).'
+    'choco.checksum_own'             = '{0}: o ficheiro transferido não corresponde à soma de verificação indicada depois de | na lista: não instalado.'
     'choco.checksum_no_signer'       = '{0}: o ficheiro transferido não corresponde à soma de verificação do pacote (muitas vezes uma versão nova no mesmo endereço antes de o pacote ser atualizado; a próxima atualização tenta de novo). Com !signer="editor" na sua linha da lista, o wmanager verifica antes a assinatura do ficheiro.'
     'choco.checksum_check_signature' = '{0}: {1} não corresponde à soma de verificação do pacote; verifica-se antes a sua assinatura de {2}.'
     'choco.signature_no_file'        = '{0}: o ficheiro a verificar já não existe ({1}) e o seu endereço não é conhecido.'
     'choco.signature_download_failed' = '{0}: não foi possível transferir de {1} o ficheiro a verificar: {2}'
     'choco.signature_bad'            = '{0}: {1} não tem uma assinatura válida de {2} ({3}): não instalado.'
     'choco.signature_ok'             = '{0}: {1} está assinado por {2}: a instalar com a sua própria soma de verificação.'
+    'choco.signature_check_failed'   = '{0}: não foi possível verificar a assinatura de {1}: {2}'
 
     'choco.packages_section'         = '--- Pacotes ({0} na lista) ---'
     'choco.running_version_deferred' = '{0}: o programa está em execução, alteração de versão adiada.'

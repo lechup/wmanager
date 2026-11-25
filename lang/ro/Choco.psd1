@@ -33,12 +33,15 @@
     'choco.action_upgrade'           = 'actualizarea'
 
     # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: fișierul descărcat nu corespunde sumei de control a versiunii fixate {1}: adresa oferă acum o altă versiune, deci nu a fost instalat (o versiune fixată înseamnă doar fișierul acelei versiuni).'
+    'choco.checksum_own'             = '{0}: fișierul descărcat nu corespunde sumei de control date după | în listă: nu a fost instalat.'
     'choco.checksum_no_signer'       = '{0}: fișierul descărcat nu corespunde sumei de control a pachetului (adesea o versiune nouă la aceeași adresă înainte ca pachetul să fie actualizat; următoarea actualizare încearcă din nou). Cu !signer="editor" pe linia sa din listă, wmanager verifică în schimb semnătura fișierului.'
     'choco.checksum_check_signature' = '{0}: {1} nu corespunde sumei de control a pachetului; se verifică în schimb semnătura sa de la {2}.'
     'choco.signature_no_file'        = '{0}: fișierul de verificat nu mai există ({1}), iar adresa sa nu este cunoscută.'
     'choco.signature_download_failed' = '{0}: fișierul de verificat nu a putut fi descărcat de la {1}: {2}'
     'choco.signature_bad'            = '{0}: {1} nu are o semnătură validă de la {2} ({3}): nu a fost instalat.'
     'choco.signature_ok'             = '{0}: {1} este semnat de {2}: se instalează cu propria sa sumă de control.'
+    'choco.signature_check_failed'   = '{0}: semnătura lui {1} nu a putut fi verificată: {2}'
 
     'choco.packages_section'         = '--- Pachete (în listă: {0}) ---'
     'choco.running_version_deferred' = '{0}: programul rulează, schimbarea versiunii este amânată.'

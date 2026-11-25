@@ -133,7 +133,10 @@ function Get-WmFileSigner {
 # by the publisher of the package (Get-WmPackageSigner). choco then runs once more with that file's own checksum: it
 # keeps a download that failed the check and uses a copy that matches the checksum given, so only that file gets
 # installed (downloaded again only if it was gone, and then checked against the same checksum). choco doesn't
-# remember checksums given this way for later upgrades.
+# remember checksums given this way for later upgrades. Not for a pinned version (the address now serves another
+# version, which choco would record as the pinned one) or a checksum given after | in the list (that exact file was
+# asked for). The checksum given applies to every download of the package: one with a second download that still
+# matched the package fails the second run (nothing unchecked gets installed).
 function Invoke-WmChocoPackage {
     param([Parameter(Mandatory = $true)]$Requirement, [Parameter(Mandatory = $true)][string[]]$Arguments)
     $code = Invoke-WmChoco $Arguments
@@ -141,27 +144,50 @@ function Invoke-WmChocoPackage {
     $mismatch = Get-WmChecksumMismatch -Output $script:WmChocoOutput
     if (-not $mismatch) { return $code }
     $name = $Requirement.Name
+    if ($Requirement.Pinned) { Write-WmLog -Key 'choco.checksum_pinned' -Arguments @($name, $Requirement.Version) -Level error; return $code }
+    if (@($Arguments -match '^--?(checksum(64|x64)?|download-?checksum(-?x64)?)(=|$)').Count -gt 0) {
+        Write-WmLog -Key 'choco.checksum_own' -Arguments @($name) -Level error
+        return $code
+    }
     $signer = Get-WmPackageSigner $Requirement
     if (-not $signer) { Write-WmLog -Key 'choco.checksum_no_signer' -Arguments @($name) -Level warn; return $code }
     $file = $mismatch.File
     $leaf = Split-Path $file -Leaf
     Write-WmLog -Key 'choco.checksum_check_signature' -Arguments @($name, $leaf, $signer)
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-        if (-not $mismatch.Url) { Write-WmLog -Key 'choco.signature_no_file' -Arguments @($name, $file) -Level error; return $code }
-        try { Save-WmWebFile -Url $mismatch.Url -Path $file } catch {
-            Write-WmLog -Key 'choco.signature_download_failed' -Arguments @($name, $mismatch.Url, (Get-WmErrorText $_)) -Level error
-            return $code
+    try {
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+            if (-not $mismatch.Url) { Write-WmLog -Key 'choco.signature_no_file' -Arguments @($name, $leaf) -Level error; return $code }
+            try { Save-WmWebFile -Url $mismatch.Url -Path $file } catch {
+                Write-WmLog -Key 'choco.signature_download_failed' -Arguments @($name, (Get-WmSafeUrl $mismatch.Url), (Get-WmErrorText $_)) -Level error
+                return $code
+            }
         }
-    }
-    $by = Get-WmFileSigner -Path $file
-    if (-not $by.Valid -or $by.Name -ine $signer) {
-        $why = if ($by.Name) { '{0}, {1}' -f $by.Why, $by.Name } else { $by.Why }
-        Write-WmLog -Key 'choco.signature_bad' -Arguments @($name, $leaf, $signer, $why) -Level error
+        # Open, so nobody can change or replace the file between the signature and the checksum: choco checks the
+        # copy it uses against this checksum, so what it installs is the file whose signature was checked
+        $stream = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        try {
+            $by = Get-WmFileSigner -Path $file
+            if (-not $by.Valid -or $by.Name -ine $signer) {
+                $why = if ($by.Name) { '{0}, {1}' -f $by.Why, $by.Name } else { $by.Why }
+                Write-WmLog -Key 'choco.signature_bad' -Arguments @($name, $leaf, $signer, $why) -Level error
+                return $code
+            }
+            $hash = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
+        } finally { $stream.Dispose() }
+    } catch {
+        # Never the end of the other packages
+        Write-WmLog -Key 'choco.signature_check_failed' -Arguments @($name, $leaf, (Get-WmErrorText $_)) -Level error
         return $code
     }
-    $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
     Write-WmLog -Key 'choco.signature_ok' -Arguments @($name, $leaf, $by.Name)
     return (Invoke-WmChoco ($Arguments + @("--checksum=$hash", "--checksum64=$hash", '--checksumtype=sha256', '--checksumtype64=sha256')))
+}
+
+# An address for the log, sent to Loki too: without a login or a query (a token may be in either)
+function Get-WmSafeUrl {
+    param([string]$Url)
+    try { return ([uri]$Url).GetComponents([UriComponents]::SchemeAndServer -bor [UriComponents]::Path, [UriFormat]::UriEscaped) }
+    catch { return '(address)' }
 }
 
 function Get-WmChocoLines {

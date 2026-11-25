@@ -33,12 +33,15 @@
     'choco.action_upgrade'           = 'upgrade'
 
     # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: the download doesn''t match the checksum of the pinned version {1}: the address now serves another version, so it isn''t installed (a pinned version is that version''s file only).'
+    'choco.checksum_own'             = '{0}: the download doesn''t match the checksum given after | in the list: not installed.'
     'choco.checksum_no_signer'       = '{0}: the download doesn''t match the package''s checksum (often a new version at the same address before the package is updated; the next update tries again). With !signer="publisher" on its line in the list, wmanager checks the download''s signature instead.'
     'choco.checksum_check_signature' = '{0}: {1} doesn''t match the package''s checksum; checking its signature by {2} instead.'
     'choco.signature_no_file'        = '{0}: the download to check is gone ({1}) and its address isn''t known.'
     'choco.signature_download_failed' = '{0}: the download to check couldn''t be fetched from {1}: {2}'
     'choco.signature_bad'            = '{0}: {1} is not validly signed by {2} ({3}): not installed.'
     'choco.signature_ok'             = '{0}: {1} is signed by {2}: installing it with its own checksum.'
+    'choco.signature_check_failed'   = '{0}: the signature of {1} couldn''t be checked: {2}'
 
     'choco.packages_section'         = '--- Packages ({0} on the list) ---'
     'choco.running_version_deferred' = '{0}: the program is running, version change deferred.'

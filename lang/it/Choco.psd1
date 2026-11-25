@@ -33,12 +33,15 @@
     'choco.action_upgrade'           = 'l''aggiornamento'
 
     # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: il file scaricato non corrisponde al checksum della versione fissata {1}: l''indirizzo ora fornisce un''altra versione, quindi non viene installato (una versione fissata è solo il file di quella versione).'
+    'choco.checksum_own'             = '{0}: il file scaricato non corrisponde al checksum indicato dopo | nell''elenco: non installato.'
     'choco.checksum_no_signer'       = '{0}: il file scaricato non corrisponde al checksum del pacchetto (spesso una nuova versione allo stesso indirizzo prima che il pacchetto venga aggiornato; il prossimo aggiornamento riproverà). Con !signer="editore" nella sua riga dell''elenco, wmanager controlla invece la firma del file.'
     'choco.checksum_check_signature' = '{0}: {1} non corrisponde al checksum del pacchetto; si controlla invece la sua firma di {2}.'
     'choco.signature_no_file'        = '{0}: il file da controllare non c''è più ({1}) e il suo indirizzo non è noto.'
     'choco.signature_download_failed' = '{0}: non è stato possibile scaricare da {1} il file da controllare: {2}'
     'choco.signature_bad'            = '{0}: {1} non ha una firma valida di {2} ({3}): non installato.'
     'choco.signature_ok'             = '{0}: {1} è firmato da {2}: installazione con il suo checksum.'
+    'choco.signature_check_failed'   = '{0}: non è stato possibile controllare la firma di {1}: {2}'
 
     'choco.packages_section'         = '--- Pacchetti ({0} nell''elenco) ---'
     'choco.running_version_deferred' = '{0}: il programma è in esecuzione, cambio di versione rimandato.'

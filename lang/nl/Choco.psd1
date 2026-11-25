@@ -33,12 +33,15 @@
     'choco.action_upgrade'           = 'bijwerken'
 
     # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: het gedownloade bestand komt niet overeen met de controlesom van de vastgezette versie {1}: het adres levert nu een andere versie, dus niet geïnstalleerd (een vastgezette versie is alleen het bestand van die versie).'
+    'choco.checksum_own'             = '{0}: het gedownloade bestand komt niet overeen met de controlesom na | in de lijst: niet geïnstalleerd.'
     'choco.checksum_no_signer'       = '{0}: het gedownloade bestand komt niet overeen met de controlesom van het pakket (vaak een nieuwe versie op hetzelfde adres voordat het pakket is bijgewerkt; de volgende update probeert het opnieuw). Met !signer="uitgever" op zijn regel in de lijst controleert wmanager in plaats daarvan de handtekening van het bestand.'
     'choco.checksum_check_signature' = '{0}: {1} komt niet overeen met de controlesom van het pakket; in plaats daarvan wordt de handtekening van {2} gecontroleerd.'
     'choco.signature_no_file'        = '{0}: het te controleren bestand is er niet meer ({1}) en het adres ervan is onbekend.'
     'choco.signature_download_failed' = '{0}: het te controleren bestand kon niet worden gedownload van {1}: {2}'
     'choco.signature_bad'            = '{0}: {1} is niet geldig ondertekend door {2} ({3}): niet geïnstalleerd.'
     'choco.signature_ok'             = '{0}: {1} is ondertekend door {2}: installeren met zijn eigen controlesom.'
+    'choco.signature_check_failed'   = '{0}: de handtekening van {1} kon niet worden gecontroleerd: {2}'
 
     'choco.packages_section'         = '--- Pakketten ({0} op de lijst) ---'
     'choco.running_version_deferred' = '{0}: het programma is actief, versiewijziging uitgesteld.'
