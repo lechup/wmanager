@@ -88,7 +88,11 @@ function Get-WmChecksumMismatch {
     $url = $null
     foreach ($l in @($Output)) {
         # "Downloading <package> 64 bit" and, on the next line, "  from 'https://...'"
-        if ($l -match "^\s*from '(?<url>[^']+)'\s*$") { $url = if ($Matches['url'] -match '^https://') { $Matches['url'] } else { $null }; continue }
+        if ($l -match "^\s*from '(?<url>[^']+)'\s*$") {
+            $url = $Matches['url']   # read before the next -match replaces $Matches
+            if ($url -notmatch '^https://') { $url = $null }
+            continue
+        }
         if ($l -match "Checksum for '(?<file>[^']+)' did not meet '") {
             if (-not [IO.Path]::IsPathRooted($Matches['file'])) { return $null }
             return [pscustomobject]@{ File = $Matches['file']; Url = $url }
