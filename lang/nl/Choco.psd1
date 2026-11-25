@@ -3,8 +3,9 @@
     'choco.line_no_package'          = 'Regel {0}: geen pakketnaam'
     'choco.line_bad_name'            = "Regel {0}: ongeldige pakketnaam '{1}'"
     'choco.line_bad_version'         = "Regel {0}: ongeldige versie '{1}' voor '{2}'"
-    'choco.line_unknown_option'      = "Regel {0}: onbekende optie '{1}' (toegestaan: !noupdate, en choco-parameters na het teken |)"
+    'choco.line_unknown_option'      = 'Regel {0}: onbekende optie ''{1}'' (toegestaan: !noupdate, !signer="uitgever", en choco-parameters na het teken |)'
     'choco.line_duplicate'           = "Regel {0}: pakket '{1}' komt een tweede keer voor (eerst in regel {2})"
+    'choco.line_bad_signer'          = 'Regel {0}: !signer heeft de naam van de uitgever nodig, één keer, tussen aanhalingstekens als die spaties bevat (bijv. !signer="Google LLC")'
 
     'choco.reqs_file_missing'        = 'bestand niet gevonden: {0}'
     'choco.reqs_loaded'              = 'Pakketlijst geladen van: {0}'
@@ -30,6 +31,17 @@
     'choco.action_install'           = 'installeren'
     'choco.action_install_version'   = 'installeren van versie {0}'
     'choco.action_upgrade'           = 'bijwerken'
+
+    # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: het gedownloade bestand komt niet overeen met de controlesom van de vastgezette versie {1}: het adres levert nu een andere versie, dus niet geïnstalleerd (een vastgezette versie is alleen het bestand van die versie).'
+    'choco.checksum_own'             = '{0}: het gedownloade bestand komt niet overeen met de controlesom na | in de lijst: niet geïnstalleerd.'
+    'choco.checksum_no_signer'       = '{0}: het gedownloade bestand komt niet overeen met de controlesom van het pakket (vaak een nieuwe versie op hetzelfde adres voordat het pakket is bijgewerkt; de volgende update probeert het opnieuw). Met !signer="uitgever" op zijn regel in de lijst controleert wmanager in plaats daarvan de handtekening van het bestand.'
+    'choco.checksum_check_signature' = '{0}: {1} komt niet overeen met de controlesom van het pakket; in plaats daarvan wordt de handtekening van {2} gecontroleerd.'
+    'choco.signature_no_file'        = '{0}: het te controleren bestand is er niet meer ({1}) en het adres ervan is onbekend.'
+    'choco.signature_download_failed' = '{0}: het te controleren bestand kon niet worden gedownload van {1}: {2}'
+    'choco.signature_bad'            = '{0}: {1} is niet geldig ondertekend door {2} ({3}): niet geïnstalleerd.'
+    'choco.signature_ok'             = '{0}: {1} is ondertekend door {2}: installeren met zijn eigen controlesom.'
+    'choco.signature_check_failed'   = '{0}: de handtekening van {1} kon niet worden gecontroleerd: {2}'
 
     'choco.packages_section'         = '--- Pakketten ({0} op de lijst) ---'
     'choco.running_version_deferred' = '{0}: het programma is actief, versiewijziging uitgesteld.'

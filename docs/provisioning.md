@@ -143,12 +143,36 @@ libreoffice-fresh             # latest, kept up to date
 libreoffice-fresh@latest      # same thing, written explicitly
 7zip@24.8.0                   # pinned version (choco pin), never updated
 vlc | --params "/NoDesktopShortcut"   # extra choco parameters
+firefox !signer="Mozilla Corporation"   # a download whose checksum doesn't match: its signature decides
 ```
 
 - Write a pinned version exactly as `choco list` shows it (e.g. `24.8.0`).
 - Changing the version number in the list changes the installed version on the next run (downgrades too).
 - A new package on the list is installed on the next run. Packages removed from the list are not uninstalled.
 - The list is validated before use; an invalid line (unknown option, duplicate) rejects the whole source and the script moves on to the next one.
+
+### A checksum that doesn't match
+
+Some programs are always published at the same address, the newest version replacing the last one (Chrome, for
+one). Their Chocolatey package holds the checksum of the version it was made for, so from a new release until its
+maintainer updates the package, choco refuses the download: `Checksum for '...' did not meet '...'`.
+
+For such a package wmanager checks the download's Authenticode signature instead. It must be valid and by the
+publisher given with `!signer="Name"` (the name in the signer's certificate, its CN, as the file's Properties >
+Digital Signatures show it; in quotes when it has spaces). `googlechrome` needs nothing: `Google LLC` is built in.
+With the right signature, choco runs once more with the checksum of that very file: it uses the copy it downloaded,
+so only that file gets installed, without downloading it again (wmanager fetches it only if that copy is gone, and
+checks that one the same way). A download that isn't signed, or is signed by
+someone else, is not installed (an error in the log). Without a publisher the log says that the next update tries
+again; by then the package has usually been updated.
+
+Checksums given this way are not kept for later upgrades: each one is checked anew. `--ignore-checksums` after `|`
+also gets such a package installed, but then nothing checks the download at all.
+
+Not for a pinned version (`7zip@24.8.0`): the address then serves another version, which choco would record as the
+pinned one, so the package is not installed and the log says why. Nor when the line gives a checksum of its own after
+`|`. The checksum given applies to every download of the package, so a package that downloads several files, one of
+them still matching the package, fails the second run too: then nothing is installed.
 
 The list sources (`ReqsSources`) are tried in order: URL, share, file next to the script.
 The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.txt` and is used when no source responds.

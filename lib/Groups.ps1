@@ -74,7 +74,7 @@ function Get-WmComputerGroups {
 
 function Get-WmRequirementSpec {
     param($Item)
-    return '{0}|{1}|{2}' -f $Item.Version, $Item.NoUpdate, (@($Item.ExtraArgs) -join ' ')
+    return '{0}|{1}|{2}|{3}' -f $Item.Version, $Item.NoUpdate, $Item.Signer, (@($Item.ExtraArgs) -join ' ')
 }
 
 # Joins package lists. $Lists: @{ Label; IsGroup; Items } in order, the common list first.
@@ -523,6 +523,18 @@ function ConvertFrom-WmRequirements {
             $line = $line.Substring(0, $pipe).Trim()
         }
 
+        # !signer="Publisher": whose signature vouches for a download whose checksum doesn't match the package
+        # (Invoke-WmChocoPackage in Choco.ps1); in quotes (" or ') when the name has spaces
+        $signer = $null
+        $found = [regex]::Matches($line, '(?:^|\s)!signer=(?:"(?<quoted>[^"]*)"|''(?<single>[^'']*)''|(?<plain>[^\s"'']+))(?=\s|$)')
+        if ($found.Count -gt 1) { throw (New-WmError 'choco.line_bad_signer' @($lineNo)) }
+        if ($found.Count -eq 1) {
+            $g = $found[0].Groups
+            $signer = ($g['quoted'].Value + $g['single'].Value + $g['plain'].Value).Trim()
+            if (-not $signer) { throw (New-WmError 'choco.line_bad_signer' @($lineNo)) }
+            $line = $line.Remove($found[0].Index, $found[0].Length).Trim()
+        }
+
         $tokens = @($line -split '\s+' | Where-Object { $_ })
         if ($tokens.Count -eq 0) { throw (New-WmError 'choco.line_no_package' @($lineNo)) }
 
@@ -551,6 +563,7 @@ function ConvertFrom-WmRequirements {
         foreach ($flag in ($tokens | Select-Object -Skip 1)) {
             switch -Regex ($flag) {
                 '^!noupdate$' { $noUpdate = $true }
+                '^!signer' { throw (New-WmError 'choco.line_bad_signer' @($lineNo)) }   # e.g. a quote not closed
                 default { throw (New-WmError 'choco.line_unknown_option' @($lineNo, $flag)) }
             }
         }
@@ -564,6 +577,7 @@ function ConvertFrom-WmRequirements {
             Version   = $version      # $null = latest
             Pinned    = $pinned
             NoUpdate  = $noUpdate
+            Signer    = $signer       # $null = none given (googlechrome has one built in)
             ExtraArgs = (Split-WmArgumentString $extra)
             Line      = $lineNo
         }

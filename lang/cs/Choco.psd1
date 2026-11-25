@@ -3,8 +3,9 @@
     'choco.line_no_package'          = 'Řádek {0}: chybí název balíčku'
     'choco.line_bad_name'            = "Řádek {0}: neplatný název balíčku '{1}'"
     'choco.line_bad_version'         = "Řádek {0}: neplatná verze '{1}' pro '{2}'"
-    'choco.line_unknown_option'      = "Řádek {0}: neznámá možnost '{1}' (povoleno: !noupdate a parametry choco za znakem |)"
+    'choco.line_unknown_option'      = 'Řádek {0}: neznámá možnost ''{1}'' (povoleno: !noupdate, !signer="vydavatel" a parametry choco za znakem |)'
     'choco.line_duplicate'           = "Řádek {0}: balíček '{1}' se vyskytuje podruhé (poprvé na řádku {2})"
+    'choco.line_bad_signer'          = 'Řádek {0}: !signer potřebuje jméno vydavatele, jednou, v uvozovkách, pokud obsahuje mezery (např. !signer="Google LLC")'
 
     'choco.reqs_file_missing'        = 'soubor nenalezen: {0}'
     'choco.reqs_loaded'              = 'Seznam balíčků načten z: {0}'
@@ -30,6 +31,17 @@
     'choco.action_install'           = 'instalace'
     'choco.action_install_version'   = 'instalace verze {0}'
     'choco.action_upgrade'           = 'aktualizace'
+
+    # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: stažený soubor neodpovídá kontrolnímu součtu připnuté verze {1}: na adrese je teď jiná verze, proto nenainstalováno (připnutá verze je jen soubor té verze).'
+    'choco.checksum_own'             = '{0}: stažený soubor neodpovídá kontrolnímu součtu uvedenému za | v seznamu: nenainstalováno.'
+    'choco.checksum_no_signer'       = '{0}: stažený soubor neodpovídá kontrolnímu součtu balíčku (často nová verze na stejné adrese, než se balíček aktualizuje; příští aktualizace to zkusí znovu). S !signer="vydavatel" na jeho řádku seznamu wmanager místo toho ověří podpis souboru.'
+    'choco.checksum_check_signature' = '{0}: {1} neodpovídá kontrolnímu součtu balíčku; místo toho se ověřuje jeho podpis od {2}.'
+    'choco.signature_no_file'        = '{0}: soubor k ověření už neexistuje ({1}) a jeho adresa není známa.'
+    'choco.signature_download_failed' = '{0}: soubor k ověření se nepodařilo stáhnout z {1}: {2}'
+    'choco.signature_bad'            = '{0}: {1} nemá platný podpis od {2} ({3}): nenainstalováno.'
+    'choco.signature_ok'             = '{0}: {1} je podepsán {2}: instaluje se s jeho vlastním kontrolním součtem.'
+    'choco.signature_check_failed'   = '{0}: podpis {1} se nepodařilo ověřit: {2}'
 
     'choco.packages_section'         = '--- Balíčky ({0} na seznamu) ---'
     'choco.running_version_deferred' = '{0}: program je spuštěný, změna verze odložena.'

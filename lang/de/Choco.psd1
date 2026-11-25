@@ -3,8 +3,9 @@
     'choco.line_no_package'          = 'Zeile {0}: kein Paketname'
     'choco.line_bad_name'            = "Zeile {0}: ungültiger Paketname '{1}'"
     'choco.line_bad_version'         = "Zeile {0}: ungültige Version '{1}' für '{2}'"
-    'choco.line_unknown_option'      = "Zeile {0}: unbekannte Option '{1}' (zulässig: !noupdate sowie choco-Parameter nach dem Zeichen |)"
+    'choco.line_unknown_option'      = 'Zeile {0}: unbekannte Option ''{1}'' (zulässig: !noupdate, !signer="Herausgeber" sowie choco-Parameter nach dem Zeichen |)'
     'choco.line_duplicate'           = "Zeile {0}: Paket '{1}' kommt ein zweites Mal vor (zuerst in Zeile {2})"
+    'choco.line_bad_signer'          = 'Zeile {0}: !signer braucht den Namen des Herausgebers, einmal, in Anführungszeichen, wenn er Leerzeichen enthält (z. B. !signer="Google LLC")'
 
     'choco.reqs_file_missing'        = 'Datei nicht gefunden: {0}'
     'choco.reqs_loaded'              = 'Paketliste geladen aus: {0}'
@@ -30,6 +31,17 @@
     'choco.action_install'           = 'Installation'
     'choco.action_install_version'   = 'Installation der Version {0}'
     'choco.action_upgrade'           = 'Aktualisierung'
+
+    # A download whose checksum doesn't match the package, checked by its signature instead (Invoke-WmChocoPackage)
+    'choco.checksum_pinned'          = '{0}: die heruntergeladene Datei passt nicht zur Prüfsumme der festgelegten Version {1}: unter der Adresse liegt jetzt eine andere Version, daher nicht installiert (eine festgelegte Version ist nur die Datei dieser Version).'
+    'choco.checksum_own'             = '{0}: die heruntergeladene Datei passt nicht zur Prüfsumme nach | in der Liste: nicht installiert.'
+    'choco.checksum_no_signer'       = '{0}: die heruntergeladene Datei passt nicht zur Prüfsumme des Pakets (oft eine neue Version unter derselben Adresse, bevor das Paket aktualisiert ist; das nächste Update versucht es erneut). Mit !signer="Herausgeber" in seiner Zeile der Liste prüft wmanager stattdessen die Signatur der Datei.'
+    'choco.checksum_check_signature' = '{0}: {1} passt nicht zur Prüfsumme des Pakets; stattdessen wird die Signatur von {2} geprüft.'
+    'choco.signature_no_file'        = '{0}: die zu prüfende Datei ist nicht mehr da ({1}), und ihre Adresse ist unbekannt.'
+    'choco.signature_download_failed' = '{0}: die zu prüfende Datei konnte nicht von {1} geladen werden: {2}'
+    'choco.signature_bad'            = '{0}: {1} ist nicht gültig von {2} signiert ({3}): nicht installiert.'
+    'choco.signature_ok'             = '{0}: {1} ist von {2} signiert: Installation mit seiner eigenen Prüfsumme.'
+    'choco.signature_check_failed'   = '{0}: die Signatur von {1} konnte nicht geprüft werden: {2}'
 
     'choco.packages_section'         = '--- Pakete ({0} auf der Liste) ---'
     'choco.running_version_deferred' = '{0}: Das Programm wird ausgeführt, Versionswechsel zurückgestellt.'

@@ -67,6 +67,28 @@ Describe 'ConvertFrom-WmRequirements' {
         { ConvertFrom-WmRequirements -Text 'vlc@abc' } | Should -Throw -ExpectedMessage "Line 1: invalid version 'abc' for 'vlc'"
     }
 
+    It 'reads the publisher of !signer, in quotes or without' {
+        $r = ConvertFrom-WmRequirements -Text "firefox !signer=`"Mozilla Corporation`" !noupdate | --params `"/X`"`nzoom !signer=Zoom   # comment`nvlc`nvlc-skins !signer='VideoLAN Org'"
+        $r[0].Signer | Should -Be 'Mozilla Corporation'
+        $r[0].NoUpdate | Should -BeTrue
+        $r[0].ExtraArgs | Should -Be @('--params', '/X')
+        $r[1].Signer | Should -Be 'Zoom'
+        $r[2].Signer | Should -BeNullOrEmpty
+        $r[3].Signer | Should -Be 'VideoLAN Org'
+    }
+
+    It 'rejects !signer without a name, twice, or with a quote not closed: <_>' -ForEach @(
+        'vlc !signer=', 'vlc !signer=""', 'vlc !signer=a !signer=b', 'vlc !signer="Video LAN', "vlc !signer='Video", 'vlc !signerx'
+    ) {
+        { ConvertFrom-WmRequirements -Text $_ } | Should -Throw -ExpectedMessage 'Line 1: !signer needs the publisher*'
+    }
+
+    It 'tells the same package apart by its publisher when lists are joined' {
+        $a = ConvertFrom-WmRequirements -Text 'firefox !signer=A'
+        $b = ConvertFrom-WmRequirements -Text 'firefox !signer=B'
+        Get-WmRequirementSpec $a[0] | Should -Not -Be (Get-WmRequirementSpec $b[0])
+    }
+
     It 'reads the bundled choco-reqs.txt without errors' {
         $text = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'choco-reqs.txt') -Raw -Encoding UTF8
         $r = ConvertFrom-WmRequirements -Text $text
@@ -87,6 +109,266 @@ Describe 'Format-WmChocoArgs' {
 
     It 'leaves other arguments unchanged' {
         Format-WmChocoArgs @('upgrade', 'vlc', '--version', '3.0.21', '-y') | Should -Be 'upgrade vlc --version 3.0.21 -y'
+    }
+}
+
+Describe 'Get-WmChecksumMismatch' {
+    It 'finds the download choco refused, and the https address it came from' {
+        # As choco 2.x wrote it on a Windows 11 test machine
+        $out = @(
+            'Downloading googlechrome 64 bit'
+            "  from 'https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi'"
+            'Download of googlechromestandaloneenterprise64.msi (-1 B) completed.'
+            "Error - hashes do not match. Actual value was 'AA958C31C82A744EBA52E1354BF2D97AE3B413D5ECD14125BDF7DB1B1F44C99B'."
+            "ERROR: Checksum for 'C:\Users\tester\AppData\Local\Temp\chocolatey\GoogleChrome\159.0.8154.13\googlechromestandaloneenterprise64.msi' did not meet '3a6e02f372f35dd9f97b4109440c5622e02db4c42406a7fd99d08145a5276ba0' for checksum type 'sha256'. Consider passing the actual checksums through with --checksum --checksum64 once you validate the checksums are appropriate. A less secure option is to pass --ignore-checksums if necessary."
+            'The install of GoogleChrome was NOT successful.'
+        )
+        $m = Get-WmChecksumMismatch -Output $out
+        $m.File | Should -Be 'C:\Users\tester\AppData\Local\Temp\chocolatey\GoogleChrome\159.0.8154.13\googlechromestandaloneenterprise64.msi'
+        $m.Url | Should -Be 'https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi'
+    }
+
+    It 'keeps no address that is not https, and no file without a full path' {
+        $m = Get-WmChecksumMismatch -Output @("  from 'http://example.com/x.msi'", "Checksum for 'C:\t\x.msi' did not meet 'ab' for checksum type 'sha256'.")
+        $m.File | Should -Be 'C:\t\x.msi'
+        $m.Url | Should -BeNullOrEmpty
+        Get-WmChecksumMismatch -Output @("Checksum for 'x.msi' did not meet 'ab' for checksum type 'sha256'.") | Should -BeNullOrEmpty
+    }
+
+    It 'finds nothing when choco failed for another reason' {
+        Get-WmChecksumMismatch -Output @('The package was not found with the source(s) listed.') | Should -BeNullOrEmpty
+        Get-WmChecksumMismatch -Output @() | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-WmChocoPackage' {
+    BeforeEach {
+        $script:log = New-Object System.Collections.Generic.List[string]
+        Mock Write-WmLog { if ($Key) { [void]$script:log.Add((Get-WmText -Key $Key -Arguments $Arguments -English)) } }
+        # The download choco refused, where it keeps it
+        $script:download = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '\chrome64.msi')
+        New-Item -ItemType Directory -Force -Path (Split-Path $script:download) | Out-Null
+        Set-Content -LiteralPath $script:download -Value 'the new version' -Encoding ASCII
+        $script:hash = (Get-FileHash -LiteralPath $script:download -Algorithm SHA256).Hash.ToLowerInvariant()
+        $script:refused = @("  from 'https://dl.example.com/chrome64.msi'", "ERROR: Checksum for '$($script:download)' did not meet 'abc' for checksum type 'sha256'.")
+        # choco: refuses the download at first, installs it when given its checksum
+        $script:runs = New-Object System.Collections.Generic.List[string]
+        $script:firstCode = 1
+        Mock Invoke-WmChoco {
+            [void]$script:runs.Add($Arguments -join ' ')
+            if ($Arguments -match '^--checksum=') { $script:WmChocoOutput = @('installed'); return 0 }
+            $script:WmChocoOutput = $script:refused
+            return $script:firstCode
+        }
+        Mock Get-WmFileSigner { [pscustomobject]@{ Valid = $true; Name = 'Google LLC'; Why = 'Valid' } }
+        Mock Save-WmWebFile { }
+        $script:chrome = [pscustomobject]@{ Name = 'googlechrome'; Signer = $null }
+        $script:install = @('install', 'googlechrome', '-y', '--no-progress')
+    }
+
+    It 'installs a Chrome download whose checksum is behind once Google''s signature vouches for it' {
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 0
+        $script:runs.Count | Should -Be 2
+        $script:runs[1] | Should -Be "install googlechrome -y --no-progress --checksum=$($script:hash) --checksum64=$($script:hash) --checksumtype=sha256 --checksumtype64=sha256"
+        Should -Invoke Get-WmFileSigner -Times 1 -ParameterFilter { $Path -eq $script:download }
+        Should -Invoke Save-WmWebFile -Times 0   # choco's own copy
+        $script:log -join "`n" | Should -Match 'chrome64.msi is signed by Google LLC: installing it with its own checksum'
+    }
+
+    It 'doesn''t install a download signed by someone else, or not validly' {
+        Mock Get-WmFileSigner { [pscustomobject]@{ Valid = $true; Name = 'Someone Else'; Why = 'Valid' } }
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 1
+        Mock Get-WmFileSigner { [pscustomobject]@{ Valid = $false; Name = $null; Why = 'NotSigned' } }
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 1
+        $script:runs.Count | Should -Be 2   # once each, no second run
+        $script:log -join "`n" | Should -Match 'chrome64.msi is not validly signed by Google LLC \(Valid, Someone Else\): not installed'
+        $script:log -join "`n" | Should -Match 'chrome64.msi is not validly signed by Google LLC \(NotSigned\): not installed'
+    }
+
+    It 'checks the publisher given with !signer' {
+        Mock Get-WmFileSigner { [pscustomobject]@{ Valid = $true; Name = 'Mozilla Corporation'; Why = 'Valid' } }
+        Invoke-WmChocoPackage ([pscustomobject]@{ Name = 'firefox'; Signer = 'Mozilla Corporation' }) @('install', 'firefox') | Should -Be 0
+        $script:runs.Count | Should -Be 2
+    }
+
+    It 'says what to do for a package without a publisher, and doesn''t run choco again' {
+        Invoke-WmChocoPackage ([pscustomobject]@{ Name = 'vlc'; Signer = $null }) @('install', 'vlc') | Should -Be 1
+        $script:runs.Count | Should -Be 1
+        Should -Invoke Get-WmFileSigner -Times 0
+        $script:log -join "`n" | Should -Match 'vlc: the download doesn''t match .*With !signer="publisher"'
+    }
+
+    It 'leaves alone a success and a failure for another reason' {
+        $script:firstCode = 0
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 0
+        $script:firstCode = 1; $script:refused = @('The package was not found with the source(s) listed.')
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 1
+        Should -Invoke Get-WmFileSigner -Times 0
+        $script:log.Count | Should -Be 0
+    }
+
+    It 'downloads the file again from its https address when choco''s copy is gone, and checks that one' {
+        Remove-Item -LiteralPath $script:download
+        Mock Save-WmWebFile { Set-Content -LiteralPath $Path -Value 'the new version' -Encoding ASCII }
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 0
+        Should -Invoke Save-WmWebFile -Times 1 -ParameterFilter { $Url -eq 'https://dl.example.com/chrome64.msi' -and $Path -eq $script:download }
+        $script:runs[1] | Should -Match "--checksum=$($script:hash) "
+    }
+
+    It 'gives up when the copy is gone and there is no https address, or the download fails' {
+        Remove-Item -LiteralPath $script:download
+        $script:refused = @("ERROR: Checksum for '$($script:download)' did not meet 'abc' for checksum type 'sha256'.")
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 1
+        $script:refused = @("  from 'https://dl.example.com/chrome64.msi'") + $script:refused
+        Mock Save-WmWebFile { throw 'The remote name could not be resolved' }
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 1
+        Should -Invoke Get-WmFileSigner -Times 0
+        $script:log -join "`n" | Should -Match 'the download to check is gone'
+        $script:log -join "`n" | Should -Match 'couldn''t be fetched from https://dl.example.com/chrome64.msi: The remote name'
+    }
+
+    It 'logs the address without a login or a query, which may hold a token' {
+        Remove-Item -LiteralPath $script:download
+        $script:refused = @("  from 'https://user:S3cret@dl.example.com/x/chrome64.msi?sig=T0ken'") + $script:refused[1]
+        Mock Save-WmWebFile { throw 'The remote server returned an error: (403) Forbidden.' }
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 1
+        $script:log -join "`n" | Should -Match 'fetched from https://dl.example.com/x/chrome64.msi: The remote server'
+        $script:log -join "`n" | Should -Not -Match 'S3cret|T0ken'
+    }
+
+    It 'keeps a pinned version to its own file: the address serves another version now' {
+        Invoke-WmChocoPackage ([pscustomobject]@{ Name = 'googlechrome'; Pinned = $true; Version = '159.0.8154.13' }) $script:install | Should -Be 1
+        $script:runs.Count | Should -Be 1
+        Should -Invoke Get-WmFileSigner -Times 0
+        $script:log -join "`n" | Should -Match 'pinned version 159.0.8154.13: the address now serves another version'
+    }
+
+    It 'keeps to a checksum given after | in the list' {
+        Invoke-WmChocoPackage $script:chrome ($script:install + @('--checksum64', 'ABC')) | Should -Be 1
+        Invoke-WmChocoPackage $script:chrome ($script:install + @('--download-checksum=ABC')) | Should -Be 1
+        $script:runs.Count | Should -Be 2
+        Should -Invoke Get-WmFileSigner -Times 0
+        $script:log -join "`n" | Should -Match 'checksum given after \| in the list: not installed'
+    }
+
+    It 'keeps the file from being changed between the signature and the checksum' {
+        Mock Get-WmFileSigner {
+            $script:writable = $true
+            try { [IO.File]::OpenWrite($Path).Dispose() } catch { $script:writable = $false }
+            [pscustomobject]@{ Valid = $true; Name = 'Google LLC'; Why = 'Valid' }
+        }
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 0
+        $script:writable | Should -BeFalse
+        { [IO.File]::OpenWrite($script:download).Dispose() } | Should -Not -Throw   # and lets go of it afterwards
+    }
+
+    It 'goes on to the next package when the check itself fails' {
+        Mock Get-WmFileSigner { throw 'The file is in use' }
+        Invoke-WmChocoPackage $script:chrome $script:install | Should -Be 1
+        $script:runs.Count | Should -Be 1
+        $script:log -join "`n" | Should -Match 'the signature of chrome64.msi couldn''t be checked: The file is in use'
+    }
+}
+
+# Real choco, with a package of its own whose download has a checksum that doesn't match: a file signed by the CI's
+# throwaway key (tests/ci/build-sources.sh, "wmanager CI"), trusted in the root store for the test
+Describe 'A download whose checksum does not match, with real choco' -Tag 'Integration' -Skip:(-not $env:WM_CI_SOURCES) {
+    BeforeAll {
+        Mock Write-WmLog { if ($Key) { [void]$script:log.Add((Get-WmText -Key $Key -Arguments $Arguments -English)) } }
+        $script:log = New-Object System.Collections.Generic.List[string]
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (Join-Path $env:WM_CI_SOURCES 'wmanager-signing.cer')
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $script:addedCert = -not ($store.Certificates | Where-Object Thumbprint -eq $cert.Thumbprint)
+        if ($script:addedCert) { $store.Add($cert) }
+        $store.Close()
+        $script:cert = $cert
+
+        $work = 'C:\wm-ci\choco-signed'
+        if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path "$work\pkg\tools", "$work\repo" | Out-Null
+        Copy-Item -LiteralPath (Join-Path $env:WM_CI_SOURCES 'v1\manifest.psd1') -Destination "$work\signed.psd1"
+        $script:installed = "$work\installed.psd1"
+        # The download over http, as choco keeps and reuses only those (a file:// one is always copied again)
+        $port = 8765
+        $script:server = Start-Job -ArgumentList "$work\signed.psd1", $port -ScriptBlock {
+            param($File, $Port)
+            $listener = New-Object System.Net.HttpListener
+            $listener.Prefixes.Add("http://127.0.0.1:$Port/")
+            $listener.Start()
+            $bytes = [IO.File]::ReadAllBytes($File)
+            while ($true) {
+                $c = $listener.GetContext()
+                $c.Response.ContentType = 'application/octet-stream'
+                $c.Response.ContentLength64 = $bytes.Length
+                if ($c.Request.HttpMethod -ne 'HEAD') { $c.Response.OutputStream.Write($bytes, 0, $bytes.Length) }
+                $c.Response.Close()
+            }
+        }
+        for ($i = 0; $i -lt 30; $i++) {
+            try { $null = Invoke-WebRequest -Uri "http://127.0.0.1:$port/signed.psd1" -UseBasicParsing -TimeoutSec 5; break } catch { Start-Sleep -Seconds 1 }
+        }
+        # The package's checksum is of another file, as when the publisher replaced the download with a new version
+        @"
+`$ErrorActionPreference = 'Stop'
+`$file = Join-Path `$env:TEMP 'chocolatey\wmci-signed\1.0.0\signed.psd1'
+Get-ChocolateyWebFile -PackageName 'wmci-signed' -FileFullPath `$file -Url 'http://127.0.0.1:$port/signed.psd1' -Checksum '$('0' * 64)' -ChecksumType 'sha256'
+Copy-Item -LiteralPath `$file -Destination '$($script:installed)' -Force
+"@ | Set-Content -LiteralPath "$work\pkg\tools\chocolateyInstall.ps1" -Encoding UTF8
+        @'
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata><id>wmci-signed</id><version>1.0.0</version><authors>wmanager CI</authors>
+    <description>wmanager CI: a download whose checksum does not match the package</description></metadata>
+  <files><file src="tools\**" target="tools" /></files>
+</package>
+'@ | Set-Content -LiteralPath "$work\pkg\wmci-signed.nuspec" -Encoding UTF8
+        & $script:WmChocoExe pack "$work\pkg\wmci-signed.nuspec" --out "$work\repo" | Out-Null
+        $script:installArgs = @('install', 'wmci-signed', '-y', '--no-progress', "--source=$work\repo")
+    }
+    AfterAll {
+        & $script:WmChocoExe uninstall wmci-signed -y --skip-autouninstaller | Out-Null
+        if ($script:server) { Stop-Job $script:server; Remove-Job $script:server -Force }
+        if ($script:addedCert) {
+            $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $store.Remove($script:cert)
+            $store.Close()
+        }
+    }
+
+    It 'doesn''t install it when it is signed by someone else than the publisher given' {
+        $code = Invoke-WmChocoPackage ([pscustomobject]@{ Name = 'wmci-signed'; Signer = 'Someone Else' }) $script:installArgs
+        $code | Should -Not -Be 0
+        Test-Path -LiteralPath $script:installed | Should -BeFalse
+        $script:log -join "`n" | Should -Match 'signed.psd1 is not validly signed by Someone Else \(Valid, wmanager CI\)'
+    }
+
+    It 'reads the signature of a signed MSI while it holds the file open' {
+        # Windows checks the signature of an MSI (Chrome's) with a module of its own, not the one of PowerShell files;
+        # the runner keeps the MSIs of its programs here
+        $msi = $null
+        foreach ($f in @(Get-ChildItem -LiteralPath "$env:SystemRoot\Installer" -Filter '*.msi' -File -ErrorAction SilentlyContinue | Sort-Object Length | Select-Object -First 40)) {
+            $by = Get-WmFileSigner -Path $f.FullName
+            if ($by.Valid -and $by.Name) { $msi = $f.FullName; $name = $by.Name; break }
+        }
+        if (-not $msi) { Set-ItResult -Skipped -Because 'no signed MSI on this computer'; return }
+        Write-Host "  MSI: $msi, signed by $name"
+        $checked = Get-WmSignedFileHash -Path $msi -Signer $name
+        $checked.Hash | Should -Be (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
+        (Get-WmSignedFileHash -Path $msi -Signer 'Someone Else').Hash | Should -BeNullOrEmpty
+    }
+
+    It 'installs it once the signature of the publisher given vouches for it' {
+        $script:log.Clear()
+        $code = Invoke-WmChocoPackage ([pscustomobject]@{ Name = 'wmci-signed'; Signer = 'wmanager CI' }) $script:installArgs
+        $script:WmChocoOutput | ForEach-Object { Write-Host "  choco: $_" }
+        $code | Should -Be 0
+        $script:log -join "`n" | Should -Match 'signed.psd1 is signed by wmanager CI: installing it with its own checksum'
+        # the copy choco kept, not a new download
+        @($script:WmChocoOutput -match 'File appears to be downloaded already').Count | Should -Be 1
+        @($script:WmChocoOutput -match '^Downloading wmci-signed').Count | Should -Be 0
+        (Get-FileHash -LiteralPath $script:installed).Hash | Should -Be (Get-FileHash -LiteralPath 'C:\wm-ci\choco-signed\signed.psd1').Hash
     }
 }
 
