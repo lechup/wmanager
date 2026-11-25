@@ -518,6 +518,7 @@ function Resolve-WmManagedContent {
         Scripts      = $content.Scripts
         Jobs         = $content.Jobs
         LogonScripts = $content.LogonScripts
+        EventScripts = $content.EventScripts
         Wmanager     = $content.Wmanager
     }
 }
@@ -1145,7 +1146,7 @@ $script:WmEventsMutex = 'Global\wmanager-events'
 function Get-WmEventTaskList {
     param([Parameter(Mandatory = $true)]$Content)
     $list = @()
-    foreach ($s in @($Content.EventScripts)) {
+    foreach ($s in @($Content.EventScripts | Where-Object { $_ })) {
         try { $specs = Get-WmEventSpecs ([IO.File]::ReadAllText((Join-Path $script:WmManagedDir ($s.Path -replace '/', '\')))) }
         catch {
             Write-WmLog -Key 'events.script_not_run' -Arguments @($s.Name, (Get-WmErrorText $_)) -Level error -Task $s.Name
