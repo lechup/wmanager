@@ -10,6 +10,7 @@
     'step.default_browser'          = 'Browser predefinito'
     'step.schedule'                 = 'Utilità di pianificazione'
     'step.group_jobs'               = 'Job dei gruppi'
+    'step.jobs_times'               = 'Orari dei job'
     'step.packages'                 = 'Pacchetti'
     'step.privacy'                  = 'Privacy'
     'step.group_scripts'            = 'Script dei gruppi'

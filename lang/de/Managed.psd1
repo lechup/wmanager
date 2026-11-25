@@ -18,6 +18,11 @@
     'managed.package_group_replaces'     = 'Paket {0}: Der Eintrag der Gruppe {1} ersetzt den Eintrag der gemeinsamen Liste.'
     'managed.package_conflict'           = "Paket {0} ist in '{1}' und '{2}' unterschiedlich beschrieben; der Eintrag aus '{1}' wird verwendet."
     'managed.unknown_period'             = "unbekannte Häufigkeit '{0}'"
+    'managed.at_bad'                     = 'wmanager-at: ''{0}'' ist keine Zeit wie 18:00, Mon-Fri 18:00 oder Mon,Wed 07:30 (englische Tagesnamen)'
+    'managed.at_twice'                   = 'mehr als eine wmanager-at-Zeile'
+    'managed.at_hourly'                  = 'ein stündlicher Job läuft jede Stunde: wmanager-at ist für tägliche und wöchentliche Jobs'
+    'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': ein wöchentlicher Job nennt einen Tag, z. B. Fri 17:00'
+    'managed.job_first_time'             = 'Job {0} läuft um {1}: das erste Mal dann.'
 
     'managed.cert_missing'               = 'Signaturzertifikat nicht gefunden: {0}'
     'managed.cert_private_key'           = '{0} enthält einen privaten Schlüssel; auf die Computer gehört nur die öffentliche .cer'

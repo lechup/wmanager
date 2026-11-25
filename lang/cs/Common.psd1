@@ -10,6 +10,7 @@
     'step.default_browser'          = 'Výchozí prohlížeč'
     'step.schedule'                 = 'Plánovač úloh'
     'step.group_jobs'               = 'Úkoly skupin'
+    'step.jobs_times'               = 'Časy úloh'
     'step.packages'                 = 'Balíčky'
     'step.privacy'                  = 'Ochrana osobních údajů'
     'step.group_scripts'            = 'Skripty skupin'

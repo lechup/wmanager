@@ -18,6 +18,11 @@
     'managed.package_group_replaces'     = 'Package {0}: the entry of group {1} replaces the entry of the common list.'
     'managed.package_conflict'           = "Package {0} is described differently in '{1}' and '{2}'; using the entry from '{1}'."
     'managed.unknown_period'             = "unknown frequency '{0}'"
+    'managed.at_bad'                     = 'wmanager-at: ''{0}'' is not a time like 18:00, Mon-Fri 18:00 or Mon,Wed 07:30 (English day names)'
+    'managed.at_twice'                   = 'more than one wmanager-at line'
+    'managed.at_hourly'                  = 'an hourly job runs every hour: wmanager-at is for daily and weekly jobs'
+    'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': a weekly job names one day, e.g. Fri 17:00'
+    'managed.job_first_time'             = 'Job {0} runs at {1}: the first time then.'
 
     'managed.cert_missing'               = 'Signing certificate not found: {0}'
     'managed.cert_private_key'           = '{0} contains a private key; only the public .cer goes to the computers'

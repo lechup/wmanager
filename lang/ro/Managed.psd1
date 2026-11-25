@@ -18,6 +18,11 @@
     'managed.package_group_replaces'     = 'Pachetul {0}: intrarea grupului {1} înlocuiește intrarea din lista comună.'
     'managed.package_conflict'           = "Pachetul {0} este descris diferit în '{1}' și '{2}'; se folosește intrarea din '{1}'."
     'managed.unknown_period'             = "frecvență necunoscută '{0}'"
+    'managed.at_bad'                     = 'wmanager-at: ''{0}'' nu este o oră ca 18:00, Mon-Fri 18:00 sau Mon,Wed 07:30 (nume de zile în engleză)'
+    'managed.at_twice'                   = 'mai mult de o linie wmanager-at'
+    'managed.at_hourly'                  = 'o sarcină orară rulează în fiecare oră: wmanager-at este pentru sarcinile zilnice și săptămânale'
+    'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': o sarcină săptămânală indică o zi, de ex. Fri 17:00'
+    'managed.job_first_time'             = 'Sarcina {0} rulează la {1}: prima dată atunci.'
 
     'managed.cert_missing'               = 'Certificatul de semnare nu a fost găsit: {0}'
     'managed.cert_private_key'           = '{0} conține o cheie privată; pe computere ajunge doar fișierul .cer public'

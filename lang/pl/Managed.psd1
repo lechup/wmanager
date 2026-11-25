@@ -18,6 +18,11 @@
     'managed.package_group_replaces'     = 'Paczka {0}: wpis z grupy {1} zastępuje wpis z listy wspólnej.'
     'managed.package_conflict'           = "Paczka {0} jest różnie opisana w '{1}' i '{2}'; używam wpisu z '{1}'."
     'managed.unknown_period'             = "nieznana częstotliwość '{0}'"
+    'managed.at_bad'                     = 'wmanager-at: ''{0}'' to nie godzina w rodzaju 18:00, Mon-Fri 18:00 albo Mon,Wed 07:30 (angielskie nazwy dni)'
+    'managed.at_twice'                   = 'więcej niż jedna linia wmanager-at'
+    'managed.at_hourly'                  = 'zadanie co godzinę działa co godzinę: wmanager-at jest dla zadań dziennych i tygodniowych'
+    'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': zadanie tygodniowe podaje jeden dzień, np. Fri 17:00'
+    'managed.job_first_time'             = 'Zadanie {0} działa o {1}: pierwszy raz wtedy.'
 
     'managed.cert_missing'               = 'Brak certyfikatu podpisu {0}'
     'managed.cert_private_key'           = '{0} zawiera klucz prywatny; na komputery trafia tylko publiczny .cer'

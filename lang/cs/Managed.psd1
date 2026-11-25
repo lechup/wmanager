@@ -18,6 +18,11 @@
     'managed.package_group_replaces'     = 'Balíček {0}: záznam skupiny {1} nahrazuje záznam ze společného seznamu.'
     'managed.package_conflict'           = "Balíček {0} je v '{1}' a '{2}' popsán odlišně; použije se záznam z '{1}'."
     'managed.unknown_period'             = "neznámá četnost '{0}'"
+    'managed.at_bad'                     = 'wmanager-at: ''{0}'' není čas jako 18:00, Mon-Fri 18:00 nebo Mon,Wed 07:30 (anglické názvy dnů)'
+    'managed.at_twice'                   = 'více než jeden řádek wmanager-at'
+    'managed.at_hourly'                  = 'hodinová úloha běží každou hodinu: wmanager-at je pro denní a týdenní úlohy'
+    'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': týdenní úloha uvádí jeden den, např. Fri 17:00'
+    'managed.job_first_time'             = 'Úloha {0} běží v {1}: poprvé tehdy.'
 
     'managed.cert_missing'               = 'Podpisový certifikát nenalezen: {0}'
     'managed.cert_private_key'           = '{0} obsahuje privátní klíč; na počítače patří jen veřejný .cer'

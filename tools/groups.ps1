@@ -305,6 +305,13 @@ function Get-RunAsNote {
     return ''
 }
 
+# For show: the time a daily or weekly job declares ('' for none; check reports a line it can't read)
+function Get-AtNote {
+    param([hashtable]$Files, $Job)
+    try { $at = Get-WmJobAt (Read-TextFile $Files[$Job.Path]).Text $Job.Every; if ($at) { return "   at $($at.Text)" } } catch { }
+    return ''
+}
+
 function Show-Computer {
     param([hashtable]$Files, [hashtable]$Map, [hashtable]$Lists, [string]$Computer, $Versions = $null)
     $v = Get-ComputerView -Files $Files -Map $Map -Lists $Lists -Computer $Computer -Versions $Versions
@@ -325,7 +332,7 @@ function Show-Computer {
     Write-Host ''
     Write-Host 'Jobs:'
     if ($v.Jobs.Count -eq 0) { Write-Host '  (none)' }
-    foreach ($j in $v.Jobs) { Write-Host ('  {0,-7} {1}   ({2}){3}' -f $j.Every, $j.Name, $j.Path, (Get-RunAsNote $Files $j.Path)) }
+    foreach ($j in $v.Jobs) { Write-Host ('  {0,-7} {1}   ({2}){3}{4}' -f $j.Every, $j.Name, $j.Path, (Get-AtNote $Files $j), (Get-RunAsNote $Files $j.Path)) }
     Write-Host ''
     Write-Host 'Sign-in scripts, in this order (at every sign-in, as the user who signs in):'
     if ($v.Logon.Count -eq 0) { Write-Host '  (none)' }
@@ -464,6 +471,12 @@ function Invoke-Check {
             try { $null = Get-WmScriptSecretNames $file.Text } catch { Write-Problem error "${p}: $(Format-WmErrorText $_ -English)" }
             # Who it runs as: user or system (a sign-in script always runs as the user who signs in)
             try { $null = Get-WmScriptRunAs $file.Text } catch { Write-Problem error "${p}: $(Format-WmErrorText $_ -English)" }
+            # The time of a daily or weekly job; anywhere else the line does nothing
+            if ($p -match '^groups/[^/]+/jobs/(hourly|daily|weekly)/[^/]+$') {
+                try { $null = Get-WmJobAt $file.Text $Matches[1] } catch { Write-Problem error "${p}: $(Format-WmErrorText $_ -English)" }
+            } elseif ($file.Text -match '(?m)^\s*#\s*wmanager-at\s*:') {
+                Write-Problem warning "${p}: wmanager-at does nothing here: it gives a daily or weekly job its time"
+            }
             if ($p -match '^groups/[^/]+/logon/' -and $file.Text -match '(?m)^\s*#\s*wmanager-run-as\s*:') {
                 Write-Problem error "${p}: a sign-in script always runs as the user who signs in; remove its wmanager-run-as line"
             }
@@ -819,6 +832,8 @@ $script:JobTemplate = @'
 # Exit code 0 = done; anything else is an error in the log. Time limit: JobTimeoutMinutes (10 by default).
 # To run it in the session of each signed-in person instead (on its schedule per person, without administrator
 # rights), put a line "wmanager-run-as: user" after a # at the start of a line.
+# At a fixed time (daily and weekly jobs): a line "wmanager-at: 18:00" after a #, or "Mon-Fri 18:00" for some days
+# ("Fri 17:00" for a weekly job: one day); a computer that is off then runs it at the next hour it is on.
 # Keep this file UTF-8 with BOM, otherwise Windows PowerShell 5.1 garbles letters outside ASCII.
 $ErrorActionPreference = 'Stop'
 

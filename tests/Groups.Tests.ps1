@@ -442,6 +442,39 @@ Describe 'sign-in scripts' {
     }
 }
 
+Describe 'jobs at a time' {
+    It 'check reads the time of daily and weekly jobs, and warns about the line anywhere else' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/all/jobs/daily/backup.ps1') "# wmanager-at: Mon-Fri 18:00`r`nexit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/jobs/weekly/report.ps1') "# wmanager-at: Fri 17:00`r`nexit 0`r`n" -Bom
+        (Invoke-Tool $src check).Code | Should -Be 0
+        $r = Invoke-Tool $src show office-01
+        $r.Text | Should -Match 'daily\s+all/backup\s+\(groups/all/jobs/daily/backup\.ps1\)   at Mon-Fri 18:00'
+        $r.Text | Should -Match 'weekly\s+all/report\s+\(groups/all/jobs/weekly/report\.ps1\)   at Fri 17:00'
+
+        Set-Text (Get-Path $src 'groups/all/jobs/weekly/report.ps1') "# wmanager-at: 17:00`r`nexit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/jobs/hourly/ping2.ps1') "# wmanager-at: 18:00`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match "groups/all/jobs/weekly/report\.ps1: wmanager-at: '17:00': a weekly job names one day"
+        $r.Text | Should -Match 'groups/all/jobs/hourly/ping2\.ps1: an hourly job runs every hour'
+        Remove-Item -LiteralPath (Get-Path $src 'groups/all/jobs/weekly/report.ps1'), (Get-Path $src 'groups/all/jobs/hourly/ping2.ps1')
+
+        Set-Text (Get-Path $src 'groups/all/scripts/30-x.ps1') "# wmanager-at: 18:00`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'groups/all/scripts/30-x\.ps1: wmanager-at does nothing here'
+    }
+
+    It 'the job template names the option without taking it' {
+        $src = New-Source
+        (Invoke-Tool $src new-job all daily nightly).Code | Should -Be 0
+        $text = Read-Text (Get-Path $src 'groups/all/jobs/daily/nightly.ps1')
+        $text | Should -Match 'wmanager-at: 18:00'
+        $text | Should -Not -Match '(?m)^\s*#\s*wmanager-at\s*:'
+    }
+}
+
 Describe 'startup scripts' {
     It 'new-startup makes a numbered startup script that parses, names no secret and passes check' {
         $src = New-Source

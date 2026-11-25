@@ -283,6 +283,52 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         (Get-ScheduledTaskInfo -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).NextRunTime | Should -Not -BeNullOrEmpty
     }
 
+    It 'gives the jobs task the times of the jobs that have one, and changes it only when they change' {
+        Sync-WmJobsTaskTimes -Times @((Get-WmJobAt '# wmanager-at: Mon-Fri 18:00' 'daily'), (Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly'))
+        $triggers = @((Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).Triggers)
+        $triggers.Count | Should -Be 3
+        $triggers[0].Repetition.Interval | Should -Be 'PT1H'
+        # In local time, without a UTC offset: the same time of day after the clocks change
+        $timed = @($triggers | Select-Object -Skip 1 | ForEach-Object { '{0} {1}' -f $_.StartBoundary.Substring(11), [int]$_.DaysOfWeek })
+        $timed | Sort-Object | Should -Be @('17:00:00 32', '18:00:00 62')
+        Mock Set-ScheduledTask { }
+        Sync-WmJobsTaskTimes -Times @((Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly'), (Get-WmJobAt '# wmanager-at: Mon-Fri 18:00' 'daily'))
+        Should -Invoke Set-ScheduledTask -Times 0
+    }
+
+    It 'writes again in local time the triggers an older version left with a UTC offset, for the jobs and the update' {
+        # As New-ScheduledTaskTrigger -At writes it in winter in Poland (the runner's own zone may be UTC)
+        $at = [datetime]::ParseExact('18:00', 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+        $hourly = (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).Triggers | Select-Object -First 1
+        $old = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $at
+        $old.StartBoundary = $at.ToString('s') + '+01:00'
+        Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Trigger @($hourly, $old) | Out-Null
+        Sync-WmJobsTaskTimes -Times @(Get-WmJobAt '# wmanager-at: Mon-Fri 18:00' 'daily')
+        $triggers = @((Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).Triggers)
+        $triggers.Count | Should -Be 2
+        $triggers[1].StartBoundary | Should -Match '^\d{4}-\d{2}-\d{2}T18:00:00$'
+        [int]$triggers[1].DaysOfWeek | Should -Be 62
+
+        $noon = [datetime]::ParseExact('12:00', 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+        $oldUpdate = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $script:WmAllDays -At $noon
+        $oldUpdate.StartBoundary = $noon.ToString('s') + '+01:00'
+        Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate -Trigger $oldUpdate | Out-Null
+        Update-WmTaskSchedule -Config (New-TestConfig (Join-Path $src 'v2'))
+        $update = (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskUpdate).Triggers | Select-Object -First 1
+        $update.StartBoundary | Should -Match '^\d{4}-\d{2}-\d{2}T12:00:00$'
+        [int]$update.DaysOfWeek | Should -Be 127
+        # Written in local time: left alone the next time
+        Mock Set-ScheduledTask { }
+        Update-WmTaskSchedule -Config (New-TestConfig (Join-Path $src 'v2'))
+        Sync-WmJobsTaskTimes -Times @(Get-WmJobAt '# wmanager-at: Mon-Fri 18:00' 'daily')
+        Should -Invoke Set-ScheduledTask -Times 0
+    }
+
+    It 'drops the times when no job has one' {
+        Sync-WmJobsTaskTimes -Times @()
+        @((Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs).Triggers).Count | Should -Be 1
+    }
+
     It 'registers the sign-in task: SYSTEM, at every sign-in, half a minute later, queued' {
         $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskLogon
         $trigger = $task.Triggers | Select-Object -First 1
