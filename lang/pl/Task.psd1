@@ -11,5 +11,6 @@
     'task.jobs_times' = 'Godziny zadań jako wyzwalacze wmanager-Jobs: {0}'
     'task.startup_registered' = 'Zarejestrowano zadanie wmanager-Startup: skrypty startowe grup.'
     'task.events_synced'      = 'Zadania skryptów zdarzeń zgodne ze źródłem: {0}.'
+    'task.event_task_failed'  = 'Nie udało się ustawić zadania {0} skryptu zdarzenia: {1}'
     'task.jobs_start_failed' = 'Nie udało się uruchomić wmanager-Jobs: {0}'
 }

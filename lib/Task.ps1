@@ -54,10 +54,11 @@ function Register-WmStartupTask {
 }
 
 # The event scripts of the groups (Invoke-Event.ps1): one task per event a script names (Get-WmEventTaskList),
-# wmanager-Event-<group>-<name>-<n>, SYSTEM, at that event, never twice at once. The action passes which of the
-# script's events it is (-Index <n>) and, for an event of a log, the event's record number and log ($(Record),
-# $(Log): values Task Scheduler takes from the event). The description says what the task is for; a task whose
-# description differs from the wanted one is registered again.
+# wmanager-Event-<group>+<name>-<n>, SYSTEM, at that event, never twice at once. The action passes which of the
+# script's events it is (-Key, from the event's text, so a reordered list doesn't mix them up) and, for an event of a
+# log, the event's record number and log ($(Record), $(Log): values Task Scheduler takes from the event), for lock
+# and unlock -Session (the session at the screen is read first). The description says what the task is for; a task
+# whose description differs from the wanted one is registered again.
 $script:WmTaskNs = 'Root/Microsoft/Windows/TaskScheduler'
 
 # The query of an event trigger: a ready name's event, or the log, id and (if given) source of a raw one
@@ -91,28 +92,32 @@ function New-WmEventTaskTrigger {
     return $t
 }
 
-# wmanager-Event-<group>-<name>-<n>: the group, the name and the number of the event in the script
+# wmanager-Event-<group>+<name>-<n>: the group, the name and the number of the event in the script. '+' can't be in a
+# group's or a file's name, so two scripts never get the same task (office/wifi-up and office-wifi/up)
 function Get-WmEventTaskName {
     param([Parameter(Mandatory = $true)]$Task)
-    return '{0}{1}-{2}' -f $script:WmTaskEventPrefix, ($Task.Script -replace '/', '-'), $Task.Index
+    return '{0}{1}-{2}' -f $script:WmTaskEventPrefix, ($Task.Script -replace '/', '+'), $Task.Index
 }
 
 function Register-WmEventTask {
     param([Parameter(Mandatory = $true)]$Task)
     $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $runner = Join-Path $script:WmRoot 'Invoke-Event.ps1'
-    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runner`" -Script `"$($Task.Script)`" -Index $($Task.Index)"
-    if ('lock', 'unlock' -notcontains $Task.Spec.Name) { $arguments += ' -Record "$(Record)" -Log "$(Log)"' }
+    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runner`" -Script `"$($Task.Script)`" -Key $($Task.Key)"
+    if ('lock', 'unlock' -contains $Task.Spec.Name) { $arguments += ' -Session' }
+    else { $arguments += ' -Record "$(Record)" -Log "$(Log)"' }
     $a = New-ScheduledTaskAction -Execute $ps -Argument $arguments
+    # The script has its own time limit, after waiting for another event script: the task's is only a backstop
     $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
+            -ExecutionTimeLimit (New-TimeSpan -Hours 12) -MultipleInstances IgnoreNew
     $system = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskPath $script:WmTaskPath -TaskName (Get-WmEventTaskName $Task) -Action $a -Trigger (New-WmEventTaskTrigger $Task.Spec) `
         -Settings $s -Principal $system -Description $Task.Description -Force -ErrorAction Stop | Out-Null
 }
 
 # The tasks of the event scripts as $Wanted says (Get-WmEventTaskList): new or changed ones registered, the others
-# removed. Logs the number when anything changed.
+# removed. One that fails (e.g. a log this computer doesn't have) is a warning and doesn't hold up the others. Logs
+# the number when anything changed.
 function Sync-WmEventTasks {
     param([AllowEmptyCollection()][object[]]$Wanted = @())
     $have = @{}
@@ -126,13 +131,21 @@ function Sync-WmEventTasks {
         $names[$name] = $true
         $t = $have[$name]
         if ($t -and [string]$t.Description -ceq $w.Description) { continue }
-        Register-WmEventTask $w
-        $changed = $true
+        try {
+            Register-WmEventTask $w
+            $changed = $true
+        } catch {
+            Write-WmLog -Key 'task.event_task_failed' -Arguments @($name, (Get-WmErrorText $_)) -Level warn
+        }
     }
     foreach ($n in @($have.Keys)) {
         if ($names.ContainsKey($n)) { continue }
-        Unregister-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $n -Confirm:$false -ErrorAction Stop
-        $changed = $true
+        try {
+            Unregister-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $n -Confirm:$false -ErrorAction Stop
+            $changed = $true
+        } catch {
+            Write-WmLog -Key 'task.event_task_failed' -Arguments @($n, (Get-WmErrorText $_)) -Level warn
+        }
     }
     if ($changed) { Write-WmLog -Key 'task.events_synced' -Arguments @(@($Wanted).Count) }
 }

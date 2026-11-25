@@ -417,32 +417,32 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         $list.Count | Should -Be 1
         $list[0].Script | Should -Be 'ci/on-test'
         $lockSpec = (Get-WmEventSpecs '# wmanager-event: lock').Events[0]
-        $wanted = @($list[0], [pscustomobject]@{ Script = 'ci/on-test'; Index = 2; Spec = $lockSpec
+        $wanted = @($list[0], [pscustomobject]@{ Script = 'ci/on-test'; Index = 2; Key = (Get-WmEventKey 'lock'); Spec = $lockSpec
                                                  Description = 'wmanager: event script ci/on-test, at "lock" (v1)' })
         Sync-WmEventTasks -Wanted $wanted
-        $byEvent = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci-on-test-1'
+        $byEvent = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci+on-test-1'
         $trigger = $byEvent.Triggers | Select-Object -First 1
         $trigger.CimClass.CimClassName | Should -Be 'MSFT_TaskEventTrigger'
         $trigger.Subscription | Should -Match 'Path="Application"'
         $trigger.Subscription | Should -Match ([regex]::Escape("Provider[@Name='wmanager-ci'] and EventID=4242"))
         @($trigger.ValueQueries | ForEach-Object { "$($_.Name)=$($_.Value)" } | Sort-Object) |
             Should -Be @('Log=Event/System/Channel', 'Record=Event/System/EventRecordID')
-        $byEvent.Actions[0].Arguments | Should -BeLike '*Invoke-Event.ps1" -Script "ci/on-test" -Index 1 -Record "$(Record)" -Log "$(Log)"'
+        $byEvent.Actions[0].Arguments | Should -BeLike ('*Invoke-Event.ps1" -Script "ci/on-test" -Key {0} -Record "$(Record)" -Log "$(Log)"' -f (Get-WmEventKey 'Application 4242 wmanager-ci'))
         $byEvent.Principal.UserId | Should -Be 'SYSTEM'
         $byEvent.Settings.MultipleInstances | Should -Be 'IgnoreNew'
-        $byLock = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci-on-test-2'
+        $byLock = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci+on-test-2'
         $trigger = $byLock.Triggers | Select-Object -First 1
         $trigger.CimClass.CimClassName | Should -Be 'MSFT_TaskSessionStateChangeTrigger'
         [int]$trigger.StateChange | Should -Be 7
         [string]$trigger.UserId | Should -BeNullOrEmpty
-        $byLock.Actions[0].Arguments | Should -BeLike '*Invoke-Event.ps1" -Script "ci/on-test" -Index 2'
+        $byLock.Actions[0].Arguments | Should -BeLike ('*Invoke-Event.ps1" -Script "ci/on-test" -Key {0} -Session' -f (Get-WmEventKey 'lock'))
         # The same again changes nothing; one event less removes its task
         Mock Register-ScheduledTask { }
         Sync-WmEventTasks -Wanted $wanted
         Should -Invoke Register-ScheduledTask -Times 0
         Sync-WmEventTasks -Wanted @($list[0])
-        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci-on-test-2' -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
-        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci-on-test-1' | Should -Not -BeNullOrEmpty
+        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci+on-test-2' -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName 'wmanager-Event-ci+on-test-1' | Should -Not -BeNullOrEmpty
     }
 
     It 'runs the event script from its task at its event, as SYSTEM: the event''s log and record, the secret hidden in the log' {
@@ -458,7 +458,7 @@ Describe 'Management source on Windows' -Tag 'Integration' -Skip:(-not $env:WM_C
         ) | Set-Content -LiteralPath $configFile -Encoding UTF8
         $file = 'C:\wm-ci\event.txt'
         Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue
-        $task = 'wmanager-Event-ci-on-test-1'
+        $task = 'wmanager-Event-ci+on-test-1'
         try {
             Sync-WmEventTasks -Wanted (Get-WmEventTaskList -Content (Get-WmManagedContent -Config (New-TestConfig (Join-Path $src 'v2')) -CachedOnly))
             if (-not [Diagnostics.EventLog]::SourceExists('wmanager-ci')) { New-EventLog -LogName Application -Source 'wmanager-ci' }

@@ -1,29 +1,31 @@
-﻿# Event scripts (the wmanager-Event-<group>-<name>-<n> tasks, SYSTEM account, at the event a script names), from the
+﻿# Event scripts (the wmanager-Event-<group>+<name>-<n> tasks, SYSTEM account, at the event a script names), from the
 # management source: the script groups/<group>/events/<name>.ps1 of this computer's groups, as SYSTEM, with the
 # secrets it names (# wmanager-secrets:) in its environment only, and the event that started it. Uses the verified
 # copy of the source as it is (it never fetches). Output goes to the daily log logs\events-YYYY-MM-DD.log and to Loki.
-# -Script: group/name; -Index: which of the script's events (from 1); -Record and -Log: the event's record number and
-# log, which Task Scheduler fills in for an event of a log.
+# -Script: group/name; -Key: which of the script's events (lib\Managed.ps1, Get-WmEventKey); -Record and -Log: the
+# event's record number and log, which Task Scheduler fills in for an event of a log; -Session: a lock or unlock.
 [CmdletBinding()]
-param([Parameter(Mandatory = $true)][string]$Script, [int]$Index = 1, [string]$Record = '', [string]$Log = '', [string]$Lang)
+param([Parameter(Mandatory = $true)][string]$Script, [string]$Key = '', [string]$Record = '', [string]$Log = '',
+      [switch]$Session, [string]$Lang)
 
 $ErrorActionPreference = 'Continue'
 $here = $PSScriptRoot
 . (Join-Path $here 'lib\Common.ps1')
 . (Join-Path $here 'lib\Choco.ps1')
 . (Join-Path $here 'lib\Managed.ps1')
-# A computer moved back to a wmanager release without event scripts keeps this file and the tasks, but not the code:
-# the tasks go, quietly, instead of an error at every event
-if (-not (Get-Command Invoke-WmEventScript -ErrorAction SilentlyContinue)) {
+# The tasks of the event scripts go, quietly, instead of starting this at every event for nothing
+function Remove-EventTasks {
     Get-ScheduledTask -TaskPath '\wmanager\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'wmanager-Event-*' } |
         Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
-    exit 0
 }
+# A computer moved back to a wmanager release without event scripts keeps this file and the tasks, but not the code
+if (-not (Get-Command Invoke-WmEventScript -ErrorAction SilentlyContinue)) { Remove-EventTasks; exit 0 }
 Initialize-WmLanguage -Lang $Lang
 
 $config = Import-WmConfig (Join-Path $here 'provision.config.psd1')
 try {
-    if (-not (Get-WmManagementSettings $config)) { exit 0 }
+    # The configuration lost its management source: no wmanager-Jobs run removes them any more
+    if (-not (Get-WmManagementSettings $config)) { Remove-EventTasks; exit 0 }
 } catch {
     Write-Host (Get-WmText 'jobs.management_settings_error' @(Get-WmErrorText $_))
     exit 1
@@ -34,7 +36,7 @@ Initialize-WmLog 'events' -Daily
 $script:WmManagedQuiet = $true
 $failed = $false
 try {
-    Invoke-WmEventScript -Config $config -Name $Script -Index $Index -Record $Record -Log $Log
+    Invoke-WmEventScript -Config $config -Name $Script -Key $Key -Record $Record -Log $Log -Session:$Session
 } catch {
     $failed = $true
     Write-WmLog -Key 'events.run_failed' -Arguments @($Script, (Get-WmErrorText $_)) -Level error

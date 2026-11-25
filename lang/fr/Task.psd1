@@ -11,5 +11,6 @@
     'task.jobs_times' = 'Les heures des tâches comme déclencheurs de wmanager-Jobs : {0}'
     'task.startup_registered' = 'Tâche wmanager-Startup enregistrée : les scripts de démarrage des groupes.'
     'task.events_synced'      = 'Les tâches des scripts d''événement suivent la source : {0}.'
+    'task.event_task_failed'  = 'Impossible de configurer la tâche {0} d''un script d''événement : {1}'
     'task.jobs_start_failed' = 'Impossible de démarrer wmanager-Jobs : {0}'
 }

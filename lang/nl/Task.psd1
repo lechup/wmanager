@@ -11,5 +11,6 @@
     'task.jobs_times' = 'De tijden van de taken als triggers van wmanager-Jobs: {0}'
     'task.startup_registered' = 'Taak wmanager-Startup geregistreerd: de opstartscripts van de groepen.'
     'task.events_synced'      = 'De taken van de gebeurtenisscripts volgen de bron: {0}.'
+    'task.event_task_failed'  = 'Kan de taak {0} van een gebeurtenisscript niet instellen: {1}'
     'task.jobs_start_failed' = 'Kon wmanager-Jobs niet starten: {0}'
 }

@@ -99,7 +99,7 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   names its events, a line each: `# wmanager-event: network` (a network connected, also after a start or a wake),
   `wake` (back from sleep or hibernation), `lock` and `unlock` (a session of any user), or any event of a Windows log:
   its log, its id and, if you like, its source (`# wmanager-event: System 7036 Service Control Manager`; a log name
-  with spaces goes in double quotes). Each event gets its own task, `wmanager-Event-<group>-<name>-<n>` (SYSTEM), which
+  with spaces goes in double quotes). Each event gets its own task, `wmanager-Event-<group>+<name>-<n>` (SYSTEM), which
   `wmanager-Jobs` makes, changes and removes as the source says, at every run. One event script runs at a time on the
   computer, and a script doesn't run again within 5 minutes of its last run, whichever of its events comes
   (`# wmanager-event-gap: <minutes>` for another gap, `0` for none): a burst of events (a network that comes and goes)

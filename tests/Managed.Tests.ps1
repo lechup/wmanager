@@ -911,6 +911,9 @@ Describe 'Event scripts' {
         $list.Count | Should -Be 2
         @($list | ForEach-Object { "$($_.Script) $($_.Index) $($_.Spec.Name)" }) | Should -Be @('office/drives 1 network', 'office/drives 2 wake')
         $list[1].Description | Should -Be 'wmanager: event script office/drives, at "wake" (v1)'
+        $list[1].Key | Should -Be (Get-WmEventKey 'wake')
+        $list[1].Key | Should -Match '^[0-9a-f]{8}$'
+        $list[0].Key | Should -Not -Be $list[1].Key
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'events.script_not_run' -and $Arguments[0] -eq 'all/broken' }
     }
 
@@ -918,7 +921,7 @@ Describe 'Event scripts' {
         Set-EventFiles @{
             'groups/office/events/drives.ps1' = "# wmanager-event: network`r`n# wmanager-event: System 7036 Service Control Manager`r`n# wmanager-secrets: ShareUser`r`nexit 0`r`n"
         }
-        Invoke-WmEventScript -Config $cfg -Name 'office/drives' -Index 2 -Record '123' -Log 'System'
+        Invoke-WmEventScript -Config $cfg -Name 'office/drives' -Key (Get-WmEventKey 'System 7036 Service Control Manager') -Record '123' -Log 'System'
         Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly -ParameterFilter {
             $File -like '*office-events-drives.ps1' -and $Environment['WMANAGER_EVENT'] -eq 'System 7036 Service Control Manager' -and
             $Environment['WMANAGER_EVENT_RECORD'] -eq '123' -and $Environment['WMANAGER_EVENT_LOG'] -eq 'System' -and
@@ -932,11 +935,11 @@ Describe 'Event scripts' {
 
     It 'gives lock and unlock the session at the screen, and leaves out the values Task Scheduler didn''t fill in' {
         Set-EventFiles @{ 'groups/all/events/screen.ps1' = "# wmanager-event: unlock`r`n# wmanager-event: Application 999`r`n# wmanager-event-gap: 0`r`nexit 0`r`n" }
-        Invoke-WmEventScript -Config $cfg -Name 'all/screen' -Index 1
+        Invoke-WmEventScript -Config $cfg -Name 'all/screen' -Key (Get-WmEventKey 'unlock') -Session
         Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly -ParameterFilter {
             $Environment['WMANAGER_EVENT'] -eq 'unlock' -and $Environment['WMANAGER_EVENT_SESSION'] -eq '2' -and
             $Environment['WMANAGER_EVENT_USER'] -eq 'PC-1\anna' -and -not $Environment.ContainsKey('WMANAGER_EVENT_RECORD') }
-        Invoke-WmEventScript -Config $cfg -Name 'all/screen' -Index 2 -Record '$(Record)' -Log '$(Log)'
+        Invoke-WmEventScript -Config $cfg -Name 'all/screen' -Key (Get-WmEventKey 'Application 999') -Record '$(Record)' -Log '$(Log)'
         Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly -ParameterFilter {
             $Environment['WMANAGER_EVENT'] -eq 'Application 999' -and -not $Environment.ContainsKey('WMANAGER_EVENT_RECORD') -and
             -not $Environment.ContainsKey('WMANAGER_EVENT_LOG') -and -not $Environment.ContainsKey('WMANAGER_EVENT_SESSION') }
@@ -944,28 +947,42 @@ Describe 'Event scripts' {
 
     It 'doesn''t run again within its gap, whichever of its events comes, and runs after it' {
         Set-EventFiles @{ 'groups/all/events/net.ps1' = "# wmanager-event: network`r`n# wmanager-event: wake`r`nexit 0`r`n" }
-        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Index 1
-        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Index 2
+        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Key (Get-WmEventKey 'network')
+        # Within the gap of the copy it ran from: it ends before verifying anything
+        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Key (Get-WmEventKey 'wake')
         Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly
+        Should -Invoke Get-WmVerifiedGroups -Times 1 -Exactly
+        # Without that copy the full run checks the gap too
+        Remove-Item -LiteralPath $script:WmEventsDir -Recurse -Force
+        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Key (Get-WmEventKey 'wake')
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly
+        Should -Invoke Get-WmVerifiedGroups -Times 2 -Exactly
         Set-LastRun 'groups/all/events/net.ps1' (Get-Date).AddMinutes(-6)
-        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Index 2
+        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Key (Get-WmEventKey 'wake')
         Should -Invoke Invoke-WmScriptProcess -Times 2 -Exactly
         # A last run in the future (the clock went back) doesn't hold it
         Set-LastRun 'groups/all/events/net.ps1' (Get-Date).AddHours(2)
-        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Index 1
+        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Key (Get-WmEventKey 'network')
         Should -Invoke Invoke-WmScriptProcess -Times 3 -Exactly
     }
 
     It 'skips a script gone from the source, an event its lines no longer have, and a copy that isn''t the verified one' {
         Set-EventFiles @{ 'groups/all/events/net.ps1' = "# wmanager-event: network`r`nexit 0`r`n" }
-        Invoke-WmEventScript -Config $cfg -Name 'all/gone' -Index 1
+        Invoke-WmEventScript -Config $cfg -Name 'all/gone' -Key (Get-WmEventKey 'network')
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'events.not_here' -and $Arguments[0] -eq 'all/gone' }
-        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Index 2
+        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Key (Get-WmEventKey 'wake')
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'events.changed' -and $Arguments[0] -eq 'all/net' }
         [IO.File]::WriteAllText((Join-Path $script:WmManagedDir 'groups\all\events\net.ps1'), "# wmanager-event: network`r`nexit 5`r`n")
-        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Index 1
+        Invoke-WmEventScript -Config $cfg -Name 'all/net' -Key (Get-WmEventKey 'network')
         Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'events.script_not_run' -and $Arguments[0] -eq 'all/net' }
         Should -Invoke Invoke-WmScriptProcess -Times 0
+    }
+
+    It 'finds its event by its key also when the lines were reordered since its task was made' {
+        Set-EventFiles @{ 'groups/all/events/screen.ps1' = "# wmanager-event: network`r`n# wmanager-event: lock`r`nexit 0`r`n" }
+        Invoke-WmEventScript -Config $cfg -Name 'all/screen' -Key (Get-WmEventKey 'lock') -Session
+        Should -Invoke Invoke-WmScriptProcess -Times 1 -Exactly -ParameterFilter {
+            $Environment['WMANAGER_EVENT'] -eq 'lock' -and $Environment['WMANAGER_EVENT_SESSION'] -eq '2' }
     }
 
     It 'says so without a verified copy, and when another event script is still running' {
@@ -977,9 +994,11 @@ Describe 'Event scripts' {
         $busy = $other.BeginInvoke()
         try {
             Start-Sleep -Milliseconds 1500
-            Invoke-WmEventScript -Config $cfg -Name 'all/net' -WaitMinutes 0
+            Invoke-WmEventScript -Config $cfg -Name 'all/net' -WaitMinutes 0 -Session
             Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'events.busy' -and $Arguments[0] -eq 'all/net' }
             Should -Invoke Get-WmVerifiedGroups -Times 1 -Exactly
+            # The person at the screen is read before waiting
+            Should -Invoke Get-WmConsoleSession -Times 1 -Exactly
         } finally {
             $null = $other.EndInvoke($busy)
             $other.Dispose()
