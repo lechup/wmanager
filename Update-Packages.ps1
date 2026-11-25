@@ -165,6 +165,12 @@ try {
         Send-WmHealthcheck -Config $config -Signal $signal -Body (Get-WmLogTail 60)
     }
     Exit-WmLock $lock
+    # The hourly jobs skip their turn while the update holds the lock, and so does a job's time: they run now rather
+    # than at the next hour. Only once the lock is free (it would find it busy), and only with the task (a management
+    # source).
+    if (Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -ErrorAction SilentlyContinue) {
+        Start-WmJobsTask
+    }
 }
 
 if ($failed) { exit 1 }

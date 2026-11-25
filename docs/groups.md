@@ -54,12 +54,16 @@ is a change in `groups.psd1`; nothing has to be done on the computer.
   computer's groups whose time has come, by folder: `jobs/hourly`, `jobs/daily`, `jobs/weekly`. A computer that was off
   catches up at the next hour it is on. The start time is recorded before the job runs, so a failed job waits for its
   next turn (the error is in the log). **At a fixed time:** a daily or weekly job with the line
-  `# wmanager-at: 18:00` runs at 18:00 (local time) instead; `# wmanager-at: Mon-Fri 18:00` or `Mon,Wed,Fri 07:30` on
-  some days, and a weekly job names one day: `# wmanager-at: Fri 17:00` (English day names, `Mon` or `Monday`). The
-  times become triggers of `wmanager-Jobs`; a computer that was off then runs the job at the next hour it is on, once,
-  and a new job waits for its first time. `tools/groups.ps1 check` reads the line, `show` shows the time. Time limit `JobTimeoutMinutes` (10 by default). Every line a job prints goes to
-  Loki unchanged, with the label `task="<group>/<file name>"` (`job="jobs"`): print one JSON object per line and Grafana
-  can read it with `| json`. The local log is `logs\jobs-YYYY-MM-DD.log`. Example (also in the
+  `# wmanager-at: 18:00` runs at 18:00 (local time, also after the clocks change for summer or winter) instead;
+  `# wmanager-at: Mon-Fri 18:00` or `Mon, Wed, Fri 07:30` on some days, and a weekly job names one day:
+  `# wmanager-at: Fri 17:00` (English day names, `Mon` or `Monday`). The times become triggers of `wmanager-Jobs`. A
+  computer that was off at the time runs the job at the next hour it is on, once, unless its next time comes within
+  the hour: that run then stands for both. A time that comes while the scheduled update is busy runs right after it;
+  while an earlier run of `wmanager-Jobs` is still busy (one run at a time), at the next hour. A new job waits for its
+  first time. `tools/groups.ps1 check` reads the line, `show` shows the time. Time limit `JobTimeoutMinutes` (10 by
+  default). Every line a job prints goes to Loki unchanged, with the label `task="<group>/<file name>"` (`job="jobs"`):
+  print one JSON object per line and Grafana can read it with `| json`. The local log is `logs\jobs-YYYY-MM-DD.log`.
+  Example (also in the
   [library](#library-of-ready-scripts-and-jobs)):
   `examples/management/groups/all/jobs/daily/system-report.ps1`, a daily report (model and serial number, disks, RAM,
   uptime, Windows Update, Defender, BitLocker, TPM, Secure Boot, firewall, local administrators, disk health, battery):

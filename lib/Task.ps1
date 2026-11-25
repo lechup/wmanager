@@ -59,10 +59,26 @@ function Get-WmUsersGroupName {
 
 function New-WmUpdateTrigger {
     param([Parameter(Mandatory = $true)][hashtable]$Config)
-    $days = Get-WmUpdateDays $Config
-    $time = Get-WmSetting $Config 'UpdateTime' '12:00'
-    $at = [datetime]::ParseExact($time, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
-    return New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $days -At $at
+    return New-WmWeeklyTrigger -Time (Get-WmSetting $Config 'UpdateTime' '12:00') -Days (Get-WmUpdateDays $Config)
+}
+
+# A weekly trigger at a time of day (HH:mm) in local time. New-ScheduledTaskTrigger writes the time with the UTC offset
+# of the moment ("Synchronize across time zones"), so after the clocks change for summer or winter the task would
+# start an hour off; without the offset it keeps its time of day.
+function New-WmWeeklyTrigger {
+    param([Parameter(Mandatory = $true)][string]$Time, [Parameter(Mandatory = $true)][string[]]$Days)
+    $at = [datetime]::ParseExact($Time, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+    $trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $Days -At $at
+    $trigger.StartBoundary = $at.ToString('s', [Globalization.CultureInfo]::InvariantCulture)
+    return $trigger
+}
+
+# The time of day (HH:mm) of a trigger in local time; '' without one, or for one with a UTC offset (written by an
+# older version), so that it is written again
+function Get-WmTriggerTime {
+    param($Trigger)
+    if ([string]$Trigger.StartBoundary -match '^\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}):\d{2}(\.\d+)?$') { return $Matches[1] }
+    return ''
 }
 
 # Days of the scheduled update: every day unless UpdateDays says otherwise (a weekly trigger with all seven days)
@@ -72,8 +88,9 @@ function Get-WmUpdateDays {
 }
 
 # The times of the jobs that declare one (Get-WmJobTimes) as extra triggers of wmanager-Jobs, after its hourly one,
-# so such a job starts at its time rather than at the next hour. Changed only when the set of times differs (the task
-# runs this itself: changing its triggers doesn't stop the run). Without the task (no management source) nothing.
+# so such a job starts at its time rather than at the next hour, in local time (New-WmWeeklyTrigger). Changed only when
+# the set of times differs, or a trigger still has a UTC offset (the task runs this itself: changing its triggers
+# doesn't stop the run). Without the task (no management source) nothing.
 function Sync-WmJobsTaskTimes {
     param([AllowEmptyCollection()][object[]]$Times = @())
     $task = Get-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -ErrorAction SilentlyContinue
@@ -82,16 +99,14 @@ function Sync-WmJobsTaskTimes {
     foreach ($t in $Times) { $want['{0} {1}' -f $t.Time, (Get-WmDaysMask $t.Days)] = $t }
     $have = @{}
     foreach ($tr in @($task.Triggers | Select-Object -Skip 1)) {
-        $time = if ($tr.StartBoundary) { ([datetime]$tr.StartBoundary).ToString('HH:mm') } else { '' }
-        $have['{0} {1}' -f $time, [int]$tr.DaysOfWeek] = $true
+        $have['{0} {1}' -f (Get-WmTriggerTime $tr), [int]$tr.DaysOfWeek] = $true
     }
     $same = $want.Count -eq $have.Count
     foreach ($k in $want.Keys) { if (-not $have.ContainsKey($k)) { $same = $false } }
     if ($same) { return }
     $keys = @($want.Keys | Sort-Object)
     $triggers = @($task.Triggers | Select-Object -First 1) + @(foreach ($k in $keys) {
-        $at = [datetime]::ParseExact($want[$k].Time, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
-        New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $want[$k].Days -At $at
+        New-WmWeeklyTrigger -Time $want[$k].Time -Days $want[$k].Days
     })
     Set-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -Trigger $triggers -ErrorAction Stop | Out-Null
     $list = if ($keys.Count) { @($keys | ForEach-Object { $want[$_].Text }) -join '; ' } else { '-' }
@@ -193,10 +208,11 @@ function Update-WmTaskSchedule {
         Register-WmStartupTask
         Write-WmLog -Key 'task.startup_registered'
     }
+    # A trigger with a UTC offset (an older version) has no time here, so it is written again in local time
     $want = New-WmUpdateTrigger $Config
     $have = $task.Triggers | Select-Object -First 1
-    $wantTime = ([datetime]$want.StartBoundary).ToString('HH:mm')
-    $haveTime = if ($have.StartBoundary) { ([datetime]$have.StartBoundary).ToString('HH:mm') } else { '' }
+    $wantTime = Get-WmTriggerTime $want
+    $haveTime = Get-WmTriggerTime $have
     $wantMask = Get-WmDaysMask (Get-WmUpdateDays $Config)
     $haveMask = [int]$have.DaysOfWeek
     if ($wantTime -ne $haveTime -or $wantMask -ne $haveMask) {
@@ -206,7 +222,8 @@ function Update-WmTaskSchedule {
 }
 
 # After a sign-in: the scripts and jobs that run as the user, for the person who signed in, now rather than at the
-# next hour (an instance already running takes them as it is)
+# next hour (an instance already running takes them as it is). After the scheduled update: what came due while it
+# held the lock.
 function Start-WmJobsTask {
     try {
         Start-ScheduledTask -TaskPath $script:WmTaskPath -TaskName $script:WmTaskJobs -ErrorAction Stop

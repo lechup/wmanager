@@ -110,9 +110,25 @@ function Get-WmJobLastSlot {
     return $null
 }
 
+# The next time a job with a time is due, after $Now (with the same slack as Get-WmJobLastSlot)
+function Get-WmJobNextSlot {
+    param([Parameter(Mandatory = $true)]$At, [Parameter(Mandatory = $true)][datetime]$Now)
+    $probe = $Now.ToLocalTime().AddMinutes(2)
+    $time = [TimeSpan]::ParseExact($At.Time, 'hh\:mm', [Globalization.CultureInfo]::InvariantCulture)
+    for ($d = 0; $d -le 7; $d++) {
+        $day = $probe.Date.AddDays($d)
+        if (@($At.Days) -notcontains $day.DayOfWeek.ToString()) { continue }
+        $slot = $day.Add($time)
+        if ($slot -gt $probe) { return $slot }
+    }
+    return $null
+}
+
 # Is a job due? The hourly task starts a little early or late, so 5 minutes of slack keep a daily job at
 # the same hour instead of drifting. A last run in the future (the clock went back) counts as due. A job with a time
-# ($At) is due when its latest time has passed since its last run (a computer that was off then catches up).
+# ($At) is due when its latest time has passed since its last run (a computer that was off then catches up), unless
+# its next time comes within the hour: that run then stands for both, rather than two runs close together. A job has
+# one time a day, so that never holds back the run of the time that has just come.
 function Test-WmJobDue {
     param([Parameter(Mandatory = $true)][string]$Every, $LastRun, [Parameter(Mandatory = $true)][datetime]$Now, $At = $null)
     if ($null -eq $LastRun) { return $true }
@@ -120,7 +136,9 @@ function Test-WmJobDue {
     if ($last -gt $Now.AddMinutes(5)) { return $true }
     if ($At) {
         $slot = Get-WmJobLastSlot -At $At -Now $Now
-        return ($null -ne $slot -and $last -lt $slot.ToUniversalTime())
+        if ($null -eq $slot -or $last -ge $slot.ToUniversalTime()) { return $false }
+        $next = Get-WmJobNextSlot -At $At -Now $Now
+        return ($null -eq $next -or ($next.ToUniversalTime() - $Now.ToUniversalTime()) -gt [TimeSpan]::FromHours(1))
     }
     switch ($Every) {
         'hourly' { $period = [TimeSpan]::FromHours(1) }

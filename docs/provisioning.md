@@ -149,8 +149,8 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
 ## Scheduled update
 
 - `wmanager-Update` (SYSTEM): scheduled by `UpdateDays` and `UpdateTime`, every day at 12:00 by default
-  (`UpdateDays = @('Monday')` makes it weekly). After a missed run it starts right after boot, so a computer that was
-  off for a few days catches up with one run.
+  (`UpdateDays = @('Monday')` makes it weekly), in local time, also after the clocks change for summer or winter.
+  After a missed run it starts right after boot, so a computer that was off for a few days catches up with one run.
   It installs Chocolatey if it is missing, fetches the list, installs new packages, upgrades packages that are neither pinned nor `!noupdate`,
   reruns debloat and the privacy settings (`RerunDebloat`; the older name `RerunDebloatWeekly` still works) and
   updates its own schedule if the configuration changed.
@@ -166,7 +166,8 @@ The last valid copy is kept in `C:\ProgramData\wmanager\state\choco-reqs.cache.t
   (see [Updating wmanager](groups.md#updating-wmanager)).
 - Runs never overlap. When the hourly `wmanager-Jobs` is busy (e.g. both start after a boot), the update waits up
   to 50 minutes for it; if it is still busy, `wmanager-Retry` does the full run at the next sign-in. The hourly
-  run skips its turn when another run is busy, and provisioning waits up to 10 minutes.
+  run skips its turn when another run is busy, and provisioning waits up to 10 minutes. With a management source the
+  update starts `wmanager-Jobs` when it ends, so what came due meanwhile (a job's turn or its time) runs right after.
 - Without internet (the Chocolatey, package-list or management servers don't answer) the update changes nothing
   and reports nothing; `wmanager-Retry` does the full run at the next sign-in.
 

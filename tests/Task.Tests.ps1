@@ -26,6 +26,25 @@ Describe 'New-WmUpdateTrigger' {
         $example = Import-PowerShellDataFile (Join-Path $root 'provision.config.example.psd1')
         [int](New-WmUpdateTrigger $example).DaysOfWeek | Should -Be 127
     }
+
+    It 'keeps its time in local time, without a UTC offset (which would move it an hour when the clocks change)' {
+        $t = New-WmUpdateTrigger @{ UpdateTime = '07:30' }
+        $t.StartBoundary | Should -Match '^\d{4}-\d{2}-\d{2}T07:30:00$'
+        Get-WmTriggerTime $t | Should -Be '07:30'
+    }
+}
+
+Describe 'Get-WmTriggerTime' {
+    It 'reads the local time of a trigger, and none from one with a UTC offset, so that it is written again' {
+        Get-WmTriggerTime ([pscustomobject]@{ StartBoundary = '2026-11-25T18:00:00' }) | Should -Be '18:00'
+        Get-WmTriggerTime ([pscustomobject]@{ StartBoundary = '2026-11-25T18:00:00.123' }) | Should -Be '18:00'
+        Get-WmTriggerTime ([pscustomobject]@{ StartBoundary = '2026-11-25T18:00:00+01:00' }) | Should -Be ''
+        Get-WmTriggerTime ([pscustomobject]@{ StartBoundary = '2026-11-25T17:00:00Z' }) | Should -Be ''
+        Get-WmTriggerTime ([pscustomobject]@{ StartBoundary = $null }) | Should -Be ''
+        # As New-ScheduledTaskTrigger writes it
+        $at = [datetime]::ParseExact('18:00', 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+        Get-WmTriggerTime (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At $at) | Should -Be ''
+    }
 }
 
 Describe 'Format-WmUpdateDays' {

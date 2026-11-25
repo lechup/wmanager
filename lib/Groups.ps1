@@ -261,7 +261,8 @@ function Get-WmJobAt {
     if ($found.Count -gt 1) { throw (New-WmError 'managed.at_twice') }
     $at = $found[0]
     if ($Every -eq 'hourly') { throw (New-WmError 'managed.at_hourly') }
-    if ($at -notmatch '^(?:(?<days>\S+)\s+)?(?<time>[0-9]{1,2}:[0-9]{2})$') { throw (New-WmError 'managed.at_bad' @($at)) }
+    # Days may have spaces around their commas and dashes ("Mon, Wed, Fri 07:30", "Mon - Fri 18:00")
+    if ($at -notmatch '^(?:(?<days>.*\S)\s+)?(?<time>[0-9]{1,2}:[0-9]{2})$') { throw (New-WmError 'managed.at_bad' @($at)) }
     $time = [datetime]::MinValue
     if (-not [datetime]::TryParseExact($Matches['time'], 'H:mm', [Globalization.CultureInfo]::InvariantCulture,
             [Globalization.DateTimeStyles]::None, [ref]$time)) { throw (New-WmError 'managed.at_bad' @($at)) }

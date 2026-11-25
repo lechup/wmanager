@@ -782,6 +782,8 @@ Describe 'Get-WmJobAt' {
         (Get-WmJobAt '# wmanager-at: Mon-Fri 7:30' 'daily').Time | Should -Be '07:30'
         (Get-WmJobAt '#wmanager-at: sat,MONDAY 06:00' 'daily').Days | Should -Be @('Monday', 'Saturday')
         (Get-WmJobAt '# wmanager-at: Fri-Mon 22:00' 'daily').Days | Should -Be @('Monday', 'Friday', 'Saturday', 'Sunday')
+        (Get-WmJobAt '# wmanager-at: Mon, Wed, Fri 07:30' 'daily').Days | Should -Be @('Monday', 'Wednesday', 'Friday')
+        (Get-WmJobAt '# wmanager-at: Mon - Fri 18:00' 'daily').Days | Should -Be @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday')
         (Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly').Days | Should -Be @('Friday')
         (Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly').Text | Should -Be 'Fri 17:00'
         Get-WmJobAt "exit 0`r`n" 'daily' | Should -BeNullOrEmpty
@@ -819,5 +821,14 @@ Describe 'Test-WmJobDue with a time' {
         $friday = Get-WmJobAt '# wmanager-at: Fri 17:00' 'weekly'
         Test-WmJobDue -Every 'weekly' -LastRun (L '2026-11-20 17:00') -Now (L '2026-11-26 12:00') -At $friday | Should -BeFalse
         Test-WmJobDue -Every 'weekly' -LastRun (L '2026-11-20 17:00') -Now (L '2026-11-27 17:00') -At $friday | Should -BeTrue
+    }
+
+    It 'leaves the catching up to its next time when that comes within the hour, so it runs once, not twice' {
+        # Off on Monday at 18:00, on again on Tuesday: before 17:00 it catches up, after that the 18:00 run stands for both
+        Test-WmJobDue -Every 'daily' -LastRun (L '2026-11-20 18:00') -Now (L '2026-11-24 16:58') -At $workdays | Should -BeTrue
+        Test-WmJobDue -Every 'daily' -LastRun (L '2026-11-20 18:00') -Now (L '2026-11-24 17:30') -At $workdays | Should -BeFalse
+        Test-WmJobDue -Every 'daily' -LastRun (L '2026-11-20 18:00') -Now (L '2026-11-24 18:00') -At $workdays | Should -BeTrue
+        # After Friday's run the next one is Monday's, over the weekend
+        Get-WmJobNextSlot -At $workdays -Now (L '2026-11-27 18:30') | Should -Be ([datetime]'2026-11-30 18:00')
     }
 }
