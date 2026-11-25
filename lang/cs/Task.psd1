@@ -10,5 +10,6 @@
     'task.logon_registered' = 'Zaregistrována úloha wmanager-Logon: přihlašovací skripty skupin.'
     'task.jobs_times' = 'Časy úloh jako spouštěče wmanager-Jobs: {0}'
     'task.startup_registered' = 'Úloha wmanager-Startup zaregistrována: spouštěcí skripty skupin.'
+    'task.events_synced'      = 'Úlohy skriptů událostí odpovídají zdroji: {0}.'
     'task.jobs_start_failed' = 'Nepodařilo se spustit wmanager-Jobs: {0}'
 }

@@ -10,5 +10,6 @@
     'task.logon_registered' = 'Taak wmanager-Logon geregistreerd: de aanmeldscripts van de groepen.'
     'task.jobs_times' = 'De tijden van de taken als triggers van wmanager-Jobs: {0}'
     'task.startup_registered' = 'Taak wmanager-Startup geregistreerd: de opstartscripts van de groepen.'
+    'task.events_synced'      = 'De taken van de gebeurtenisscripts volgen de bron: {0}.'
     'task.jobs_start_failed' = 'Kon wmanager-Jobs niet starten: {0}'
 }

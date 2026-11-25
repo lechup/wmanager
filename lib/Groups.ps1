@@ -161,6 +161,57 @@ function Get-WmGroupStartupScripts {
     Get-WmGroupFolderScripts -Files $Files -Groups $Groups -Folder 'startup'
 }
 
+# Event scripts: groups/<group>/events/*.ps1, as SYSTEM when the events they name happen (Invoke-Event.ps1)
+function Get-WmGroupEventScripts {
+    param([Parameter(Mandatory = $true)][hashtable]$Files, [AllowEmptyCollection()][string[]]$Groups = @())
+    Get-WmGroupFolderScripts -Files $Files -Groups $Groups -Folder 'events'
+}
+
+# The ready names of events: network (a network connected), wake (back from sleep or hibernation), lock and unlock
+# (of any user's session)
+$script:WmEventNames = @('network', 'wake', 'lock', 'unlock')
+
+# The events an event script names, in lines "# wmanager-event: <name>" (one of $WmEventNames) or
+# "# wmanager-event: <log> <event id> [<source>]" (a log name with spaces in double quotes), one or more, and the
+# shortest time between its runs, "# wmanager-event-gap: <minutes>" (5 without the line, 0 = none, at most 1440).
+# Events (each Text as written, then Name for a ready name, else Log, Id and Provider) and Gap. Throws without an event,
+# on a line it can't read, the same event twice, or a bad or second gap line.
+function Get-WmEventSpecs {
+    param([AllowEmptyString()][string]$Text)
+    $lines = @()
+    $gaps = @()
+    foreach ($line in ($Text -split "\r?\n")) {
+        if ($line -match '^\s*#\s*wmanager-event\s*:(.*)$') { $lines += $Matches[1].Trim() }
+        elseif ($line -match '^\s*#\s*wmanager-event-gap\s*:(.*)$') { $gaps += $Matches[1].Trim() }
+    }
+    if ($lines.Count -eq 0) { throw (New-WmError 'managed.event_none') }
+    $events = @()
+    $seen = @{}
+    foreach ($e in $lines) {
+        if ($script:WmEventNames -contains $e) {
+            $spec = [pscustomobject]@{ Text = $e; Name = $e.ToLowerInvariant(); Log = ''; Id = 0; Provider = '' }
+            $key = $spec.Name
+        } elseif ($e -match '^(?:"(?<qlog>[^"''<>&]+)"|(?<log>[^\s"''<>&]+))\s+(?<id>[0-9]{1,5})(?:\s+(?<prov>[^"''<>&]+))?$' -and
+                [int]$Matches['id'] -le 65535) {
+            $log = if ($Matches['qlog']) { $Matches['qlog'].Trim() } else { $Matches['log'] }
+            $spec = [pscustomobject]@{ Text = $e; Name = ''; Log = $log; Id = [int]$Matches['id']; Provider = ([string]$Matches['prov']).Trim() }
+            $key = ('{0}|{1}|{2}' -f $spec.Log, $spec.Id, $spec.Provider).ToLowerInvariant()
+        } else {
+            throw (New-WmError 'managed.event_bad' @($e))
+        }
+        if ($seen.ContainsKey($key)) { throw (New-WmError 'managed.event_twice' @($e)) }
+        $seen[$key] = $true
+        $events += $spec
+    }
+    if ($gaps.Count -gt 1) { throw (New-WmError 'managed.event_gap_twice') }
+    $gap = 5
+    if ($gaps.Count -eq 1) {
+        if ($gaps[0] -notmatch '^[0-9]{1,4}$' -or [int]$gaps[0] -gt 1440) { throw (New-WmError 'managed.event_gap_bad' @($gaps[0])) }
+        $gap = [int]$gaps[0]
+    }
+    return [pscustomobject]@{ Events = $events; Gap = $gap }
+}
+
 # Jobs of the given groups: groups/<group>/jobs/hourly|daily|weekly/*.ps1. Name (group/file) labels the
 # job's entries in Loki.
 function Get-WmGroupJobs {
@@ -435,6 +486,7 @@ function Resolve-WmComputerContent {
         Jobs         = (Get-WmGroupJobs -Files $Files -Groups $groups)
         LogonScripts = (Get-WmGroupLogonScripts -Files $Files -Groups $groups)
         StartupScripts = (Get-WmGroupStartupScripts -Files $Files -Groups $groups)
+        EventScripts = (Get-WmGroupEventScripts -Files $Files -Groups $groups)
         Wmanager     = (Get-WmWantedVersion -Versions $Versions -Groups (Get-WmVersionGroupOrder -Map $Map -Groups $groups))
     }
 }

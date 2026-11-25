@@ -531,6 +531,68 @@ Describe 'startup scripts' {
     }
 }
 
+Describe 'event scripts' {
+    It 'new-event makes an event script at the network, not numbered, that parses and passes check' {
+        $src = New-Source
+        (Invoke-Tool $src new-event accounting map-drives).Code | Should -Be 0
+        $path = Get-Path $src 'groups/accounting/events/map-drives.ps1'
+        Test-Bom $path | Should -BeTrue
+        $text = Read-Text $path
+        Test-OnlyCrLf $text | Should -BeTrue
+        $text | Should -Match 'Event script of group accounting'
+        $errs = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errs)
+        @($errs).Count | Should -Be 0
+        . (Join-Path (Join-Path $script:root 'lib') 'Lang.ps1')
+        . (Join-Path (Join-Path $script:root 'lib') 'Groups.ps1')
+        # The forms are described, but only one event is taken
+        $specs = Get-WmEventSpecs $text
+        @($specs.Events | ForEach-Object { $_.Text }) | Should -Be @('network')
+        $specs.Gap | Should -Be 5
+        (Get-WmScriptSecretNames $text).Count | Should -Be 0
+        (Invoke-Tool $src check).Code | Should -Be 0
+        (Invoke-Tool $src new-event accounting map-drives).Code | Should -Not -Be 0
+    }
+
+    It 'show lists them with their events for a computer and counts them per group' {
+        $src = New-Source
+        $r = Invoke-Tool $src show office-01
+        $r.Text | Should -Match 'Event scripts \(at their events, as SYSTEM\):[^\r\n]*\r?\n  \(none\)'
+        Set-Text (Get-Path $src 'groups/accounting/events/drives.ps1') "# wmanager-event: network`r`n# wmanager-event: wake`r`nexit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/events/service.ps1') "# wmanager-event: System 7036 Service Control Manager`r`n# wmanager-event-gap: 0`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src show office-01
+        $r.Text | Should -Match 'groups/all/events/service\.ps1   at System 7036 Service Control Manager \(gap 0 min\)'
+        $r.Text | Should -Match 'groups/accounting/events/drives\.ps1   at network, wake\r?\n'
+        (Invoke-Tool $src show office-99).Text | Should -Not -Match 'drives\.ps1'
+        $r = Invoke-Tool $src show
+        $r.Text | Should -Match 'accounting\s+2 computers\s+packages: 1\s+scripts: 1\s+jobs: 0\s+sign-in: 0\s+startup: 0\s+events: 1'
+        $r.Text | Should -Match 'all\s+every computer\s+packages: 0\s+scripts: 0\s+jobs: 1\s+sign-in: 0\s+startup: 0\s+events: 1'
+    }
+
+    It 'check reads their events, refuses run-as in them, and warns about the lines elsewhere and about a subfolder' {
+        $src = New-Source
+        Set-Text (Get-Path $src 'groups/all/events/none.ps1') "exit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'groups/all/events/none\.ps1: an event script names its event in a line'
+        Set-Text (Get-Path $src 'groups/all/events/none.ps1') "# wmanager-event: thunder`r`n# wmanager-event-gap: soon`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match "groups/all/events/none\.ps1: wmanager-event: 'thunder' is neither network"
+        Set-Text (Get-Path $src 'groups/all/events/none.ps1') "# wmanager-event: lock`r`n# wmanager-run-as: user`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 1
+        $r.Text | Should -Match 'groups/all/events/none\.ps1: an event script always runs as SYSTEM'
+        Remove-Item -LiteralPath (Get-Path $src 'groups/all/events/none.ps1')
+        Set-Text (Get-Path $src 'groups/all/events/sub/deep.ps1') "# wmanager-event: lock`r`nexit 0`r`n" -Bom
+        Set-Text (Get-Path $src 'groups/all/startup/10-net.ps1') "# wmanager-event: network`r`nexit 0`r`n" -Bom
+        $r = Invoke-Tool $src check
+        $r.Code | Should -Be 0
+        $r.Text | Should -Match 'groups/all/events/sub/deep\.ps1 is not run: event scripts go directly in groups/<group>/events/'
+        $r.Text | Should -Match 'groups/all/startup/10-net\.ps1: wmanager-event does nothing here'
+    }
+}
+
 Describe 'run-as' {
     It 'check takes user or system, never in a sign-in script, and show marks what runs as each person' {
         $src = New-Source
@@ -586,7 +648,7 @@ Describe 'set-version and unset-version' {
 
         $r = Invoke-Tool $src show
         $r.Text | Should -Match 'wmanager version: v0\.2\.0 on every computer; v0\.3\.0-rc1 in group pilot'
-        $r.Text | Should -Match 'pilot\s+1 computer.*\(only a wmanager version\)'
+        $r.Text | Should -Match 'pilot\s+1 computer.*\(version only\)'
         (Invoke-Tool $src show OFFICE-07).Text | Should -Match 'wmanager: v0\.3\.0-rc1 \(group pilot\)'
         (Invoke-Tool $src show OFFICE-01).Text | Should -Match 'wmanager: v0\.2\.0'
         $r = Invoke-Tool $src check

@@ -23,6 +23,11 @@
     'managed.at_hourly'                  = 'zadanie co godzinę działa co godzinę: wmanager-at jest dla zadań dziennych i tygodniowych'
     'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': zadanie tygodniowe podaje jeden dzień, np. Fri 17:00'
     'managed.job_first_time'             = 'Zadanie {0} działa o {1}: pierwszy raz wtedy.'
+    'managed.event_none'                 = 'skrypt zdarzenia podaje swoje zdarzenie w linii "# wmanager-event: network" (network, wake, lock, unlock albo dziennik i identyfikator zdarzenia)'
+    'managed.event_bad'                  = 'wmanager-event: ''{0}'' to ani network, wake, lock, unlock, ani dziennik i identyfikator zdarzenia, np. System 7036 [źródło]'
+    'managed.event_twice'                = 'wmanager-event: ''{0}'' podane dwa razy'
+    'managed.event_gap_bad'              = 'wmanager-event-gap: ''{0}'' to nie liczba minut od 0 do 1440'
+    'managed.event_gap_twice'            = 'więcej niż jedna linia wmanager-event-gap'
 
     'managed.cert_missing'               = 'Brak certyfikatu podpisu {0}'
     'managed.cert_private_key'           = '{0} zawiera klucz prywatny; na komputery trafia tylko publiczny .cer'

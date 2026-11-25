@@ -10,5 +10,6 @@
     'task.logon_registered' = 'Registered the wmanager-Logon task: the sign-in scripts of the groups.'
     'task.jobs_times' = 'The times of the jobs as triggers of wmanager-Jobs: {0}'
     'task.startup_registered' = 'Registered the wmanager-Startup task: the startup scripts of the groups.'
+    'task.events_synced'      = 'The tasks of the event scripts follow the source: {0}.'
     'task.jobs_start_failed' = 'Could not start wmanager-Jobs: {0}'
 }

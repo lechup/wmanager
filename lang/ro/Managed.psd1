@@ -23,6 +23,11 @@
     'managed.at_hourly'                  = 'o sarcină orară rulează în fiecare oră: wmanager-at este pentru sarcinile zilnice și săptămânale'
     'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': o sarcină săptămânală indică o zi, de ex. Fri 17:00'
     'managed.job_first_time'             = 'Sarcina {0} rulează la {1}: prima dată atunci.'
+    'managed.event_none'                 = 'un script de eveniment își numește evenimentul într-o linie "# wmanager-event: network" (network, wake, lock, unlock sau un jurnal și un ID de eveniment)'
+    'managed.event_bad'                  = 'wmanager-event: ''{0}'' nu este network, wake, lock, unlock și nici un jurnal și un ID de eveniment ca System 7036 [sursă]'
+    'managed.event_twice'                = 'wmanager-event: ''{0}'' apare de două ori'
+    'managed.event_gap_bad'              = 'wmanager-event-gap: ''{0}'' nu este un număr de minute de la 0 la 1440'
+    'managed.event_gap_twice'            = 'mai mult de o linie wmanager-event-gap'
 
     'managed.cert_missing'               = 'Certificatul de semnare nu a fost găsit: {0}'
     'managed.cert_private_key'           = '{0} conține o cheie privată; pe computere ajunge doar fișierul .cer public'

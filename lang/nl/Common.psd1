@@ -11,6 +11,7 @@
     'step.schedule'                 = 'Taakplanner'
     'step.group_jobs'               = 'Groepsopdrachten'
     'step.jobs_times'               = 'Tijden van de taken'
+    'step.event_tasks'              = 'Taken van de gebeurtenisscripts'
     'step.packages'                 = 'Pakketten'
     'step.privacy'                  = 'Privacy'
     'step.group_scripts'            = 'Groepsscripts'

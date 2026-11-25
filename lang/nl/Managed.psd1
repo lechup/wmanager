@@ -23,6 +23,11 @@
     'managed.at_hourly'                  = 'een uurlijkse taak loopt elk uur: wmanager-at is voor dagelijkse en wekelijkse taken'
     'managed.at_weekly_day'              = 'wmanager-at: ''{0}'': een wekelijkse taak noemt één dag, bijv. Fri 17:00'
     'managed.job_first_time'             = 'Taak {0} loopt om {1}: de eerste keer dan.'
+    'managed.event_none'                 = 'een gebeurtenisscript noemt zijn gebeurtenis in een regel "# wmanager-event: network" (network, wake, lock, unlock, of een logboek en een gebeurtenis-id)'
+    'managed.event_bad'                  = 'wmanager-event: ''{0}'' is geen network, wake, lock, unlock en ook geen logboek en gebeurtenis-id zoals System 7036 [bron]'
+    'managed.event_twice'                = 'wmanager-event: ''{0}'' staat er twee keer'
+    'managed.event_gap_bad'              = 'wmanager-event-gap: ''{0}'' is geen aantal minuten van 0 tot 1440'
+    'managed.event_gap_twice'            = 'meer dan één wmanager-event-gap-regel'
 
     'managed.cert_missing'               = 'Ondertekeningscertificaat niet gevonden: {0}'
     'managed.cert_private_key'           = '{0} bevat een persoonlijke sleutel; alleen de openbare .cer gaat naar de computers'
