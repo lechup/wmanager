@@ -230,13 +230,19 @@ function Restore-WmJournalEntry {
                     $empty = ($node.ValueCount -eq 0 -and $node.SubKeyCount -eq 0)
                     $node.Close()
                     if (-not $empty) { break }
+                    $parent = $null
                     try {
                         $parent = Open-WmRegKey -Path $path.Substring(0, $cut) -Writable
-                        if ($parent) { try { $parent.DeleteSubKey($path.Substring($cut + 1), $false) } finally { $parent.Close() } }
+                        if ($parent) { $parent.DeleteSubKey($path.Substring($cut + 1), $false) }
                     } catch {
+                        # Only a refusal (a key Windows protects); anything else is a failure like any other
+                        $why = $_.Exception.GetBaseException()
+                        if (-not ($why -is [UnauthorizedAccessException] -or $why -is [Security.SecurityException])) { throw }
                         # Its parents aren't empty either, then
                         Write-WmLog -Key 'backup.key_not_removed' -Arguments @($path, (Get-WmErrorText $_))
                         break
+                    } finally {
+                        if ($parent) { $parent.Close() }
                     }
                 }
                 $path = $path.Substring(0, $cut)

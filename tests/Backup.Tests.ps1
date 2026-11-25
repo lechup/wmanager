@@ -136,6 +136,44 @@ Describe 'Restore-WmJournalEntry' {
         Test-Path -LiteralPath "Registry::$sub" | Should -BeFalse
         Test-Path -LiteralPath "Registry::$script:key" | Should -BeTrue
     }
+
+    It 'removes the empty keys below a protected one, and stops at it' {
+        $mid = "$script:key\A"
+        $leaf = "$mid\B"
+        New-Item -Path "Registry::$leaf" -Force | Out-Null
+        $entry = Get-TestEntry -Path $leaf -Name 'Allow'
+        $entry.KeyExisted = $false
+        $entry.Ancestor = $script:key
+        New-ItemProperty -LiteralPath "Registry::$leaf" -Name 'Allow' -Value 0 -PropertyType DWord | Out-Null
+        Set-TestKeyReadOnly -Path $mid -ReadOnly $true -Rights 'Delete'
+        try {
+            Restore-WmJournalEntry -Entry $entry | Should -BeTrue
+            Test-Path -LiteralPath "Registry::$leaf" | Should -BeFalse
+            Test-Path -LiteralPath "Registry::$mid" | Should -BeTrue
+            Should -Invoke Write-WmLog -Times 1 -Exactly -ParameterFilter { $Key -eq 'backup.key_not_removed' -and $Arguments[0] -like '*\A' }
+            $script:warnings | Should -BeNullOrEmpty
+        } finally {
+            Set-TestKeyReadOnly -Path $mid -ReadOnly $false
+        }
+    }
+
+    It 'still reports a key it fails to remove for another reason than a refusal' {
+        $sub = "$script:key\Policy"
+        New-Item -Path "Registry::$sub" -Force | Out-Null
+        $entry = Get-TestEntry -Path $sub -Name 'Allow'
+        $entry.KeyExisted = $false
+        $entry.Ancestor = $script:key
+        # As when something adds a subkey between the check and the removal
+        $script:fake = [pscustomobject]@{}
+        $script:fake | Add-Member -MemberType ScriptMethod -Name DeleteValue -Value { param($n, $t) }
+        $script:fake | Add-Member -MemberType ScriptMethod -Name DeleteSubKey -Value { param($n, $t) throw (New-Object InvalidOperationException 'has subkeys') }
+        $script:fake | Add-Member -MemberType ScriptMethod -Name Close -Value { }
+        Mock Open-WmRegKey { $script:fake } -ParameterFilter { $Writable }
+        Restore-WmJournalEntry -Entry $entry | Should -BeFalse
+        Should -Invoke Write-WmLog -Times 0 -ParameterFilter { $Key -eq 'backup.key_not_removed' }
+        $script:warnings.Count | Should -Be 1
+        $script:warnings[0] | Should -BeLike "Could not restore *Policy\Allow : *"
+    }
 }
 
 Describe 'Set-WmRegValue' {
