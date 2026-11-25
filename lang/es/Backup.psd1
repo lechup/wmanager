@@ -6,4 +6,5 @@
     'backup.journal_foreign_owner'       = 'El diario de cambios {0} tiene un propietario ajeno ({1}).'
     'backup.journal_bad_line'            = 'Diario de cambios: se omite una línea dañada.'
     'backup.value_restore_failed'        = 'No se pudo restaurar {0} : {1}'
+    'backup.key_not_removed'             = 'La clave vacía {0} se queda: Windows no permitió eliminarla ({1}); una clave vacía no cambia nada.'
 }

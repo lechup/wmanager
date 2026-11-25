@@ -109,7 +109,8 @@ powershell -ExecutionPolicy Bypass -File C:\ProgramData\wmanager\Restore-Backup.
 ```
 
 It asks for confirmation, then puts every journaled value back (or removes it, and removes keys wmanager created
-if they are empty) for the computer and for every profile that still exists. Changes users made later in the same
+if they are empty; one Windows doesn't let go, such as the Widgets policy key `Dsh`, stays, with a note in the log:
+an empty key changes nothing) for the computer and for every profile that still exists. Changes users made later in the same
 keys are left alone. It also restores the default apps for new accounts from the first backup (or the Windows defaults
 if there were none), lists Store apps
 removed since then, and offers to disable the wmanager tasks (otherwise the scheduled update applies debloat again).

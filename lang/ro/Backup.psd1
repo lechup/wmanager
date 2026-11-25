@@ -6,4 +6,5 @@
     'backup.journal_foreign_owner'       = 'Jurnalul de anulare {0} are un proprietar străin ({1}).'
     'backup.journal_bad_line'            = 'Jurnalul de anulare: se omite o linie deteriorată.'
     'backup.value_restore_failed'        = 'Nu s-a putut restaura {0} : {1}'
+    'backup.key_not_removed'             = 'Cheia goală {0} rămâne: Windows nu a permis ștergerea ei ({1}); o cheie goală nu schimbă nimic.'
 }

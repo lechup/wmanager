@@ -6,4 +6,5 @@
     'backup.journal_foreign_owner'       = 'Het wijzigingsjournaal {0} heeft een onverwachte eigenaar ({1}).'
     'backup.journal_bad_line'            = 'Wijzigingsjournaal: beschadigde regel overgeslagen.'
     'backup.value_restore_failed'        = 'Kan {0} niet herstellen: {1}'
+    'backup.key_not_removed'             = 'De lege sleutel {0} blijft staan: Windows stond verwijderen niet toe ({1}); een lege sleutel verandert niets.'
 }
