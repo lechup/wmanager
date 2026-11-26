@@ -339,7 +339,8 @@ The untagged release exe asks for the server address and a code made in the pane
 ### Actions approved in advance
 
 Some actions are needed often and do no harm beyond their timing: restart, a Defender scan, an inventory refresh, the
-update now, a diagnostics bundle, Wake-on-LAN. They are started from the panel with one click, without a key:
+update now, a diagnostics bundle, Wake-on-LAN, and isolating a computer (the firewall lets through only the wmanager
+server) and lifting that. They are started from the panel with one click, without a key:
 
 - **The state lists them.** Each action has its script (from the library), the groups that may run it, run as SYSTEM
   or the user, and the limits of its parameters. A parameter is only a number within bounds or a choice from a fixed

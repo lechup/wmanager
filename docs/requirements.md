@@ -33,6 +33,18 @@
 | 24 | **Roles limited to groups**, e.g. a technician for one site of a company. | 2026-11-26 | to design |
 | 25 | **An audit log that can't be changed unnoticed** (each entry holds the hash of the one before), exportable. | 2026-11-26 | to design |
 | 26 | **Retention of logs and output per company**, with deletion after it (GDPR). | 2026-11-26 | to design |
+| 27 | **BitLocker with key escrow**: turning BitLocker on, and the recovery keys kept on the server (which can read them, as it can read secrets). | 2026-11-26 | to design |
+| 28 | **Isolating a computer**: an action approved in advance in which the firewall cuts the computer off from everything but the wmanager server, e.g. when an infection is suspected; another action lifts it. | 2026-11-26 | [Actions approved in advance](architecture.md#actions-approved-in-advance) |
+| 29 | **Security events**: failed sign-ins, changes to the local Administrators, new services and programs, USB drives plugged in; to the alerts and the SIEM export. | 2026-11-26 | to design |
+| 30 | **A lost laptop**: locked the next time it reaches the server, and wiped on request; always signed in `wmanager-sign`. | 2026-11-26 | to design |
+| 31 | **An employee joining and leaving**: a ready flow for the account, groups and drives; on leaving, the account disabled, the data kept safe and the computer provisioned again. Passwords as in requirement 11. | 2026-11-26 | to design |
+| 32 | **Staged rollouts**: a pilot group first also for packages and for big Windows updates (e.g. 24H2 to 25H2), not only for the wmanager version. | 2026-11-26 | to design |
+| 33 | **Drivers and BIOS**: updates with the makers' tools (Dell Command Update, Lenovo System Update, HP). | 2026-11-26 | to design |
+| 34 | **Maintenance windows**: when a group may restart and install, with a notice to the user before a restart. | 2026-11-26 | to design |
+| 35 | **Hardware records**: a computer assigned to a person and a site, its purchase date, warranty and notes. | 2026-11-26 | to design |
+| 36 | **Reports for billing**: the number of computers per company per month, and the job history, e.g. for invoices. | 2026-11-26 | to design |
+| 37 | **Hardware health**: SMART of the disks, battery wear, Windows activation, certificates about to expire. | 2026-11-26 | to design |
+| 38 | **Network devices**: the agent pings routers, printers and NAS and queries them over SNMP; the internet link of each site is watched. | 2026-11-26 | to design |
 
 ## Decisions so far
 
