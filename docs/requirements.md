@@ -45,6 +45,9 @@
 | 36 | **Reports for billing**: the number of computers per company per month, and the job history, e.g. for invoices. | 2026-11-26 | to design |
 | 37 | **Hardware health**: SMART of the disks, battery wear, Windows activation, certificates about to expire. | 2026-11-26 | to design |
 | 38 | **Network devices**: the agent pings routers, printers and NAS and queries them over SNMP; the internet link of each site is watched. | 2026-11-26 | to design |
+| 39 | **Wi-Fi profiles per group**: WPA2 and WPA3 Personal, the network's password a secret; WPA2 and WPA3 Enterprise (802.1X, PEAP or EAP-TLS) with the account or certificate it needs. | 2026-11-26 | to design |
+| 40 | **VPN profiles per group**: the VPN built into Windows (IKEv2, SSTP, L2TP), WireGuard and OpenVPN; the programs from Chocolatey, the keys and passwords secrets. | 2026-11-26 | to design |
+| 41 | **A ready list of packages to choose from**, not installed by default: wmanager suggests Chocolatey packages (Chrome, LibreOffice, Adobe Acrobat Reader, 7-Zip, VLC, RustDesk, Notepad++), and an administrator picks the ones a group gets. Nothing is installed on every computer unless a package list says so. | 2026-11-26 | to design |
 
 ## Decisions so far
 
