@@ -2,7 +2,7 @@
 
 > **Status: a design for review. Nothing in it is built yet.** wmanager today works as the other documents describe.
 > This document is the plan for v1, and every stage below is a pull request of its own. The requirements it must
-> meet are in [Requirements of v1](requirements.md).
+> meet are in [Requirements of v1](requirements.md); those marked "to design" there are not covered here yet.
 
 wmanager today needs no server. A person provisions a computer from a USB drive or with the one-liner. After that the
 computer pulls a signed management source (a Git repository, a web server or a share). It runs only what that
@@ -225,6 +225,8 @@ Someone in control of the server (or of Caddy, or of the database) **can**:
   key;
 - show a false picture in the panel (wrong names, statuses or output);
 - stop a single job before it starts;
+- start an [action approved in advance](#actions-approved-in-advance) at a bad time (e.g. restart every computer),
+  within its limits;
 - enroll a computer of its own with a valid token (it gets what a new computer gets);
 - fool a **new** computer, unless its enrollment is checked as [Enrolling a computer](#enrolling-a-computer)
   describes. It can serve an installer of its own or a false chain, or hand it an older signed state (as today).
@@ -334,6 +336,22 @@ The untagged release exe asks for the server address and a code made in the pane
     does harm.
   - A signed `stop` that arrives before its job is kept, and the job is refused when it comes.
 
+### Actions approved in advance
+
+Some actions are needed often and do no harm beyond their timing: restart, a Defender scan, an inventory refresh, the
+update now, a diagnostics bundle, Wake-on-LAN. They are started from the panel with one click, without a key:
+
+- **The state lists them.** Each action has its script (from the library), the groups that may run it, run as SYSTEM
+  or the user, and the limits of its parameters. A parameter is only a number within bounds or a choice from a fixed
+  list (e.g. a restart delay of 0-240 minutes), never free text. Each action also has a limit of runs per hour.
+- **The administrator signs that list once**, with the state, in `wmanager-sign`.
+- **The panel asks the agent to run an action.** The agent runs it only when it is in its verified state, the
+  computer is in one of its groups, the parameters fit their limits and the limit of runs isn't used up.
+- **Anything else is signed each time:** any other script, installing or removing a program, and a message to users
+  (free text from a hacked server would be a ready phishing message).
+- **Wake-on-LAN:** the panel asks an agent in the same network to wake a computer. The target is a computer from the
+  signed state, and the agent takes its MAC address from there.
+
 ## Updates
 
 - **One release tag** builds the payload ZIP, `wmanager-agent.exe`, `wmanager-sign` (Windows and Linux), the server
@@ -376,9 +394,12 @@ The untagged release exe asks for the server address and a code made in the pane
 
 ## Logs and monitoring
 
-- **Logs go through the agent and the server.** The payload writes the same lines as today, the agent sends them to
-  the server, and the server passes them to the company's Loki tenant. Computers hold no Loki token. The run records
-  that the Grafana dashboard reads stay.
+- **Logs stay on our side.** The payload writes the same lines as today, and the agent sends them to the server.
+  Computers hold no Loki token.
+  - The panel shows job output, the runs and the audit log from PostgreSQL.
+  - The server passes the full logs to the company's tenant in Loki next to the server (the self-hosting kit), with
+    today's Grafana dashboard and alerts. The run records that the dashboard reads stay.
+  - Grafana Cloud remains an option, not the default.
 - **Healthchecks.io goes.** Each connection of an agent is its sign of life, and the server stores the time it was
   last seen. Grafana reads it from PostgreSQL (a read-only user), for a panel of computers that are off and an alert,
   next to the Loki dashboard of today.
@@ -478,7 +499,8 @@ wmanager needs no closed component. The libraries named in this design fit: libf
 ## Not in v1
 
 - remote desktop or terminal (MeshCentral or RustDesk can run next to wmanager);
-- computers with macOS or Linux, and `wmanager-sign` on macOS;
+- computers with macOS, and `wmanager-sign` on macOS;
+- computers with Linux: they come after Windows (requirement 23);
 - more than one server instance;
 - secrets the server can't read;
 - signing from a phone;

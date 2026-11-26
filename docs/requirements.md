@@ -18,6 +18,21 @@
 | 9 | **An open-source license**: every part (server, agent, signer, payload) under an OSI-approved license, GPL v3 as today. Only dependencies whose licenses fit it (e.g. MIT, BSD, Apache 2.0, MPL 2.0), and no closed component needed to run it. | 2026-11-26 | [License](architecture.md#license) |
 | 10 | **What wmanager does today stays**: the provisioning steps, groups, packages, scripts, jobs, the startup, fixed-time, event and sign-in triggers, run-as user, secrets, the library, the ten languages, Loki and Grafana. | 2026-11-26 | [What stays the same](architecture.md#what-stays-the-same) |
 | 11 | **A person at the computer provisions it**, and the passwords are typed there, never stored. | 2026-11-26 | [Enrolling a computer](architecture.md#enrolling-a-computer) |
+| 12 | **Inventory with search**: hardware, programs and their versions, the Windows version, BitLocker, TPM, Secure Boot, Defender, local administrators and the last signed-in user, searchable across a company's computers (e.g. "Chrome older than X"). | 2026-11-26 | to design |
+| 13 | **Alerts**: a computer that is off, low disk space, a pending restart, old Defender signatures, a failed job; by e-mail and webhook. | 2026-11-26 | to design |
+| 14 | **A compliance report per company** (CSV and PDF): BitLocker, firewall, updates and more, e.g. for a client's audit or NIS2. | 2026-11-26 | to design |
+| 15 | **Windows Update under control**: the state of each computer, installing now or at a set time, and a restart the user can postpone. | 2026-11-26 | to design |
+| 16 | **Network discovery**: the agent finds devices without an agent in its local network (printers, NAS, unknown computers). | 2026-11-26 | to design |
+| 17 | **Wake-on-LAN**: an agent wakes a computer that is off in the same network. | 2026-11-26 | to design |
+| 18 | **One-click actions in the panel, approved in advance**: an administrator signs once a list of actions without free parameters (restart, Defender scan, inventory refresh, update now, a diagnostics bundle, Wake-on-LAN), and the panel starts them without a key. Anything else (any script, installing or removing a program, a message to users) is signed every time. | 2026-11-26 | [Actions approved in advance](architecture.md#actions-approved-in-advance) |
+| 19 | **Logs on our side**: job output, runs and the audit log in the panel (PostgreSQL); the computers' full logs in Loki next to the server (the self-hosting kit), with Grafana; Grafana Cloud only as an option. | 2026-11-26 | [Logs and monitoring](architecture.md#logs-and-monitoring) |
+| 20 | **SSO for the panel**: OIDC and SAML (Entra ID, Google Workspace, Keycloak, Authentik), roles from the provider's groups, MFA required at the provider. SSO opens only the panel: signing still needs a key in `wmanager-sign`. | 2026-11-26 | to design |
+| 21 | **Export to a SIEM, per company**: the audit log and security events from the computers (Defender detections, refused signatures, new computers), as syslog over TLS (JSON or CEF), a webhook or OpenTelemetry; enough for Splunk, Elastic, Sentinel and Wazuh. | 2026-11-26 | to design |
+| 22 | **API and webhooks**: a REST API with narrowly scoped tokens, and events sent to webhooks (e.g. a ticketing system). | 2026-11-26 | to design |
+| 23 | **Computers with Linux**, after Windows: the same server, agent and signatures, with a payload for Linux (apt or dnf, bash scripts, systemd timers). | 2026-11-26 | to design |
+| 24 | **Roles limited to groups**, e.g. a technician for one site of a company. | 2026-11-26 | to design |
+| 25 | **An audit log that can't be changed unnoticed** (each entry holds the hash of the one before), exportable. | 2026-11-26 | to design |
+| 26 | **Retention of logs and output per company**, with deletion after it (GDPR). | 2026-11-26 | to design |
 
 ## Decisions so far
 
@@ -27,6 +42,10 @@
 - Everything a computer acts on is signed in `wmanager-sign`, a program from the release on the administrator's
   computer, not in the panel: the panel's page comes from the server, so a hacked server could change what is signed
   there.
+- One-click actions are approved in advance: their scripts and parameter limits are in the signed state, and the
+  server decides only when and on which computers they run. A hacked server can start them at a bad time, never other
+  code.
+- Logs: what the panel shows in PostgreSQL, the full logs in Loki next to the server.
 - Secrets are typed in `wmanager-sign`. The signed state holds a salted hash of each value, and the computer keeps the
   values its scripts need, readable only by SYSTEM, so they work at startup and without a network.
 - The serverless mode of today is removed, with no migration: there are no computers in production.
@@ -36,3 +55,4 @@
 - **An architecture diagram in the documentation**, with its description. It must be visible on GitHub (drawn, not
   text art) and must replace the text diagram in [Parts](architecture.md#parts).
 - The [open questions](architecture.md#open-questions) of the design, each before its stage.
+- Requirements marked "to design": their place in [Architecture of v1](architecture.md) and the stages.
