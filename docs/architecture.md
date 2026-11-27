@@ -85,6 +85,7 @@ One server holds many companies, and each is kept apart:
 | Key | Where it is | What it signs | Who checks it |
 | --- | --- | --- | --- |
 | A company administrator's signing key | a FIDO2 security key (e.g. YubiKey) or Windows Hello, tied to that device (no passkey synced between devices), used only by `wmanager-sign` and the viewer of [remote support](#remote-support) | the company's admin lists, its states, its single jobs and its remote sessions | the agent, before acting |
+| The signing key of a person who is not an administrator | the same kind of key, used the same way | the single jobs, `stop`s and remote sessions of the computers in that person's units | the agent, against the person's rights in the signed state |
 | The release key | with the maintainer, off the server | each release's `SHA256SUMS` (every file, including the Linux `wmanager-sign`), and the Windows exe files (Authenticode) | Windows, the agent (the payload and its own updates), `wmanager-sign` (its own updates, and a version before it signs it) |
 | A computer's key | made on the computer at enrollment, in the TPM when there is one; the computer's id is the SHA-256 of its public key | the computer's sign-in to the server | the server |
 | The server's TLS certificate | Caddy (Let's Encrypt) | the connection | the agent and the browser |
@@ -127,7 +128,7 @@ holds a random 128-bit value instead, which makes each company's id unique.
 | Statement | Contents (in short) |
 | --- | --- |
 | `admins` | sequence number, hash of the previous version, administrators with their keys' public keys and algorithms |
-| `state` | serial number, the server's address, the release certificate, the computers (id, name, groups), every file with its SHA-256 (package lists, the groups' scripts, jobs and triggers, the settings), the wmanager version with the hashes of its files, a salted SHA-256 of each secret's value: today's `manifest.psd1` and `groups.psd1`, as JSON |
+| `state` | serial number, the server's address, the release certificate, the computers (id, name, groups), the people who are not administrators (their keys, units and rights), every file with its SHA-256 (package lists, the groups' scripts, jobs and triggers, the settings), the wmanager version with the hashes of its files, a salted SHA-256 of each secret's value: today's `manifest.psd1` and `groups.psd1`, as JSON |
 | `job` | a random 128-bit id, the ids of the computers it targets, the script's SHA-256, run as SYSTEM or the user, the secrets it may use, a time to start after, an expiry (at most 7 days after signing), a time limit |
 | `stop` | the id of a job, and the computers to stop it on: it stops the job when it runs, and refuses it when it arrives later |
 | `session` | a random 128-bit id, the computer, the technician, the public key the viewer made for this session, what the session may do (screen, keyboard, files), an expiry a few minutes after signing |
@@ -156,7 +157,8 @@ The agent accepts a statement only when all of this holds:
    *user verified* set (a touch, and a PIN or biometrics), and *backup eligible* not set (a synced passkey is
    refused);
 5. the signature is valid, with the algorithm the admin list names for that key, for a key in the company's current
-   admin list;
+   admin list. A `job`, a `stop` or a `session` may also be signed by the key of a person whom the state gives that
+   right for every computer it targets (see [People and their rights](#people-and-their-rights));
 6. it fits what the computer already has: an admin list has the next sequence number and the previous hash; a state
    has a higher serial than the last one; for a job, see [Single jobs](#single-jobs); a session opens once, before
    its expiry.
@@ -219,6 +221,28 @@ Show and sign (1-2), quit (q)?
   check on a VM in stage 2: that this works with Windows Hello. macOS comes later.
 - **`wmanager-sign` offers no signing from a phone.** This is the price of the property above.
 
+### People and their rights
+
+Requirement 24. A company's administrators can do everything in it. Anyone else gets rights to **units**: groups
+(e.g. a site or a department) and single computers (e.g. one laptop).
+
+| Right | What it allows in the person's units | Checked by |
+| --- | --- | --- |
+| seeing the data | the inventory, reports, logs and the output of jobs, in the panel | the server |
+| actions approved in advance | starting them from the panel | the server; the computer still checks the action's own limits |
+| remote session | view, control or files, as given; each session signed with the person's own key | the computer |
+| single jobs | scripts, signed with the person's own key; that is as much as full control of those computers | the computer |
+
+- **Only an administrator gives rights**, and a person can't pass them on. Rights that the computer checks are part
+  of the signed state: each person with the public keys of their signing keys, their units and their rights, given
+  in `wmanager-sign` like any change of the state. Rights that only the server checks are set in the panel.
+- **The agent's check:** a `job`, `stop` or `session` signed by a person's key is accepted only when the person has
+  that right and every computer it targets is in their units, with the groups taken from the verified state. A
+  person's key signs nothing else: no state and no admin list.
+- **Groups are resolved on the computer.** A server that moves a computer into a person's group in the panel widens
+  nothing: the computer goes by the groups in its signed state.
+- **Taking rights away** is a new state. A hacked server can withhold it, as it can an admin list that removes a key.
+
 ### What a hacked server can and can't do
 
 Someone in control of the server (or of Caddy, or of the database) **can**:
@@ -238,7 +262,7 @@ It **can't**, on an enrolled computer:
 
 - run a script, or change a group's content, a package list, a setting, a secret's value or the wmanager version;
 - make an administrator sign something other than what `wmanager-sign` shows;
-- add an administrator or a key to a company;
+- add an administrator or a key to a company, or give a person rights or widen them;
 - run a single job twice, after its expiry, or on a computer it doesn't target;
 - stop a job that is running, or make a computer go back to an older agent or state;
 - open a [remote session](#remote-support), or see or take part in one;
@@ -375,14 +399,14 @@ Requirement 42. Who allows a session and where the viewer runs are decided; the 
   the computer's public key from the verified state, not from the server, and the `session` statement names the key
   the viewer made for this session. A hacked server, as the ID server and the relay, can block a session but can't
   see it or take part in it.
+- **Who may connect:** the company's administrators, and the people with the right to remote sessions in their units
+  (see [People and their rights](#people-and-their-rights)).
 - **Logged:** each session (who, when, which computer, the files moved) goes to the audit log and the SIEM export.
 
 To design:
 
 - the protocol, and how much of RustDesk stays;
 - following RustDesk's releases;
-- whose keys may allow a session, and on which groups: with roles limited to groups (requirement 24); until then the
-  company's administrators;
 - whether a session needs a password at all once a signature allows it (requirement 42 asks that the agent pass it in
   a variable);
 - how long a `session` statement is valid;
@@ -445,7 +469,8 @@ To design:
 - **Sign-in:** a password (argon2id) and a mandatory second factor: a passkey or a TOTP code, with recovery codes.
   It applies to every account, with rate limits and a lockout.
 - **Roles:** the *owner* of the server makes companies and accounts. A company *admin* edits it and prepares
-  statements (signing still needs a key in the company's admin list). A *viewer* only reads.
+  statements (signing still needs a key in the company's admin list). Anyone else has the rights an administrator
+  gave them in their units (see [People and their rights](#people-and-their-rights)).
 - **Audit log:** who did what and when, including sign-ins and signatures, in the panel and in Loki.
 - **The panel is minimal:** few screens (companies, computers, groups and their files, jobs, installers, accounts,
   audit log), HTML from Go templates, no frontend framework and no build step. JavaScript only for passkeys, in one

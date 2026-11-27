@@ -30,7 +30,7 @@
 | 21 | **Export to a SIEM, per company**: the audit log and security events from the computers (Defender detections, refused signatures, new computers), as syslog over TLS (JSON or CEF), a webhook or OpenTelemetry; enough for Splunk, Elastic, Sentinel and Wazuh. | 2026-11-26 | to design |
 | 22 | **API and webhooks**: a REST API with narrowly scoped tokens, and events sent to webhooks (e.g. a ticketing system). | 2026-11-26 | to design |
 | 23 | **Computers with Linux**, after Windows: the same server, agent and signatures, with a payload for Linux (apt or dnf, bash scripts, systemd timers). | 2026-11-26 | to design |
-| 24 | **Roles limited to groups**, e.g. a technician for one site of a company. | 2026-11-26 | to design |
+| 24 | **Rights of people to units**: a person who is not an administrator gets rights to groups (e.g. one site of a company) and to single computers: seeing their data, the actions approved in advance, remote sessions and single jobs. Only the company's administrators give them. | 2026-11-26, extended 2026-11-27 | [People and their rights](architecture.md#people-and-their-rights) |
 | 25 | **An audit log that can't be changed unnoticed** (each entry holds the hash of the one before), exportable. | 2026-11-26 | to design |
 | 26 | **Retention of logs and output per company**, with deletion after it (GDPR). | 2026-11-26 | to design |
 | 27 | **BitLocker with key escrow**: turning BitLocker on, and the recovery keys kept on the server (which can read them, as it can read secrets). | 2026-11-26 | to design |
@@ -68,6 +68,9 @@
 - Remote support: the viewer is a program from the release, opened from the panel by a link, and the technician's
   key allows each session in it. The computer checks that signature against the signed state, so the panel's
   sign-in alone opens no session.
+- Rights of people: the units are groups and single computers. The rights the computer checks (remote sessions,
+  single jobs) are in the signed state, given by an administrator in `wmanager-sign`; seeing the data and the
+  actions approved in advance are checked by the server.
 
 ## Waiting to be done
 
