@@ -90,7 +90,13 @@ func (k Key) PublicKey() (PublicKey, error) {
 	return ParseCOSEKey(k.COSE)
 }
 
+// short is the start of a key id for a message; anything that isn't hex shows as "?", so a log gets no raw bytes.
 func short(id string) string {
+	for _, r := range id {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return "?"
+		}
+	}
 	if len(id) > 8 {
 		return id[:8]
 	}
@@ -108,8 +114,9 @@ type header struct {
 var MaxSize = map[string]int{TypeAdmins: 256 << 10, TypeState: 8 << 20, TypeJob: 1 << 20, TypeStop: 1 << 20,
 	TypeSession: 16 << 10}
 
-// MaxSerial is the largest serial and sequence: far beyond any real use, and far from where a number would wrap,
-// so a server reporting a huge serial can't make wmanager-sign sign the last one there is.
+// MaxSerial is the largest serial and sequence: far beyond any real use, and far from where a number would wrap.
+// It only keeps numbers sane: what stops a server's inflated report is wmanager-sign refusing a serial far above
+// the highest it knows (stage 2b).
 const MaxSerial = 1 << 53
 
 // members are the members of each type: all required, unless optional.
@@ -592,18 +599,26 @@ func checkNames(what string, names []string, max int) error {
 	return nil
 }
 
-// checkServer allows https://host[:port] and nothing else: no user, path, query or fragment.
+// checkServer allows exactly https://host[:port], the host in lower case, the port without leading zeros, and
+// nothing after it: one address has one spelling.
 func checkServer(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || !strings.HasPrefix(raw, "https://") || u.Host == "" || u.User != nil ||
-		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(u.Host, ":") {
-		return bad("state: server %q is not https://host[:port]", raw)
+	if err != nil || u.Hostname() == "" {
+		return bad("state: server is not https://host[:port]")
+	}
+	want := "https://" + strings.ToLower(u.Hostname())
+	if strings.Contains(u.Hostname(), ":") {
+		want = "https://[" + strings.ToLower(u.Hostname()) + "]"
 	}
 	if p := u.Port(); p != "" {
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 1 || n > 65535 {
-			return bad("state: server %q has a bad port", raw)
+			return bad("state: server has a bad port")
 		}
+		want += ":" + strconv.Itoa(n)
+	}
+	if raw != want {
+		return bad("state: server %q is not written as %q", clip(raw), want)
 	}
 	return nil
 }

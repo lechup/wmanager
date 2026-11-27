@@ -15,8 +15,9 @@ The key signs its authenticator data followed by the SHA-256 of the client data,
 statement's bytes as its challenge (relying party `wmanager-sign.invalid`, origin `wmanager-sign:v1`). Nothing is put
 into a canonical form: the hash is of the bytes as they are.
 
-Every statement is a JSON object with exactly the members of its type, each once, in its exact case and none null
-(the members marked so below may be left out); an unknown member, a missing one, a member twice, another case or
+Every statement is a JSON object with exactly the members of its type, each once, in its exact case and, at its top
+level, none missing or null (the members marked so below may be left out; a list or map inside, such as a
+computer's groups, may be empty); an unknown member, a missing one, a member twice, another case or
 data after the object refuse it. Its size is checked before anything is read: an admin list up to 256 KiB, a state
 up to 8 MiB, a job or a stop up to 1 MiB, a session up to 16 KiB. Except for the first admin list, which is checked
 against the fingerprint first, the signature is checked before the statement is read. Every one has:

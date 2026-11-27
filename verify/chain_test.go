@@ -471,3 +471,63 @@ func TestFingerprint(t *testing.T) {
 		t.Fatal("a shortened fingerprint matches")
 	}
 }
+
+func TestUpdateKinds(t *testing.T) {
+	c := newCompany(t)
+	held, err := verify.VerifyChain(c.fingerprint(), c.lists)
+	if err != nil {
+		t.Fatal(err)
+	}
+	annaOnly := []verify.Administrator{{Name: "Anna", Keys: []verify.Key{c.anna.ListKey()}}}
+	c.lists = append(c.lists, c.next(c.anna, annaOnly...))
+	if err := held.Update(c.lists); err != nil {
+		t.Fatal(err)
+	}
+	// Older: the server is behind.
+	if err := held.Update(c.lists[:1]); !errors.Is(err, verify.ErrOlderChain) {
+		t.Fatalf("a prefix: %v", err)
+	}
+	// Forked and shorter: still a fork.
+	other := newCompany(t)
+	if err := held.Update(other.lists); !errors.Is(err, verify.ErrForkedChain) {
+		t.Fatalf("a shorter fork: %v", err)
+	}
+	// All or none: [1,2,good 3,bad 4] leaves the held chain at 2 lists.
+	good := c.next(c.anna, annaOnly...)
+	c.lists = append(c.lists, good)
+	bad := c.next(newKey(t, verify.ES256), annaOnly...)
+	if err := held.Update(append(append([]verify.Signed{}, c.lists...), bad)); err == nil {
+		t.Fatal("a bad last list accepted")
+	}
+	if len(held.Lists) != 2 {
+		t.Fatalf("a refused update changed the chain to %d lists", len(held.Lists))
+	}
+}
+
+func TestUnsignedInputStaysSmall(t *testing.T) {
+	c := newCompany(t)
+	ch, _ := verify.VerifyChain(c.fingerprint(), c.lists)
+	s := sign(t, c.anna, marshal(t, state(t, c, 3)))
+	big := s
+	big.ClientDataJSON = []byte(`{"type":"` + strings.Repeat("x", 9<<20) + `"}`)
+	if _, err := ch.VerifyState(big, 0); err == nil || len(err.Error()) > 300 {
+		t.Fatalf("large unsigned client data: %d bytes of error", len(err.Error()))
+	}
+	odd := s
+	odd.Key = "\n\x1b[31mFAKE"
+	if _, err := ch.VerifyState(odd, 0); err == nil || strings.ContainsAny(err.Error(), "\n\x1b") {
+		t.Fatalf("a key id with control characters reached the message: %q", err)
+	}
+	for _, server := range []string{"https://WM.example.com", "https://wm.example.com/", "https://wm.example.com?", "https://wm.example.com#", "https://wm.example.com:0443"} {
+		st := state(t, c, 3)
+		st.Server = server
+		if _, err := verify.ParseState(marshal(t, st)); err == nil {
+			t.Errorf("server %q accepted", server)
+		}
+	}
+	st := state(t, c, 3)
+	st.Server = "https://wm.example.com:8443"
+	if _, err := verify.ParseState(marshal(t, st)); err != nil {
+		t.Errorf("a server with a port: %v", err)
+	}
+}

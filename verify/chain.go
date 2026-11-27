@@ -3,6 +3,7 @@ package verify
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
@@ -32,6 +33,9 @@ type Signer struct {
 func checkSignedBy(s Signed, keys map[string]Signer, typ string) (Signer, error) {
 	if len(s.Statement) > MaxSize[typ] {
 		return Signer{}, bad("%s of %d bytes, more than %d", typ, len(s.Statement), MaxSize[typ])
+	}
+	if !hex64.MatchString(s.Key) {
+		return Signer{}, fmt.Errorf("%w: a key id that isn't one", ErrSignature)
 	}
 	k, ok := keys[s.Key]
 	if !ok {
@@ -98,23 +102,33 @@ func (c *Chain) Extend(next Signed) error {
 	return nil
 }
 
+// Errors of Update. ErrOlderChain means the server is behind (a backup restored, a list not passed on yet): keep the
+// chain held, no alarm. ErrForkedChain means a chain that leaves the held one, signed by keys of an earlier list:
+// a key that was removed and a server that hands out its lists. That is an alarm.
+var (
+	ErrOlderChain  = errors.New("verify: an older chain than the one held")
+	ErrForkedChain = errors.New("verify: a chain that leaves the one held")
+)
+
 // Update takes a chain received later (check 6 for admin lists): it must start with every list held, byte for
-// byte, and the lists after them are added with Extend. A shorter chain, or one that leaves the held one at any
-// point, is refused: an older list, or a fork signed by a key removed since, would bring that key back.
+// byte, and the lists after them are added with Extend, all or none. A shorter chain is refused as older, one that
+// leaves the held one at any point as forked: either could bring back a key removed since.
 func (c *Chain) Update(lists []Signed) error {
-	if len(lists) < len(c.Signed) {
-		return bad("a chain of %d admin lists, older than the %d held", len(lists), len(c.Signed))
-	}
-	for i, held := range c.Signed {
-		if !bytes.Equal(held.Statement, lists[i].Statement) {
-			return bad("admin list %d differs from the one held", i+1)
+	for i := 0; i < len(lists) && i < len(c.Signed); i++ {
+		if !bytes.Equal(c.Signed[i].Statement, lists[i].Statement) {
+			return fmt.Errorf("%w: admin list %d differs", ErrForkedChain, i+1)
 		}
 	}
-	for _, next := range lists[len(c.Signed):] {
-		if err := c.Extend(next); err != nil {
+	if len(lists) < len(c.Signed) {
+		return fmt.Errorf("%w: %d admin lists, %d held", ErrOlderChain, len(lists), len(c.Signed))
+	}
+	next := &Chain{Company: c.Company, Lists: append([]*Admins{}, c.Lists...), Signed: append([]Signed{}, c.Signed...)}
+	for _, s := range lists[len(c.Signed):] {
+		if err := next.Extend(s); err != nil {
 			return err
 		}
 	}
+	c.Lists, c.Signed = next.Lists, next.Signed
 	return nil
 }
 
