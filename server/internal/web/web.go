@@ -1,5 +1,6 @@
 // Package web is the panel (requirement 8): few screens of plain HTML from Go templates, no frontend framework and
-// no build step, and no JavaScript in this stage. It signs nothing: statements are signed in wmanager-sign.
+// no build step. Its only JavaScript is one small static file for passkeys (static/passkey.js). It signs nothing:
+// statements are signed in wmanager-sign.
 //
 // Every response carries a strict Content Security Policy. Forms that change something are refused when they
 // come from another site (Sec-Fetch-Site or Origin) or, inside a session, without the session's CSRF token. The
@@ -72,15 +73,18 @@ var funcs = template.FuncMap{
 	// t is replaced per request with the request's language.
 	"t":    func(key string, args ...any) string { return key },
 	"time": func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05 UTC") },
+	"b64":  func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) },
 }
 
 // Handler is the panel's routes, with its protections around them.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /static/style.css", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		http.ServeFileFS(w, r, files, "static/style.css")
-	})
+	for _, f := range []string{"style.css", "passkey.js"} {
+		mux.HandleFunc("GET /static/"+f, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			http.ServeFileFS(w, r, files, "static/"+f)
+		})
+	}
 	mux.HandleFunc("GET /healthz", s.healthz)
 
 	mux.HandleFunc("GET /signin", s.signinPage)
@@ -89,11 +93,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /signin/code", s.passwordStep(s.code))
 	mux.HandleFunc("GET /signin/totp", s.passwordStep(s.totpPage))
 	mux.HandleFunc("POST /signin/totp", s.passwordStep(s.totp))
+	mux.HandleFunc("POST /signin/passkey/begin", s.passwordStep(s.passkeySignInBegin))
+	mux.HandleFunc("POST /signin/passkey/finish", s.passwordStep(s.passkeySignInFinish))
 	mux.HandleFunc("GET /setup/{token}", s.setupPage)
 	mux.HandleFunc("POST /setup/{token}", s.setup)
 	mux.HandleFunc("POST /signout", s.full(s.signout))
 
 	mux.HandleFunc("GET /{$}", s.full(s.home))
+	mux.HandleFunc("GET /account", s.full(s.account))
+	mux.HandleFunc("POST /account/passkey/begin", s.full(s.passkeyAddBegin))
+	mux.HandleFunc("POST /account/passkey/finish", s.full(s.passkeyAddFinish))
+	mux.HandleFunc("POST /account/passkey/remove", s.full(s.passkeyRemove))
 	mux.HandleFunc("GET /c/{company}", s.full(s.company))
 	mux.HandleFunc("GET /c/{company}/audit.json", s.full(s.auditExport))
 	mux.HandleFunc("GET /c/{company}/audit.csv", s.full(s.auditExport))
@@ -121,8 +131,8 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 func headers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; "+
-			"frame-ancestors 'none'; base-uri 'none'")
+		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; "+
+			"img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
@@ -237,9 +247,14 @@ func csrf(sessionToken string) string {
 	return base64.RawURLEncoding.EncodeToString(h[:])
 }
 
+// csrfOK checks a form's token, or, for the passkeys' JSON requests, the X-CSRF-Token header.
 func csrfOK(r *http.Request) bool {
 	t := token(r)
-	return t != "" && subtle.ConstantTimeCompare([]byte(r.PostFormValue("csrf")), []byte(csrf(t))) == 1
+	got := r.Header.Get("X-CSRF-Token")
+	if got == "" && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		got = r.PostFormValue("csrf")
+	}
+	return t != "" && subtle.ConstantTimeCompare([]byte(got), []byte(csrf(t))) == 1
 }
 
 type handler func(w http.ResponseWriter, r *http.Request, ses auth.Session)
@@ -405,7 +420,17 @@ func (s *Server) codePage(w http.ResponseWriter, r *http.Request, ses auth.Sessi
 		http.Redirect(w, r, "/signin/totp", http.StatusSeeOther)
 		return
 	}
-	s.render(w, r, http.StatusOK, "code", nil, Page{})
+	s.renderCode(w, r, http.StatusOK, "")
+}
+
+// renderCode shows the page of the second factor, with the passkey button when the account has a passkey.
+func (s *Server) renderCode(w http.ResponseWriter, r *http.Request, status int, errKey string) {
+	has, err := s.Auth.HasPasskeys(r.Context(), token(r))
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	s.render(w, r, status, "code", nil, Page{Error: errKey, Data: has})
 }
 
 func (s *Server) code(w http.ResponseWriter, r *http.Request, ses auth.Session) {
@@ -420,7 +445,7 @@ func (s *Server) code(w http.ResponseWriter, r *http.Request, ses auth.Session) 
 			s.internal(w, r, err)
 			return
 		}
-		s.render(w, r, status, "code", nil, Page{Error: key})
+		s.renderCode(w, r, status, key)
 		return
 	}
 	s.setCookie(w, full, auth.SessionMax)
@@ -772,4 +797,128 @@ func (s *Server) member(w http.ResponseWriter, r *http.Request, ses auth.Session
 func (s *Server) unlock(w http.ResponseWriter, r *http.Request, ses auth.Session) {
 	err := accounts.Unlock(r.Context(), s.Store, accounts.Actor{AccountID: ses.AccountID}, r.PostFormValue("email"))
 	s.afterAdmin(w, r, ses, err)
+}
+
+// --- passkeys
+
+func (s *Server) rp(r *http.Request) (auth.RP, error) {
+	if s.PublicURL != "" {
+		return auth.RPFor(s.PublicURL)
+	}
+	return auth.RPFor("https://" + r.Host)
+}
+
+func jsonOut(w http.ResponseWriter, status int, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(body)
+}
+
+// jsonFail answers a passkey request that didn't work, with no detail for the page (its text is the page's own).
+func (s *Server) jsonFail(w http.ResponseWriter, r *http.Request, err error) {
+	status := http.StatusBadRequest
+	switch {
+	case errors.Is(err, auth.ErrLocked):
+		status = http.StatusForbidden
+	case errors.Is(err, auth.ErrTooMany):
+		status = http.StatusTooManyRequests
+	case errors.Is(err, auth.ErrNoSession), errors.Is(err, auth.ErrWrongStage):
+		status = http.StatusUnauthorized
+	case errors.Is(err, auth.ErrPasskey), errors.Is(err, auth.ErrNoCeremony), errors.Is(err, auth.ErrNoPasskeys),
+		errors.Is(err, auth.ErrBadName), errors.Is(err, auth.ErrCode):
+	default:
+		s.Log.Error("passkey", "path", r.URL.Path, "err", err)
+		status = http.StatusInternalServerError
+	}
+	jsonOut(w, status, []byte(`{"error":true}`))
+}
+
+func readJSON(r *http.Request) ([]byte, error) {
+	var b bytes.Buffer
+	_, err := b.ReadFrom(r.Body)
+	return b.Bytes(), err
+}
+
+func (s *Server) passkeySignInBegin(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	rp, err := s.rp(r)
+	if err == nil {
+		var opts []byte
+		if opts, err = s.Auth.BeginPasskeySignIn(r.Context(), rp, token(r)); err == nil {
+			jsonOut(w, http.StatusOK, opts)
+			return
+		}
+	}
+	s.jsonFail(w, r, err)
+}
+
+func (s *Server) passkeySignInFinish(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	body, err := readJSON(r)
+	rp, err2 := s.rp(r)
+	if err == nil {
+		err = err2
+	}
+	var full string
+	if err == nil {
+		full, err = s.Auth.FinishPasskeySignIn(r.Context(), rp, s.clientAddr(r), token(r), body)
+	}
+	if err != nil {
+		s.jsonFail(w, r, err)
+		return
+	}
+	s.setCookie(w, full, auth.SessionMax)
+	jsonOut(w, http.StatusOK, []byte(`{"redirect":"/"}`))
+}
+
+// AccountPage is the data of the account's page.
+type AccountPage struct {
+	Passkeys []auth.Passkey
+}
+
+func (s *Server) account(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	keys, err := s.Auth.Passkeys(r.Context(), token(r))
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "account", &ses, Page{Data: AccountPage{Passkeys: keys}})
+}
+
+func (s *Server) passkeyAddBegin(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	rp, err := s.rp(r)
+	if err == nil {
+		var opts []byte
+		if opts, err = s.Auth.BeginPasskeyRegistration(r.Context(), rp, token(r)); err == nil {
+			jsonOut(w, http.StatusOK, opts)
+			return
+		}
+	}
+	s.jsonFail(w, r, err)
+}
+
+func (s *Server) passkeyAddFinish(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	body, err := readJSON(r)
+	rp, err2 := s.rp(r)
+	if err == nil {
+		err = err2
+	}
+	if err == nil {
+		err = s.Auth.FinishPasskeyRegistration(r.Context(), rp, token(r), r.URL.Query().Get("name"), body)
+	}
+	if err != nil {
+		s.jsonFail(w, r, err)
+		return
+	}
+	jsonOut(w, http.StatusOK, []byte(`{"redirect":"/account"}`))
+}
+
+func (s *Server) passkeyRemove(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	id, err := base64.RawURLEncoding.DecodeString(r.PostFormValue("id"))
+	if err == nil {
+		err = s.Auth.RemovePasskey(r.Context(), token(r), id)
+	}
+	if err != nil && !errors.Is(err, auth.ErrNoSuchKey) {
+		s.internal(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/account", http.StatusSeeOther)
 }
