@@ -4,7 +4,9 @@
 # (a write token only sends, a read token only reads and can't delete, a company sees only its own lines, a wrong login
 # and other paths are refused), the management sources (each company's computers read only theirs, with its header,
 # GET only, no listing, no way out with ..), and Grafana: the data source of each company reads its tenant only, the
-# dashboard and the alert rules are provisioned.
+# dashboard and the alert rules are provisioned. And wmanager-server: built from this repository, behind Caddy, with its
+# PostgreSQL roles; the owner made with selfhosted.sh, a sign-in, its headers, the audit heads in Loki, a backup and a
+# restore.
 #
 # Usage: tests/ci/check-selfhosted.sh            (needs docker with compose, curl, openssl and python3)
 set -euo pipefail
@@ -12,6 +14,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 project=wmself$$
+export COMPOSE_PROJECT_NAME=$project   # selfhosted.sh's own docker compose commands reach the same project
 cleanup() {
     (cd "$work/examples/selfhosted" 2>/dev/null && docker compose -p "$project" down -v >/dev/null 2>&1) || true
     rm -rf "$work"
@@ -23,12 +26,18 @@ failures=0
 
 mkdir -p "$work/examples"
 cp -r "$root/examples/selfhosted" "$root/examples/grafana" "$work/examples/"
+# What server/Dockerfile builds from (the compose file's build context is the repository's top)
+cp -r "$root/go.mod" "$root/go.sum" "$root/verify" "$root/internal" "$root/server" "$root/.dockerignore" "$work/"
 cd "$work/examples/selfhosted"
 free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
 http_port=$(free_port)
 https_port=$(free_port)
 export CADDY_HTTP_PORT=$http_port CADDY_HTTPS_PORT=$https_port CADDY_GLOBAL=local_certs
-LOKI_DOMAIN=loki.localhost GRAFANA_DOMAIN=grafana.localhost ACME_EMAIL=ci@example.test ./selfhosted.sh init
+export PANEL_PORT_SUFFIX=":$https_port" WMANAGER_LOKI_HEAD_EVERY=3s
+LOKI_DOMAIN=loki.localhost GRAFANA_DOMAIN=grafana.localhost PANEL_DOMAIN=panel.localhost ACME_EMAIL=ci@example.test \
+    ./selfhosted.sh init
+[[ $(stat -c %a secrets) == 700 ]] || { echo "ERROR: secrets/ can be opened by others" >&2; exit 1; }
+grep -q "$(cat secrets/server-password)" .env && { echo "ERROR: a database password in .env" >&2; exit 1; }
 ./selfhosted.sh add-company acme > acme.txt
 ./selfhosted.sh add-company globex > globex.txt
 ./selfhosted.sh list
@@ -125,6 +134,46 @@ n=$(echo "$rules" | python3 -c 'import json, sys; print(len(json.load(sys.stdin)
 want=$(( 2 * $(grep -c -- '- alert:' ../grafana/wmanager-alerts.yaml) ))
 [[ $n == "$want" ]] && ok "the alert rules of both companies ($n)" || fail "alert rules: $n, not $want"
 echo "$rules" | grep -q '"title":"acme: WmanagerSilent"' && ok 'the rules are named by company' || fail 'rule titles'
+
+# --- wmanager-server behind Caddy -------------------------------------------------------------------------------
+panel() { curl -sk --resolve "panel.localhost:$https_port:127.0.0.1" "$@"; }
+purl="https://panel.localhost:$https_port"
+for _ in $(seq 1 120); do [[ $(panel -o /dev/null -w '%{http_code}' "$purl/healthz") == 200 ]] && break; sleep 1; done
+[[ $(panel -o /dev/null -w '%{http_code}' "$purl/healthz") == 200 ]] && ok 'the panel answers through Caddy' || fail 'no panel'
+owner_pw=$(openssl rand -hex 12)
+if printf '%s\n' "$owner_pw" | ./selfhosted.sh create-owner owner@example.test | grep -q 'owner owner@example.test made'; then
+    ok 'create-owner makes the owner, the password from a pipe'
+else
+    fail 'create-owner'
+fi
+signin() {   # prints the status and the redirect of a sign-in with the owner's password
+    panel -o /dev/null -w '%{http_code} %{redirect_url}' --data-urlencode email=owner@example.test \
+        --data-urlencode "password=$1" "$purl/signin"
+}
+[[ $(signin "$owner_pw") == "303 $purl/signin/totp" ]] && ok 'the owner signs in, then sets up the second factor' || fail "sign-in: $(signin "$owner_pw")"
+[[ $(signin wrong-password-here) == '401 ' ]] && ok 'a wrong password is refused' || fail 'a wrong password'
+hdrs=$(panel -D - -o /dev/null "$purl/signin")
+echo "$hdrs" | grep -qi "^content-security-policy: default-src 'none'" && echo "$hdrs" | grep -qi '^strict-transport-security:' &&
+    ok "the panel's headers (CSP, HSTS)" || fail "headers: $hdrs"
+[[ $(panel -o /dev/null -w '%{http_code}' -H 'Sec-Fetch-Site: cross-site' --data email=x "$purl/signin") == 403 ]] &&
+    ok 'a form from another site is refused' || fail 'a cross-site form'
+heads=''
+for _ in $(seq 1 30); do
+    heads=$(docker compose -p "$project" exec -T grafana wget -qO- --header 'X-Scope-OrgID: wmanager-server' \
+        'http://loki:3100/loki/api/v1/query_range?query=%7Bjob%3D%22audit-head%22%7D&limit=10' 2>/dev/null || true)
+    [[ $heads == *'\"chain\":\"server\"'* ]] && break
+    sleep 2
+done
+[[ $heads == *'\"chain\":\"server\"'* ]] && ok "the audit log's head reaches Loki" || fail "no audit head in Loki: $heads"
+./selfhosted.sh backup > backup.txt
+dump=$(sed -n 's/^Written \(backups\/[^ ]*\.dump\)\..*/\1/p' backup.txt)
+[[ -s $dump && $(stat -c %a "$dump") == 600 ]] && ok 'a backup, readable by its owner only' || fail "backup: $(cat backup.txt)"
+if ./selfhosted.sh restore "$dump" > restore.txt 2>&1; then
+    for _ in $(seq 1 60); do [[ $(panel -o /dev/null -w '%{http_code}' "$purl/healthz") == 200 ]] && break; sleep 1; done
+    [[ $(signin "$owner_pw") == "303 $purl/signin/totp" ]] && ok 'after a restore the owner still signs in' || fail 'sign-in after the restore'
+else
+    fail "restore: $(cat restore.txt)"
+fi
 
 if (( failures > 0 )); then
     docker compose -p "$project" logs --tail 30

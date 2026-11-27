@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# wmanager: Grafana and Loki of your own, on a server with Docker (docs/monitoring.md: Hosting Grafana and Loki yourself).
-# Run it in this folder, with ../grafana next to it (as in the repository).
+# wmanager: Grafana and Loki of your own, on a server with Docker (docs/monitoring.md: Hosting Grafana and Loki yourself),
+# and wmanager-server with its PostgreSQL (docs/server.md). Run it in this folder, with ../grafana next to it (as in the
+# repository).
 #
 #   ./selfhosted.sh init                   the server's names, the e-mail for the certificates; writes .env (with a
-#                                          Grafana admin password), copies the dashboard
+#                                          Grafana admin password) and secrets/ (the database's passwords), copies
+#                                          the dashboard
 #   ./selfhosted.sh add-company <name>     a Loki tenant for the company (the next number from 1001), its logins
 #                                          (a write token for the computers, a read token for tools/wm.ps1 status;
 #                                          only their hashes are kept), a Grafana data source and its alert rules,
@@ -14,11 +16,15 @@
 #   ./selfhosted.sh address <name>         where the computers read the company's source, and its folder here (for
 #                                          tools/wm.ps1 <company> target, over ssh)
 #   ./selfhosted.sh list                   the companies, their tenant numbers and source addresses
+#   ./selfhosted.sh create-owner <e-mail>  the owner of wmanager-server, once it runs; asks for the password (or reads
+#                                          one line from a pipe)
+#   ./selfhosted.sh backup                 a dump of wmanager-server's database into backups/ (only you can read it)
+#   ./selfhosted.sh restore <file>         put a dump back: stops wmanager-server, replaces its database, starts it
 #
 # A company's name is the one tools/wm.ps1 uses (letters, digits, . _ -); addresses and file names use it in lower
 # case with . and _ as -.
 # Then docker compose up -d (after add-company: docker compose restart caddy grafana). init takes its answers from
-# LOKI_DOMAIN, GRAFANA_DOMAIN and ACME_EMAIL when they are set. Needs docker, openssl and python3.
+# LOKI_DOMAIN, GRAFANA_DOMAIN, PANEL_DOMAIN and ACME_EMAIL when they are set. Needs docker, openssl and python3.
 set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -37,27 +43,70 @@ valid_name() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{1,39}$ && $1 =~ [A-Za-z] && $
 known() { [[ -f $tenants ]] && awk -v n="$1" '$1 == n { found = 1 } END { exit !found }' "$tenants"; }
 domain() { sed -n 's/^LOKI_DOMAIN=//p' .env; }
 
+# The database's passwords and connection strings, as Docker secrets: a folder only you can open, with files the
+# containers' own users can read. Kept when they are there.
+write_secrets() {
+    [[ -f secrets/server-password ]] && return
+    (umask 077; mkdir -p secrets)
+    chmod 700 secrets
+    local pg owner server
+    pg=$(openssl rand -hex 24); owner=$(openssl rand -hex 24); server=$(openssl rand -hex 24)
+    printf '%s' "$pg" > secrets/postgres-password
+    printf '%s' "$owner" > secrets/owner-password
+    printf '%s' "$server" > secrets/server-password
+    printf 'postgres://wmanager:%s@postgres:5432/wmanager?sslmode=disable' "$server" > secrets/database-url
+    printf 'postgres://wmanager_owner:%s@postgres:5432/wmanager?sslmode=disable' "$owner" > secrets/migrate-database-url
+    echo "Written secrets/ (the database's passwords; only you can open the folder)."
+}
+
 cmd_init() {
     for c in docker openssl python3; do command -v "$c" >/dev/null || die "$c not found"; done
     [[ -f ../grafana/wmanager-dashboard.json ]] || die "../grafana/wmanager-dashboard.json not found: keep this folder next to examples/grafana"
     mkdir -p caddy/sources sources grafana/provisioning/datasources grafana/provisioning/alerting grafana/dashboards
     touch caddy/push-users caddy/read-users "$tenants"
     cp ../grafana/wmanager-dashboard.json grafana/dashboards/
-    chmod -R a+rX loki.yaml Caddyfile grafana   # a checkout made with umask 077 too (nothing secret in them)
+    # wmanager-server's tenant: the heads of its audit log (docs/server.md)
+    cat > grafana/provisioning/datasources/wmanager-server.yaml <<'EOF'
+# The Loki tenant of wmanager-server: the heads of its audit log (selfhosted.sh init)
+apiVersion: 1
+datasources:
+  - name: Loki wmanager-server
+    uid: loki-wmanager-server
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: 'wmanager-server'
+EOF
+    chmod -R a+rX loki.yaml Caddyfile grafana postgres   # a checkout made with umask 077 too (nothing secret in them)
+    write_secrets
     if [[ -f .env ]]; then
+        if ! grep -q '^PANEL_DOMAIN=' .env; then
+            local panel=${PANEL_DOMAIN:-}
+            [[ -n $panel ]] || read -rp "Name for wmanager-server's panel (e.g. wm.example.com): " panel
+            [[ $panel =~ ^[A-Za-z0-9.-]+$ ]] || die "a server name: letters, digits, dots and dashes"
+            echo "PANEL_DOMAIN=$panel" >> .env
+            echo "Added PANEL_DOMAIN to .env."
+        fi
         echo ".env is there already; kept. The dashboard is copied again."
         return
     fi
-    local loki=${LOKI_DOMAIN:-} grafana=${GRAFANA_DOMAIN:-} email=${ACME_EMAIL:-}
+    local loki=${LOKI_DOMAIN:-} grafana=${GRAFANA_DOMAIN:-} panel=${PANEL_DOMAIN:-} email=${ACME_EMAIL:-}
     [[ -n $loki ]] || read -rp "Name of the server the computers send logs to (e.g. logs.example.com): " loki
     [[ -n $grafana ]] || read -rp "Name for Grafana (e.g. grafana.example.com): " grafana
+    [[ -n $panel ]] || read -rp "Name for wmanager-server's panel (e.g. wm.example.com): " panel
     [[ -n $email ]] || read -rp "E-mail for the certificates (Let's Encrypt): " email
-    [[ $loki =~ ^[A-Za-z0-9.-]+$ && $grafana =~ ^[A-Za-z0-9.-]+$ ]] || die "a server name: letters, digits, dots and dashes"
+    [[ $loki =~ ^[A-Za-z0-9.-]+$ && $grafana =~ ^[A-Za-z0-9.-]+$ && $panel =~ ^[A-Za-z0-9.-]+$ ]] ||
+        die "a server name: letters, digits, dots and dashes"
     [[ $email == *@* ]] || die "an e-mail address, please"
     (umask 077; {
-        echo "# wmanager: Grafana and Loki of your own (selfhosted.sh init). Both names must point to this server."
+        echo "# wmanager: Grafana and Loki of your own, and wmanager-server (selfhosted.sh init). All three names must"
+        echo "# point to this server."
         echo "LOKI_DOMAIN=$loki"
         echo "GRAFANA_DOMAIN=$grafana"
+        echo "PANEL_DOMAIN=$panel"
         echo "ACME_EMAIL=$email"
         echo "GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 16)"
         echo "# E-mail for the alerts (Grafana: Alerting > Contact points), e.g. SMTP_HOST=smtp.example.com:587"
@@ -68,7 +117,8 @@ cmd_init() {
         echo "SMTP_FROM="
     } > .env)
     echo "Written .env (readable by you only). Grafana: https://$grafana, user admin, the password in .env."
-    echo "Next: ./selfhosted.sh add-company <name>, then docker compose up -d"
+    echo "Next: ./selfhosted.sh add-company <name>, then docker compose up -d, then ./selfhosted.sh create-owner <e-mail>"
+    echo "(the panel: https://$panel)"
 }
 
 # A password hash for Caddy's basic_auth; the token goes in on stdin, not on a command line
@@ -197,6 +247,36 @@ cmd_address() {
     echo "folder sources/$id"
 }
 
+# wmanager-server's owner. The password is typed at the terminal (or one line comes from a pipe); it never goes on a
+# command line.
+cmd_create_owner() {
+    local email=$1 tty=()
+    [[ -t 0 ]] || tty=(-T)
+    docker compose exec "${tty[@]}" wmanager /usr/local/bin/wmanager-server create-owner "$email"
+}
+
+# A dump of wmanager-server's database (custom format, with its roles' ownership), readable by you only
+cmd_backup() {
+    (umask 077; mkdir -p backups)
+    local file
+    file=backups/wmanager-$(date -u +%Y%m%dT%H%M%SZ).dump
+    (umask 077; docker compose exec -T postgres pg_dump --username postgres --format custom wmanager > "$file")
+    [[ -s $file ]] || { rm -f "$file"; die "the dump is empty"; }
+    echo "Written $file. Keep a copy off this server (it holds the secrets' values the server keeps)."
+}
+
+cmd_restore() {
+    local file=$1
+    [[ -s $file ]] || die "no dump $file"
+    docker compose stop wmanager
+    docker compose exec -T postgres psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres -q -c \
+        "DROP DATABASE IF EXISTS wmanager WITH (FORCE)" -c "CREATE DATABASE wmanager OWNER wmanager_owner" \
+        -c "REVOKE ALL ON DATABASE wmanager FROM PUBLIC" -c "GRANT CONNECT ON DATABASE wmanager TO wmanager"
+    docker compose exec -T postgres pg_restore --username postgres --dbname wmanager --exit-on-error < "$file"
+    docker compose start wmanager
+    echo "Restored $file; wmanager-server started again."
+}
+
 cmd_list() {
     [[ -s $tenants ]] || { echo "No companies yet: ./selfhosted.sh add-company <name>"; return; }
     local name tenant id where
@@ -216,5 +296,8 @@ case $cmd in
     source)      [[ $# -eq 1 ]] || die "usage: $0 source <name>"; [[ -f .env ]] || die "run ./selfhosted.sh init first"; cmd_source "$1" ;;
     address)     [[ $# -eq 1 ]] || die "usage: $0 address <name>"; [[ -f .env ]] || die "run ./selfhosted.sh init first"; cmd_address "$1" ;;
     list)        cmd_list ;;
-    *)           die "unknown command $cmd (init, add-company, source, address, list)" ;;
+    create-owner) [[ $# -eq 1 ]] || die "usage: $0 create-owner <e-mail>"; cmd_create_owner "$1" ;;
+    backup)      [[ $# -eq 0 ]] || die "usage: $0 backup"; cmd_backup ;;
+    restore)     [[ $# -eq 1 ]] || die "usage: $0 restore <file>"; cmd_restore "$1" ;;
+    *)           die "unknown command $cmd (init, add-company, source, address, list, create-owner, backup, restore)" ;;
 esac

@@ -118,11 +118,12 @@ Short trials of what could overturn the design, each on a branch of its own. The
     company's page (its people and its audit log, with the check of the chain and the export);
   - every query limited to the signed-in account's companies: another company is "not found".
 - **1c, the image and the kit:**
-  - a passkey as the other second factor (it needs the browser's JavaScript);
-  - the audit log's newest head sent to Loki every few minutes;
-  - the Docker image;
-  - `examples/selfhosted/` with Caddy, PostgreSQL, Loki and Grafana, and `selfhosted.sh` with backup and restore of
-    the database.
+  - the Docker image (distroless, an unprivileged user, a health check);
+  - `examples/selfhosted/` with PostgreSQL and its two roles, the server behind Caddy at a fixed address it trusts,
+    the passwords as Docker secrets, and `selfhosted.sh` with `create-owner`, `backup` and `restore`;
+  - the audit log's newest heads sent to Loki every few minutes;
+  - `docs/server.md`.
+- **1d, the passkey:** a passkey as the other second factor, with the panel's one small JavaScript file.
 - **Tests:** unit tests, and integration tests against PostgreSQL, including tests that one company sees nothing of
   another.
 

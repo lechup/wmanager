@@ -1,7 +1,8 @@
 # wmanager: Caddy in front of Loki and Grafana (docker-compose.yml). A company's login is its Loki tenant number:
 # the computers send with its write token (LokiUser and LokiToken of provision.config.psd1), tools/wm.ps1 status reads
 # with its read token; the computers read the management source with its source login (Management.AuthHeader).
-# selfhosted.sh add-company and source write the logins (hashes only) into caddy/.
+# selfhosted.sh add-company and source write the logins (hashes only) into caddy/. The panel of wmanager-server is
+# at the end.
 {
 	email {$ACME_EMAIL}
 	{$CADDY_GLOBAL}
@@ -43,4 +44,10 @@
 
 {$GRAFANA_DOMAIN} {
 	reverse_proxy grafana:3000
+}
+
+# wmanager-server's panel (docs/server.md). Caddy adds the browser's address to X-Forwarded-For, which the server
+# believes from Caddy's fixed address only.
+{$PANEL_DOMAIN} {
+	reverse_proxy wmanager:8080
 }

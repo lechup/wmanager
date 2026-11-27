@@ -60,6 +60,7 @@ show the last run, the ruler loads the rules, Grafana imports the dashboard.
 ## Hosting Grafana and Loki yourself
 
 `examples/selfhosted/` runs Loki, Grafana and Caddy with Docker on a server of your own, for any number of companies.
+It also runs v1's wmanager-server with its PostgreSQL ([wmanager-server](server.md)); `init` asks for its name too.
 Caddy gets the certificates (Let's Encrypt) and checks the logins; Loki keeps each company apart (a tenant each) and
 the logs 90 days (`retention_period` in `loki.yaml`); Grafana gets a data source and the alert rules of each company
 and the dashboard, ready. The same server can hold each company's management source, which the helper sends there,
