@@ -489,6 +489,8 @@ Each will be asked before the stage it belongs to. The first option is the propo
 | New computers (stage 3) | a new computer gets the content of the default groups (`Default`) until a signed state lists it / it gets nothing until then |
 | Logs (stage 4) | through the server / straight to Loki as today |
 | Signing keys (stage 2) | trust what the key reports (*backup eligible*) / also check its attestation against a list of allowed models, which keeps out passkey managers that lie about it but needs that list kept up to date |
+| Remote support: who allows a session (requirement 42) | the technician's key signs the session in the viewer, a program from the release like `wmanager-sign`, and the computer checks it against the signed state: a hacked server can't open a session / the server allows it after the panel's sign-in with its second factor: simpler, but a hacked server gets the screen of every computer, against requirement 6 / the server allows it and the person at the computer accepts each session: safe, but no help when nobody is there |
+| Remote support: where the viewer runs (requirement 42) | a program from the release, started from the panel by a link / in the browser: RustDesk's own web client is not open source (self-hosting it is a paid feature), so it would be ours to write, and its code would come from the server, so it can't hold the key that allows a session |
 
 ## License
 
@@ -499,7 +501,7 @@ wmanager needs no closed component. The libraries named in this design fit: libf
 
 ## Not in v1
 
-- remote desktop or terminal (MeshCentral or RustDesk can run next to wmanager);
+- a remote terminal. Remote desktop is requirement 42, still to design;
 - computers with macOS, and `wmanager-sign` on macOS;
 - computers with Linux: they come after Windows (requirement 23);
 - more than one server instance;
