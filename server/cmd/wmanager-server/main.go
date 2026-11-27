@@ -1,0 +1,187 @@
+// Command wmanager-server is the server of wmanager v1 (docs/architecture.md).
+//
+//	wmanager-server serve                       migrate the database, then serve (stage 1a: only /healthz)
+//	wmanager-server migrate                     migrate the database
+//	wmanager-server create-owner <e-mail>       make the owner of the server; asks for the password
+//	wmanager-server audit verify <chain> [<seq>:<hash>]
+//	                                            check a chain of the audit log, and that it leads to a head seen
+//	wmanager-server audit export <chain> json|csv
+//	                                            write a chain of the audit log
+//
+// A chain is "server" or "company:<id>". The settings come from the environment (WMANAGER_DATABASE_URL or
+// WMANAGER_DATABASE_URL_FILE, WMANAGER_LISTEN), never from the command line.
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/term"
+
+	"github.com/lechup/wmanager/server/internal/accounts"
+	"github.com/lechup/wmanager/server/internal/audit"
+	"github.com/lechup/wmanager/server/internal/config"
+	"github.com/lechup/wmanager/server/internal/store"
+)
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv); err != nil {
+		fmt.Fprintln(os.Stderr, "wmanager-server:", err)
+		os.Exit(1)
+	}
+}
+
+const usage = `usage:
+  wmanager-server serve | migrate
+  wmanager-server create-owner <e-mail>
+  wmanager-server audit verify <chain> [<seq>:<hash>]
+  wmanager-server audit export <chain> json|csv`
+
+func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) error {
+	if len(args) == 0 {
+		return errors.New(usage)
+	}
+	cfg, err := config.Load(getenv)
+	if err != nil {
+		return err
+	}
+	s, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		return err
+	}
+	switch {
+	case args[0] == "migrate" && len(args) == 1:
+		fmt.Fprintln(stdout, "the database is up to date")
+		return nil
+	case args[0] == "serve" && len(args) == 1:
+		return serve(ctx, cfg, s, stderr)
+	case args[0] == "create-owner" && len(args) == 2:
+		pw, err := readPassword(stdin, stderr)
+		if err != nil {
+			return err
+		}
+		id, err := accounts.CreateAccount(ctx, s, accounts.SystemActor, args[1], "", pw, true)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "owner %s made (%s); the second factor is set up at the first sign-in\n", args[1], id)
+		return nil
+	case args[0] == "audit" && len(args) >= 3 && args[1] == "verify" && len(args) <= 4:
+		var seen *audit.Head
+		if len(args) == 4 {
+			h, err := parseHead(args[2], args[3])
+			if err != nil {
+				return err
+			}
+			seen = &h
+		}
+		head, err := audit.Verify(ctx, s, store.System, args[2], seen)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "the chain is whole; its head: %d:%x\n", head.Seq, head.Hash)
+		return nil
+	case args[0] == "audit" && len(args) == 4 && args[1] == "export":
+		recs, err := audit.Read(ctx, s, store.System, args[2])
+		if err != nil {
+			return err
+		}
+		switch args[3] {
+		case "json":
+			return audit.ExportJSON(stdout, recs)
+		case "csv":
+			return audit.ExportCSV(stdout, recs)
+		}
+	}
+	return errors.New(usage)
+}
+
+func parseHead(chain, s string) (audit.Head, error) {
+	seq, hash, ok := strings.Cut(s, ":")
+	n, err1 := strconv.ParseInt(seq, 10, 64)
+	b, err2 := hex.DecodeString(hash)
+	if !ok || err1 != nil || err2 != nil || len(b) != 32 {
+		return audit.Head{}, errors.New("a head is <seq>:<64 hex characters>")
+	}
+	h := audit.Head{Chain: chain, Seq: n}
+	copy(h.Hash[:], b)
+	return h, nil
+}
+
+// readPassword asks for the password twice at a terminal, without showing it. From a pipe (e.g.
+// docker exec -i) it reads one line. It is never taken from the command line.
+func readPassword(stdin io.Reader, stderr io.Writer) (string, error) {
+	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fmt.Fprint(stderr, "Password (at least 12 characters): ")
+		a, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(stderr)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprint(stderr, "The same password again: ")
+		b, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(stderr)
+		if err != nil {
+			return "", err
+		}
+		if string(a) != string(b) {
+			return "", errors.New("the passwords differ")
+		}
+		return string(a), nil
+	}
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && !(errors.Is(err, io.EOF) && line != "") {
+		return "", errors.New("no password on the standard input")
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+func serve(ctx context.Context, cfg config.Config, s *store.Store, stderr io.Writer) error {
+	log := slog.New(slog.NewJSONHandler(stderr, nil))
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.Pool.Ping(r.Context()); err != nil {
+			http.Error(w, "database unreachable", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprintln(w, "ok")
+	})
+	srv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      90 * time.Second, // long polls of the agents wait up to 60 seconds (stage 3)
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ListenAndServe() }()
+	log.Info("serving", "listen", cfg.Listen)
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return srv.Shutdown(shut)
+	}
+}

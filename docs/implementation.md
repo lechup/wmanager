@@ -53,7 +53,8 @@ The libraries, all with licenses that fit GPL v3 (requirement 9):
 | PostgreSQL | pgx | MIT |
 | migrations of the database, built into the program | goose | MIT |
 | passkeys to sign in to the panel | go-webauthn | BSD-3-Clause |
-| TOTP codes | pquerna/otp | Apache-2.0 |
+| TOTP codes | our own, about 40 lines checked against the test values of RFC 6238 | GPL-3.0 |
+| reading a password at the terminal | `golang.org/x/term` | BSD-3-Clause |
 | passwords (argon2id), the Windows service, Windows' APIs | `golang.org/x/crypto`, `golang.org/x/sys` | BSD-3-Clause |
 | the computer's key in the TPM | go-attestation or go-tpm, after trial 3 | Apache-2.0 |
 | security keys on Linux | libfido2 through cgo, with a thin binding of our own (go-libfido2 is hardly maintained) | BSD-2-Clause |
@@ -87,20 +88,25 @@ Short trials of what could overturn the design, each on a branch of its own. The
 
 ### Stage 1: the server's frame
 
-- **1a, data and accounts:**
+- **1a, data and accounts** (no web yet):
   - the settings from environment variables and files, never from the command line;
-  - PostgreSQL with migrations;
-  - companies, accounts and the panel's roles (owner, admin). The server's first owner is made by a command that
-    asks for the password in the terminal;
-  - sign-in with argon2id, a mandatory TOTP code or passkey, and recovery codes;
-  - sessions in cookies (`Secure`, `HttpOnly`, `SameSite=Strict`), CSRF tokens, a strict Content Security Policy,
-    rate limits and a lockout;
-  - the audit log, each entry holding the hash of the one before, its newest head sent to Loki every few minutes,
-    and its export as CSV and JSON (requirement 25);
-  - every query limited to the signed-in account's companies, and row-level security in PostgreSQL as a second
-    barrier.
+  - PostgreSQL with migrations built into the program; the server refuses a superuser role, which row-level security
+    wouldn't apply to;
+  - companies, accounts and the roles in a company (admin, person). The server's first owner is made by a command
+    that asks for the password in the terminal;
+  - sign-in with argon2id, a mandatory TOTP code (each code works once) and recovery codes;
+  - sessions kept as hashes of their tokens, a new token after the second factor, a lockout after failed attempts
+    and a limit per address;
+  - the audit log, each entry holding the hash of the one before, checked against a head seen elsewhere, and its
+    export as CSV and JSON (requirement 25);
+  - row-level security in PostgreSQL as a second barrier: a company's chain of the audit log is read only by its
+    members, and entries are never changed or removed.
 - **1b, the panel and the image:**
   - the panel's frame in ten languages, with a test that every language has every message;
+  - sessions in cookies (`Secure`, `HttpOnly`, `SameSite=Strict`), CSRF tokens and a strict Content Security Policy;
+  - a passkey as the other second factor (it needs the browser);
+  - every query limited to the signed-in account's companies;
+  - the audit log's newest head sent to Loki every few minutes;
   - the Docker image;
   - `examples/selfhosted/` with Caddy, PostgreSQL, Loki and Grafana, and `selfhosted.sh` with backup and restore of
     the database.
