@@ -1,0 +1,10 @@
+{{define "title"}}{{t "password.title"}} · wmanager{{end}}
+{{define "content"}}
+<h1>{{t "password.title"}}</h1>
+<p>{{t "password.for" .Data}}</p>
+<form method="post" class="stack">
+  <label>{{t "password.new"}} <input type="password" name="password" autocomplete="new-password" minlength="12" required autofocus></label>
+  <label>{{t "password.again"}} <input type="password" name="again" autocomplete="new-password" minlength="12" required></label>
+  <button type="submit">{{t "password.submit"}}</button>
+</form>
+{{end}}

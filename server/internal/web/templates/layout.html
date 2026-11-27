@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="{{.Lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{{block "title" .}}wmanager{{end}}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="/">wmanager</a>
+  <nav>
+    {{if .Session}}
+      <a href="/">{{t "nav.companies"}}</a>
+      {{if .Session.IsOwner}}<a href="/admin">{{t "nav.admin"}}</a>{{end}}
+      <span class="who">{{.Session.Email}}</span>
+      <form method="post" action="/signout" class="inline">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button type="submit">{{t "nav.signout"}}</button>
+      </form>
+    {{end}}
+  </nav>
+</header>
+<main>
+{{if .Error}}<p class="error" role="alert">{{t .Error}}</p>{{end}}
+{{block "content" .}}{{end}}
+</main>
+{{if not .NoLang}}<footer>
+  {{t "lang.choose"}}:
+  {{range .Langs}}<a href="{{$.Path}}?lang={{.}}"{{if eq . $.Lang}} aria-current="true"{{end}}>{{.}}</a> {{end}}
+</footer>{{end}}
+</body>
+</html>

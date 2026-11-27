@@ -1,0 +1,9 @@
+{{define "title"}}{{t "signin.title"}} · wmanager{{end}}
+{{define "content"}}
+<h1>{{t "signin.title"}}</h1>
+<form method="post" action="/signin" class="stack">
+  <label>{{t "signin.email"}} <input type="email" name="email" autocomplete="username" required autofocus></label>
+  <label>{{t "signin.password"}} <input type="password" name="password" autocomplete="current-password" required></label>
+  <button type="submit">{{t "signin.submit"}}</button>
+</form>
+{{end}}

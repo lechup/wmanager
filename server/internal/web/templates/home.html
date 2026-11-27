@@ -1,0 +1,9 @@
+{{define "title"}}{{t "home.title"}} · wmanager{{end}}
+{{define "content"}}
+<h1>{{t "home.title"}}</h1>
+{{if .Data}}
+<ul>{{range .Data}}<li><a href="/c/{{.ID}}">{{.Name}}</a> <span class="muted">{{t (print "role." .Role)}}</span></li>{{end}}</ul>
+{{else}}
+<p>{{t "home.none"}}</p>
+{{end}}
+{{end}}

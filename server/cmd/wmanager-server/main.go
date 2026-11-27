@@ -1,6 +1,6 @@
 // Command wmanager-server is the server of wmanager v1 (docs/architecture.md).
 //
-//	wmanager-server serve                       serve (stage 1a: only /healthz); migrates first when
+//	wmanager-server serve                       serve the panel (plain HTTP behind Caddy); migrates first when
 //	                                            WMANAGER_MIGRATE_DATABASE_URL is set
 //	wmanager-server migrate                     migrate the database, as the role that owns the tables
 //	wmanager-server create-owner <e-mail>       make the owner of the server; asks for the password
@@ -12,7 +12,7 @@
 //
 // A chain is "server" or "company:<id>". The settings come from the environment, never from the command line:
 // WMANAGER_DATABASE_URL (the server's role, in wmanager_runtime), WMANAGER_MIGRATE_DATABASE_URL (the role that
-// owns the tables), each also as ..._FILE, and WMANAGER_LISTEN.
+// owns the tables), each also as ..._FILE, WMANAGER_LISTEN, WMANAGER_PUBLIC_URL and WMANAGER_TRUSTED_PROXIES.
 package main
 
 import (
@@ -35,8 +35,10 @@ import (
 
 	"github.com/lechup/wmanager/server/internal/accounts"
 	"github.com/lechup/wmanager/server/internal/audit"
+	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/config"
 	"github.com/lechup/wmanager/server/internal/store"
+	"github.com/lechup/wmanager/server/internal/web"
 )
 
 func main() {
@@ -175,22 +177,22 @@ func readPassword(stdin io.Reader, stderr io.Writer) (string, error) {
 
 func serve(ctx context.Context, cfg config.Config, s *store.Store, stderr io.Writer) error {
 	log := slog.New(slog.NewJSONHandler(stderr, nil))
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		if err := s.Pool.Ping(r.Context()); err != nil {
-			http.Error(w, "database unreachable", http.StatusServiceUnavailable)
-			return
-		}
-		fmt.Fprintln(w, "ok")
-	})
+	a := auth.New(s)
+	a.Log = log
+	panel, err := web.New(s, a, log)
+	if err != nil {
+		return err
+	}
+	panel.PublicURL, panel.TrustedProxies = cfg.PublicURL, cfg.TrustedProxies
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           mux,
+		Handler:           panel.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      90 * time.Second, // long polls of the agents wait up to 60 seconds (stage 3)
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    32 << 10,
+		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()

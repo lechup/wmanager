@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
@@ -151,6 +152,12 @@ func AddMember(ctx context.Context, s *store.Store, by Actor, companyID, account
 	if role != RoleAdmin && role != RolePerson {
 		return ErrBadRole
 	}
+	if !isUUID(accountID) {
+		return ErrNoAccount
+	}
+	if !isUUID(companyID) {
+		return ErrNoCompany
+	}
 	return s.Tx(ctx, store.System, func(tx pgx.Tx) error {
 		if err := isOwner(ctx, tx, by); err != nil {
 			return err
@@ -228,4 +235,174 @@ func Unlock(ctx context.Context, s *store.Store, by Actor, email string) error {
 			map[string]any{"account": id, "email": email})
 		return err
 	})
+}
+
+// Invite makes an account without a password and returns a one-time link token for it, valid for
+// auth.SetupLinkValid: its person sets the password and second factor, and the owner never knows them. Only the
+// owner of the server invites. now is the clock that the sign-in checks the link with.
+func Invite(ctx context.Context, s *store.Store, by Actor, email, name string, now time.Time) (id, token string, err error) {
+	email = auth.NormalizeEmail(email)
+	if err := checkEmail(email); err != nil {
+		return "", "", err
+	}
+	if err := checkName(name, true); err != nil {
+		return "", "", err
+	}
+	err = s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		if err := isOwner(ctx, tx, by); err != nil {
+			return err
+		}
+		err := tx.QueryRow(ctx, `INSERT INTO accounts (email, name) VALUES ($1, $2) RETURNING id`, email, name).Scan(&id)
+		if uniqueViolation(err) {
+			return ErrExists
+		}
+		if err != nil {
+			return err
+		}
+		if token, err = auth.CreateSetupLink(ctx, tx, id, now); err != nil {
+			return err
+		}
+		_, err = audit.Append(ctx, tx, audit.ServerChain, "", by.String(), "account.invite",
+			map[string]any{"account": id, "email": email})
+		return err
+	})
+	return id, token, err
+}
+
+// AccountInfo is an account as the owner's page lists it.
+type AccountInfo struct {
+	ID, Email, Name          string
+	Owner, Disabled, HasTOTP bool
+	Pending                  bool       // no password yet: the setup link hasn't been used
+	LinkExpires              *time.Time // when its setup link stops working, if it has one
+	Locked                   bool       // locked now after wrong codes
+}
+
+// List returns every account, for the owner of the server.
+func List(ctx context.Context, s *store.Store, by Actor) ([]AccountInfo, error) {
+	var out []AccountInfo
+	err := s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		if err := isOwner(ctx, tx, by); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT id, email, name, is_owner, disabled, totp_secret IS NOT NULL,
+		                                   password_hash IS NULL,
+		                                   (SELECT max(expires_at) FROM setup_links l WHERE l.account_id = a.id),
+		                                   coalesce(locked_until > now(), false)
+		                            FROM accounts a ORDER BY email`)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (AccountInfo, error) {
+			var a AccountInfo
+			return a, r.Scan(&a.ID, &a.Email, &a.Name, &a.Owner, &a.Disabled, &a.HasTOTP, &a.Pending, &a.LinkExpires,
+				&a.Locked)
+		})
+		return err
+	})
+	return out, err
+}
+
+// AllCompanies returns every company, for the owner of the server (names only, not their data).
+func AllCompanies(ctx context.Context, s *store.Store, by Actor) ([]Company, error) {
+	var out []Company
+	err := s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		if err := isOwner(ctx, tx, by); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT id, name, '' FROM companies ORDER BY name`)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (Company, error) {
+			var c Company
+			return c, r.Scan(&c.ID, &c.Name, &c.Role)
+		})
+		return err
+	})
+	return out, err
+}
+
+// Member is an account in a company.
+type Member struct {
+	AccountID, Email, Name, Role string
+}
+
+// Members lists a company's members, for one of its members.
+func Members(ctx context.Context, s *store.Store, accountID, companyID string) ([]Member, error) {
+	var out []Member
+	err := s.Tx(ctx, store.Who{Account: accountID}, func(tx pgx.Tx) error {
+		var ok bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE account_id = $1 AND company_id = $2)`,
+			accountID, companyID).Scan(&ok); err != nil {
+			return err
+		}
+		if !ok {
+			return ErrNoCompany
+		}
+		rows, err := tx.Query(ctx, `SELECT a.id, a.email, a.name, m.role FROM memberships m JOIN accounts a ON a.id = m.account_id
+		                            WHERE m.company_id = $1 ORDER BY a.email`, companyID)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (Member, error) {
+			var m Member
+			return m, r.Scan(&m.AccountID, &m.Email, &m.Name, &m.Role)
+		})
+		return err
+	})
+	return out, err
+}
+
+// isUUID checks the form of an id from a form, so a wrong one is "not found" rather than a database error.
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case i == 8 || i == 13 || i == 18 || i == 23:
+			if c != '-' {
+				return false
+			}
+		case !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f'):
+			return false
+		}
+	}
+	return true
+}
+
+// ErrNotPending means the account has set its password already, so a setup link would do nothing.
+var ErrNotPending = errors.New("accounts: the account is set up already")
+
+// NewLink makes a new one-time setup link for an account that hasn't used its link yet (lost or expired),
+// replacing the old one. Only the owner of the server does it.
+func NewLink(ctx context.Context, s *store.Store, by Actor, accountID string, now time.Time) (email, token string, err error) {
+	if !isUUID(accountID) {
+		return "", "", ErrNoAccount
+	}
+	err = s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		if err := isOwner(ctx, tx, by); err != nil {
+			return err
+		}
+		var pending bool
+		err := tx.QueryRow(ctx, `SELECT email, password_hash IS NULL FROM accounts WHERE id = $1 FOR UPDATE`, accountID).
+			Scan(&email, &pending)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoAccount
+		}
+		if err != nil {
+			return err
+		}
+		if !pending {
+			return ErrNotPending
+		}
+		if token, err = auth.CreateSetupLink(ctx, tx, accountID, now); err != nil {
+			return err
+		}
+		_, err = audit.Append(ctx, tx, audit.ServerChain, "", by.String(), "account.newlink",
+			map[string]any{"account": accountID, "email": email})
+		return err
+	})
+	return email, token, err
 }
