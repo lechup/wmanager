@@ -10,10 +10,13 @@ import (
 )
 
 func TestCommands(t *testing.T) {
-	_, url := storetest.NewWithURL(t)
+	db := storetest.NewDB(t)
 	env := func(k string) string {
-		if k == "WMANAGER_DATABASE_URL" {
-			return url
+		switch k {
+		case "WMANAGER_DATABASE_URL":
+			return db.URL
+		case "WMANAGER_MIGRATE_DATABASE_URL":
+			return db.OwnerURL
 		}
 		return ""
 	}

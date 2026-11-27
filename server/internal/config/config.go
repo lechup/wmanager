@@ -11,9 +11,12 @@ import (
 
 // Config is the server's settings.
 type Config struct {
-	// DatabaseURL is the PostgreSQL connection string (WMANAGER_DATABASE_URL, or a file named by
-	// WMANAGER_DATABASE_URL_FILE, e.g. a Docker secret).
+	// DatabaseURL is the PostgreSQL connection string of the server's role, in the group wmanager_runtime
+	// (WMANAGER_DATABASE_URL, or a file named by WMANAGER_DATABASE_URL_FILE, e.g. a Docker secret).
 	DatabaseURL string
+	// MigrateDatabaseURL is the connection string of the role that owns the tables, for the migrations
+	// (WMANAGER_MIGRATE_DATABASE_URL or ..._FILE). Optional for serve, which then expects a migrated database.
+	MigrateDatabaseURL string
 	// Listen is the address of the HTTP server behind Caddy (WMANAGER_LISTEN, default 127.0.0.1:8080).
 	Listen string
 }
@@ -27,6 +30,9 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if c.DatabaseURL == "" {
 		return Config{}, errors.New("config: WMANAGER_DATABASE_URL or WMANAGER_DATABASE_URL_FILE is not set")
+	}
+	if c.MigrateDatabaseURL, err = secret(getenv, "WMANAGER_MIGRATE_DATABASE_URL"); err != nil {
+		return Config{}, err
 	}
 	if v := getenv("WMANAGER_LISTEN"); v != "" {
 		c.Listen = v

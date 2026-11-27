@@ -22,7 +22,8 @@ import (
 	"github.com/lechup/wmanager/server/internal/store"
 )
 
-// ServerChain is the chain of the server's own events (accounts, companies, sign-ins of the owner).
+// ServerChain is the chain of the server's own events: accounts, companies, and every account's sign-ins
+// (an account may belong to several companies).
 const ServerChain = "server"
 
 // CompanyChain is the chain of one company.
@@ -138,16 +139,47 @@ func Read(ctx context.Context, s *store.Store, who store.Who, chain string) ([]R
 	return out, err
 }
 
-// Verify checks a whole chain and, when a head seen elsewhere is given (e.g. the one wmanager-sign remembers),
-// that the chain still leads to it.
+// ErrNoChain means there is no such chain.
+var ErrNoChain = errors.New("audit: no such chain")
+
+// Verify checks a whole chain: each link, that it ends at the head the server keeps for it, and, when a head
+// seen elsewhere is given (e.g. the one wmanager-sign remembers), that the chain still leads to it. Only the last
+// check catches someone with the database itself, who can rewrite the entries and the head together.
 func Verify(ctx context.Context, s *store.Store, who store.Who, chain string, seen *Head) (Head, error) {
 	recs, err := Read(ctx, s, who, chain)
 	if err != nil {
 		return Head{}, err
 	}
+	var kept Head
+	found := false
+	err = s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		var hash []byte
+		err := tx.QueryRow(ctx, `SELECT seq, hash FROM audit_heads WHERE chain = $1`, chain).Scan(&kept.Seq, &hash)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err == nil {
+			found = true
+			kept.Chain = chain
+			copy(kept.Hash[:], hash)
+		}
+		return err
+	})
+	if err != nil {
+		return Head{}, err
+	}
+	if !found {
+		if len(recs) > 0 {
+			return Head{}, fmt.Errorf("%w: entries without a head", ErrBroken)
+		}
+		return Head{}, ErrNoChain
+	}
 	head := Head{Chain: chain}
 	if len(recs) > 0 {
 		head.Seq, head.Hash = recs[len(recs)-1].Entry.Seq, recs[len(recs)-1].Hash
+	}
+	if head != kept {
+		return head, fmt.Errorf("%w: it ends at #%d, the head kept is #%d", ErrBroken, head.Seq, kept.Seq)
 	}
 	if seen != nil {
 		if seen.Chain != chain || seen.Seq < 1 || seen.Seq > int64(len(recs)) || recs[seen.Seq-1].Hash != seen.Hash {

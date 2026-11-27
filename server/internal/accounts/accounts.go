@@ -185,7 +185,8 @@ type Company struct {
 	ID, Name, Role string
 }
 
-// CompaniesOf lists the companies of an account, read as that account (row-level security applies).
+// CompaniesOf lists the companies of an account. (The tables of companies and memberships have no row-level
+// security: they hold no company's data.)
 func CompaniesOf(ctx context.Context, s *store.Store, accountID string) ([]Company, error) {
 	var out []Company
 	err := s.Tx(ctx, store.Who{Account: accountID}, func(tx pgx.Tx) error {

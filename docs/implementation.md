@@ -90,21 +90,25 @@ Short trials of what could overturn the design, each on a branch of its own. The
 
 - **1a, data and accounts** (no web yet):
   - the settings from environment variables and files, never from the command line;
-  - PostgreSQL with migrations built into the program; the server refuses a superuser role, which row-level security
-    wouldn't apply to;
+  - PostgreSQL with migrations built into the program, run as the role that owns the tables. The server runs as
+    another role, in the group `wmanager_runtime`, which may only read and add audit entries, and it refuses a role
+    that is a superuser, bypasses row-level security or owns the tables;
   - companies, accounts and the roles in a company (admin, person). The server's first owner is made by a command
     that asks for the password in the terminal;
   - sign-in with argon2id, a mandatory TOTP code (each code works once) and recovery codes;
-  - sessions kept as hashes of their tokens, a new token after the second factor, a lockout after failed attempts
-    and a limit per address;
+  - sessions kept as hashes of their tokens, and a new token after the second factor;
+  - limits on guessing: per address; wrong passwords slow down only that address, so no one can lock another
+    person out; wrong codes, which need the right password, lock the account, each time twice as long;
   - the audit log, each entry holding the hash of the one before, checked against a head seen elsewhere, and its
     export as CSV and JSON (requirement 25);
-  - row-level security in PostgreSQL as a second barrier: a company's chain of the audit log is read only by its
-    members, and entries are never changed or removed.
+  - row-level security in PostgreSQL as a second barrier against a query that forgets its company: a company's
+    chain of the audit log is read only by its members. Entries are never changed or removed: the server's role has
+    no right to, and triggers stop even the owner of the tables.
 - **1b, the panel and the image:**
   - the panel's frame in ten languages, with a test that every language has every message;
   - sessions in cookies (`Secure`, `HttpOnly`, `SameSite=Strict`), CSRF tokens and a strict Content Security Policy;
   - a passkey as the other second factor (it needs the browser);
+  - a one-time link for a new account to set its password and second factor, instead of a password made for it;
   - every query limited to the signed-in account's companies;
   - the audit log's newest head sent to Loki every few minutes;
   - the Docker image;

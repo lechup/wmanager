@@ -1,15 +1,17 @@
 // Command wmanager-server is the server of wmanager v1 (docs/architecture.md).
 //
-//	wmanager-server serve                       migrate the database, then serve (stage 1a: only /healthz)
-//	wmanager-server migrate                     migrate the database
+//	wmanager-server serve                       serve (stage 1a: only /healthz); migrates first when
+//	                                            WMANAGER_MIGRATE_DATABASE_URL is set
+//	wmanager-server migrate                     migrate the database, as the role that owns the tables
 //	wmanager-server create-owner <e-mail>       make the owner of the server; asks for the password
 //	wmanager-server audit verify <chain> [<seq>:<hash>]
 //	                                            check a chain of the audit log, and that it leads to a head seen
 //	wmanager-server audit export <chain> json|csv
 //	                                            write a chain of the audit log
 //
-// A chain is "server" or "company:<id>". The settings come from the environment (WMANAGER_DATABASE_URL or
-// WMANAGER_DATABASE_URL_FILE, WMANAGER_LISTEN), never from the command line.
+// A chain is "server" or "company:<id>". The settings come from the environment, never from the command line:
+// WMANAGER_DATABASE_URL (the server's role, in wmanager_runtime), WMANAGER_MIGRATE_DATABASE_URL (the role that
+// owns the tables), each also as ..._FILE, and WMANAGER_LISTEN.
 package main
 
 import (
@@ -59,18 +61,27 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		return err
 	}
+	if args[0] == "migrate" && len(args) == 1 {
+		if cfg.MigrateDatabaseURL == "" {
+			return errors.New("migrate needs WMANAGER_MIGRATE_DATABASE_URL: the role that owns the tables")
+		}
+		if err := store.Migrate(ctx, cfg.MigrateDatabaseURL); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "the database is up to date")
+		return nil
+	}
+	if args[0] == "serve" && cfg.MigrateDatabaseURL != "" {
+		if err := store.Migrate(ctx, cfg.MigrateDatabaseURL); err != nil {
+			return err
+		}
+	}
 	s, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	if err := s.Migrate(ctx); err != nil {
-		return err
-	}
 	switch {
-	case args[0] == "migrate" && len(args) == 1:
-		fmt.Fprintln(stdout, "the database is up to date")
-		return nil
 	case args[0] == "serve" && len(args) == 1:
 		return serve(ctx, cfg, s, stderr)
 	case args[0] == "create-owner" && len(args) == 2:

@@ -1,5 +1,6 @@
-// Package storetest gives each test a fresh, migrated database of its own, reached through a role that is not a
-// superuser, so row-level security applies as it does on a real server.
+// Package storetest gives each test a fresh, migrated database of its own, set up as on a real server: one role
+// owns the tables and runs the migrations, and the server's role is in wmanager_runtime, so row-level security
+// and the grants apply.
 //
 // It needs WMANAGER_TEST_DATABASE_URL: a PostgreSQL superuser's connection string, e.g.
 //
@@ -12,9 +13,9 @@ package storetest
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -22,20 +23,23 @@ import (
 	"github.com/lechup/wmanager/server/internal/store"
 )
 
-// New returns a store on a new database, migrated, and drops the database when the test ends.
-func New(t *testing.T) *store.Store {
-	t.Helper()
-	s, _ := NewWithURL(t)
-	return s
+// DB is a test's database.
+type DB struct {
+	Store    *store.Store // as the server's role
+	URL      string       // the server's role
+	OwnerURL string       // the role that owns the tables
 }
 
-// NewWithURL is New, and also returns the connection string of the database's own role (not a superuser).
-func NewWithURL(t *testing.T) (*store.Store, string) {
+// New returns the server's store on a new, migrated database, dropped when the test ends.
+func New(t *testing.T) *store.Store {
 	t.Helper()
-	admin := os.Getenv("WMANAGER_TEST_DATABASE_URL")
-	if admin == "" {
-		t.Fatal("WMANAGER_TEST_DATABASE_URL is not set (see the storetest package)")
-	}
+	return NewDB(t).Store
+}
+
+// NewDB is New with the connection strings.
+func NewDB(t *testing.T) *DB {
+	t.Helper()
+	admin := AdminURL(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, admin)
 	if err != nil {
@@ -43,13 +47,17 @@ func NewWithURL(t *testing.T) (*store.Store, string) {
 	}
 	defer conn.Close(ctx)
 
-	suffix := rand.Text()[:12]
-	name := "wm_test_" + hex.EncodeToString([]byte(suffix))[:16]
-	role := name + "_app"
-	password := rand.Text()
+	name := "wm_test_" + strings.ToLower(rand.Text()[:16])
+	owner, runtime := name+"_owner", name+"_server"
+	ownerPw, runtimePw := rand.Text(), rand.Text()
 	for _, q := range []string{
-		`CREATE ROLE ` + role + ` LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '` + password + `'`,
-		`CREATE DATABASE ` + name + ` OWNER ` + role,
+		// The group is shared by every test database of the cluster; another test may make it at the same time.
+		`DO $$ BEGIN CREATE ROLE ` + store.RuntimeGroup + ` NOLOGIN;
+		 EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$`,
+		`CREATE ROLE ` + owner + ` LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '` + ownerPw + `'`,
+		`CREATE ROLE ` + runtime + ` LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '` + runtimePw + `' IN ROLE ` +
+			store.RuntimeGroup,
+		`CREATE DATABASE ` + name + ` OWNER ` + owner,
 	} {
 		if _, err := conn.Exec(ctx, q); err != nil {
 			t.Fatal(err)
@@ -63,27 +71,31 @@ func NewWithURL(t *testing.T) (*store.Store, string) {
 		}
 		defer c.Close(context.Background())
 		c.Exec(context.Background(), `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
-		c.Exec(context.Background(), `DROP ROLE IF EXISTS `+role)
+		c.Exec(context.Background(), `DROP ROLE IF EXISTS `+runtime)
+		c.Exec(context.Background(), `DROP ROLE IF EXISTS `+owner)
 	})
 
-	u, err := url.Parse(admin)
-	if err != nil {
+	with := func(user, pw string) string {
+		u, err := url.Parse(admin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.User = url.UserPassword(user, pw)
+		u.Path = "/" + name
+		return u.String()
+	}
+	d := &DB{URL: with(runtime, runtimePw), OwnerURL: with(owner, ownerPw)}
+	if err := store.Migrate(ctx, d.OwnerURL); err != nil {
 		t.Fatal(err)
 	}
-	u.User = url.UserPassword(role, password)
-	u.Path = "/" + name
-	s, err := store.Open(ctx, u.String())
-	if err != nil {
+	if d.Store, err = store.Open(ctx, d.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(s.Close)
-	if err := s.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return s, u.String()
+	t.Cleanup(d.Store.Close)
+	return d
 }
 
-// AdminURL is the superuser connection string, for tests that check what a superuser role does.
+// AdminURL is the superuser connection string.
 func AdminURL(t *testing.T) string {
 	t.Helper()
 	u := os.Getenv("WMANAGER_TEST_DATABASE_URL")
@@ -93,8 +105,8 @@ func AdminURL(t *testing.T) string {
 	return u
 }
 
-// Superuser connects to the test's own database as the superuser, for tests that do what someone with the
-// database itself could do (row-level security doesn't stop a superuser).
+// Superuser connects to the test's database as the superuser, for tests that do what someone with the database
+// itself could do: row-level security, grants and triggers can all be passed that way.
 func Superuser(t *testing.T, s *store.Store) *pgx.Conn {
 	t.Helper()
 	ctx := context.Background()
