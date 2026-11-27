@@ -73,10 +73,10 @@
   single jobs) are in the signed state, given by an administrator in `wmanager-sign`; seeing the data and the
   actions approved in advance are checked by the server. A person's jobs may use only the secrets granted to that
   person, and a person stops only the jobs they signed.
-- A new key is added only with its fingerprint typed in the administrator's `wmanager-sign`, as a new computer's id
-  is, so the server can't swap it.
-- The audit log is anchored outside the server twice: its newest head goes to Loki, and `wmanager-sign` remembers the
-  head it saw last.
+- A new key is added only with its full fingerprint (128 bits) typed in the administrator's `wmanager-sign`, so the
+  server can't swap it.
+- The audit log's newest head is written down off the server: `wmanager-sign` remembers the head it saw last, and
+  the head goes to Loki and later to the SIEM export, which count when they are on another host.
 
 ## Waiting to be done
 

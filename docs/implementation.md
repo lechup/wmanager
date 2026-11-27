@@ -109,8 +109,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
 
 - **2a, `verify/`:**
   - the formats and their strict schemas, decoded with `encoding/json/v2` and unknown members rejected. It also
-    refuses a name that appears twice and matches names exactly; the old `encoding/json` accepts the first and
-    matches `"Serial"` to `serial`;
+    refuses a name that appears twice and matches names exactly. The old `encoding/json` keeps the last of two equal
+    names and binds `"SERIAL"` to `serial`, even with `DisallowUnknownFields` (checked with Go 1.27.4);
   - the six checks;
   - a software authenticator for the tests, with a test for every refusal: a synced key, another company, a wrong
     origin, an old serial, a wrong algorithm.
@@ -118,8 +118,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - the first admin list and the company's fingerprint, then the changes of the list;
   - showing what is signed, with control characters made visible and the difference from the last verified state;
   - `add-file`, typing secrets, the clock check against the server, the serial numbers;
-  - a new key's fingerprint shown at registration and typed by the administrator, how each person's rights change,
-    and the head of the audit log it saw last;
+  - a new key's full fingerprint shown at registration and typed by the administrator, how each person's rights
+    change, and the head of the audit log it saw last;
   - a test by hand with a real security key, once there is one;
   - the server's side: storing statements and handing them out.
 - **2c:** Windows Hello in `wmanager-sign`.
@@ -131,8 +131,7 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - the computer's key in the TPM and its id;
   - enrollment with a token, the fingerprint typed at the computer, and the first 8 characters of the id shown;
   - long polling and the time of last contact, with Grafana's panel of computers that are off and its alert, read
-    from PostgreSQL;
-  - the inventory (requirement 12) from today's daily system report, and its search in the panel.
+    from PostgreSQL.
 - **3b, the installer:** the installer from the panel, tagged with the company's whole admin chain,
   `wmanager-sign check-installer`, and the list of computers.
 
@@ -149,7 +148,9 @@ Short trials of what could overturn the design, each on a branch of its own. The
     `wmanager-agent verify` lets the payload check that copy;
   - the settings of today's `provision.config.psd1` taken from the state;
   - secrets checked against their hashes and kept for SYSTEM;
-  - logs (requirement 19), the way the open question decides (the proposal: through the server).
+  - logs (requirement 19), the way the open question decides (the proposal: through the server);
+  - the inventory (requirement 12) from today's daily system report, which the payload runs, and its search in the
+    panel.
 
 ### Stage 5: jobs and actions
 
