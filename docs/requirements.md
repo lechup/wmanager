@@ -48,7 +48,7 @@
 | 39 | **Wi-Fi profiles per group**: WPA2 and WPA3 Personal, the network's password a secret; WPA2 and WPA3 Enterprise (802.1X, PEAP or EAP-TLS) with the account or certificate it needs. | 2026-11-26 | to design |
 | 40 | **VPN profiles per group**: the VPN built into Windows (IKEv2, SSTP, L2TP), WireGuard and OpenVPN; the programs from Chocolatey, the keys and passwords secrets. | 2026-11-26 | to design |
 | 41 | **A ready list of packages to choose from**, not installed by default: wmanager suggests Chocolatey packages (Chrome, LibreOffice, Adobe Acrobat Reader, 7-Zip, VLC, RustDesk, Notepad++), and an administrator picks the ones a group gets. Nothing is installed on every computer unless a package list says so. | 2026-11-26 | to design |
-| 42 | **Remote support built into wmanager**: our own fork of RustDesk (AGPL-3.0, under a name of its own), with the roles of its ID server and relay moved into `wmanager-server`. The part on the computer is set up by the agent and takes its password from a variable, never from a command line. A second factor before every connection. Everything is started from the web panel; technicians connect with a separate viewer that signs in with the same accounts and rights as the panel (SSO, roles limited to groups). | 2026-11-27 | to design ([open question](architecture.md#open-questions)) |
+| 42 | **Remote support built into wmanager**: our own fork of RustDesk (AGPL-3.0, under a name of its own), with the roles of its ID server and relay moved into `wmanager-server`. The part on the computer is set up by the agent and takes its password from a variable, never from a command line. A second factor before every connection. Everything is started from the web panel; technicians connect with a separate viewer that signs in with the same accounts and rights as the panel (SSO, roles limited to groups). | 2026-11-27 | [Remote support](architecture.md#remote-support) |
 
 ## Decisions so far
 
@@ -65,6 +65,9 @@
 - Secrets are typed in `wmanager-sign`. The signed state holds a salted hash of each value, and the computer keeps the
   values its scripts need, readable only by SYSTEM, so they work at startup and without a network.
 - The serverless mode of today is removed, with no migration: there are no computers in production.
+- Remote support: the viewer is a program from the release, opened from the panel by a link, and the technician's
+  key allows each session in it. The computer checks that signature against the signed state, so the panel's
+  sign-in alone opens no session.
 
 ## Waiting to be done
 

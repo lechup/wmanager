@@ -57,9 +57,10 @@ is checked (see [What a hacked server can and can't do](#what-a-hacked-server-ca
 | `wmanager-agent` | One Go program for Windows. Started by hand it is the installer; after that it runs as the `wmanager` service as SYSTEM. It lives in `C:\Program Files\wmanager`, and its data stays in `C:\ProgramData\wmanager` with today's protection (SYSTEM and Administrators only). |
 | the payload | Today's PowerShell code (`Provision.ps1`, `lib\`, `lang\`, `Invoke-*.ps1`), released as the ZIP it is today. |
 | `wmanager-sign` | One Go program for the administrator's computer, on Linux and Windows first. It shows what is to be signed and signs it with the administrator's security key. |
+| remote support | Our fork of RustDesk (Rust): a part on the computer, set up by the agent, and the technician's viewer, which signs each session with the technician's key (see [Remote support](#remote-support)). |
 
-All four come from the same release and the same repository (`server/`, `agent/`, `sign/`, with the PowerShell code
-where it is now).
+All of them come from the same release and the same repository (`server/`, `agent/`, `sign/`, with the PowerShell
+code where it is now; where the fork of RustDesk lives is to design).
 
 ## Several companies on one server
 
@@ -83,7 +84,7 @@ One server holds many companies, and each is kept apart:
 
 | Key | Where it is | What it signs | Who checks it |
 | --- | --- | --- | --- |
-| A company administrator's signing key | a FIDO2 security key (e.g. YubiKey) or Windows Hello, tied to that device (no passkey synced between devices), used only by `wmanager-sign` | the company's admin lists, its states and its single jobs | the agent, before acting |
+| A company administrator's signing key | a FIDO2 security key (e.g. YubiKey) or Windows Hello, tied to that device (no passkey synced between devices), used only by `wmanager-sign` and the viewer of [remote support](#remote-support) | the company's admin lists, its states, its single jobs and its remote sessions | the agent, before acting |
 | The release key | with the maintainer, off the server | each release's `SHA256SUMS` (every file, including the Linux `wmanager-sign`), and the Windows exe files (Authenticode) | Windows, the agent (the payload and its own updates), `wmanager-sign` (its own updates, and a version before it signs it) |
 | A computer's key | made on the computer at enrollment, in the TPM when there is one; the computer's id is the SHA-256 of its public key | the computer's sign-in to the server | the server |
 | The server's TLS certificate | Caddy (Let's Encrypt) | the connection | the agent and the browser |
@@ -129,6 +130,7 @@ holds a random 128-bit value instead, which makes each company's id unique.
 | `state` | serial number, the server's address, the release certificate, the computers (id, name, groups), every file with its SHA-256 (package lists, the groups' scripts, jobs and triggers, the settings), the wmanager version with the hashes of its files, a salted SHA-256 of each secret's value: today's `manifest.psd1` and `groups.psd1`, as JSON |
 | `job` | a random 128-bit id, the ids of the computers it targets, the script's SHA-256, run as SYSTEM or the user, the secrets it may use, a time to start after, an expiry (at most 7 days after signing), a time limit |
 | `stop` | the id of a job, and the computers to stop it on: it stops the job when it runs, and refuses it when it arrives later |
+| `session` | a random 128-bit id, the computer, the technician, the public key the viewer made for this session, what the session may do (screen, keyboard, files), an expiry a few minutes after signing |
 
 `wmanager-sign` makes the serial numbers and job ids, not the server. A new state's serial is one more than the
 highest it knows of: the highest it has signed itself, the newest state it has verified, and the highest the
@@ -156,7 +158,8 @@ The agent accepts a statement only when all of this holds:
 5. the signature is valid, with the algorithm the admin list names for that key, for a key in the company's current
    admin list;
 6. it fits what the computer already has: an admin list has the next sequence number and the previous hash; a state
-   has a higher serial than the last one; for a job, see [Single jobs](#single-jobs).
+   has a higher serial than the last one; for a job, see [Single jobs](#single-jobs); a session opens once, before
+   its expiry.
 
 Signing keys are separate from the keys used to sign in to the panel. A browser always puts the page's own
 `https://` address in the origin, so no web page, including one served by a hacked server, can make a signature with
@@ -238,6 +241,7 @@ It **can't**, on an enrolled computer:
 - add an administrator or a key to a company;
 - run a single job twice, after its expiry, or on a computer it doesn't target;
 - stop a job that is running, or make a computer go back to an older agent or state;
+- open a [remote session](#remote-support), or see or take part in one;
 - move the computers to another server (the address is part of the signed state).
 
 What remains:
@@ -352,6 +356,37 @@ server) and lifting that. They are started from the panel with one click, withou
   (free text from a hacked server would be a ready phishing message).
 - **Wake-on-LAN:** the panel asks an agent in the same network to wake a computer. The target is a computer from the
   signed state, and the agent takes its MAC address from there.
+
+## Remote support
+
+Requirement 42. Who allows a session and where the viewer runs are decided; the rest is to design.
+
+- **Our own fork of RustDesk** (AGPL-3.0), under a name of its own: RustDesk's name and logo aren't ours to use. The
+  roles of its ID server and relay move into `wmanager-server`. On the computer it runs next to the agent, which
+  installs it, updates it and sets it up, never with a secret on a command line.
+- **The viewer is a program from the release**, like `wmanager-sign`. In the panel the technician picks a computer and
+  clicks "Connect", and the panel opens the viewer by a link. The viewer signs in with the panel's accounts and rights
+  (SSO, roles limited to groups).
+- **The technician's key allows each session.** The viewer shows the computer (its name and the first characters of
+  its id, from the verified state) and has the key sign a `session` statement. The touch with a PIN is the second
+  factor before every connection. The agent checks the statement like any other and only then lets the session in.
+  So the panel's sign-in alone is not enough, and a hacked server can't open a session.
+- **No one in the middle.** The session is encrypted end to end between the viewer and the computer. The viewer takes
+  the computer's public key from the verified state, not from the server, and the `session` statement names the key
+  the viewer made for this session. A hacked server, as the ID server and the relay, can block a session but can't
+  see it or take part in it.
+- **Logged:** each session (who, when, which computer, the files moved) goes to the audit log and the SIEM export.
+
+To design:
+
+- the protocol, and how much of RustDesk stays;
+- following RustDesk's releases;
+- whose keys may allow a session, and on which groups: with roles limited to groups (requirement 24); until then the
+  company's administrators;
+- whether a session needs a password at all once a signature allows it (requirement 42 asks that the agent pass it in
+  a variable);
+- how long a `session` statement is valid;
+- what the person at the computer sees during a session.
 
 ## Updates
 
@@ -489,8 +524,6 @@ Each will be asked before the stage it belongs to. The first option is the propo
 | New computers (stage 3) | a new computer gets the content of the default groups (`Default`) until a signed state lists it / it gets nothing until then |
 | Logs (stage 4) | through the server / straight to Loki as today |
 | Signing keys (stage 2) | trust what the key reports (*backup eligible*) / also check its attestation against a list of allowed models, which keeps out passkey managers that lie about it but needs that list kept up to date |
-| Remote support: who allows a session (requirement 42) | the technician's key signs the session in the viewer, a program from the release like `wmanager-sign`, and the computer checks it against the signed state: a hacked server can't open a session / the server allows it after the panel's sign-in with its second factor: simpler, but a hacked server gets the screen of every computer, against requirement 6 / the server allows it and the person at the computer accepts each session: safe, but no help when nobody is there |
-| Remote support: where the viewer runs (requirement 42) | a program from the release, started from the panel by a link / in the browser: RustDesk's own web client is not open source (self-hosting it is a paid feature), so it would be ours to write, and its code would come from the server, so it can't hold the key that allows a session |
 
 ## License
 
@@ -501,7 +534,7 @@ wmanager needs no closed component. The libraries named in this design fit: libf
 
 ## Not in v1
 
-- a remote terminal. Remote desktop is requirement 42, still to design;
+- a remote terminal (remote desktop is in [Remote support](#remote-support));
 - computers with macOS, and `wmanager-sign` on macOS;
 - computers with Linux: they come after Windows (requirement 23);
 - more than one server instance;
