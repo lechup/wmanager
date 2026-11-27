@@ -1,0 +1,52 @@
+{{define "title"}}{{t "admin.title"}} · wmanager{{end}}
+{{define "content"}}
+{{with .Data}}
+<h1>{{t "admin.title"}}</h1>
+{{if .Link}}<div class="notice" role="status"><p>{{t "admin.link" .LinkFor}}</p><p><code class="link">{{.Link}}</code></p></div>{{end}}
+
+<h2>{{t "admin.companies"}}</h2>
+<ul>{{range .Companies}}<li>{{.Name}} <span class="muted">{{.ID}}</span></li>{{else}}<li class="muted">—</li>{{end}}</ul>
+<form method="post" action="/admin/company" class="row">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <label>{{t "admin.newcompany"}} <input name="name" required maxlength="100"></label>
+  <button type="submit">{{t "admin.create"}}</button>
+</form>
+
+<h2>{{t "admin.accounts"}}</h2>
+<table>
+  <thead><tr><th>{{t "admin.email"}}</th><th>{{t "admin.name"}}</th><th></th><th></th></tr></thead>
+  <tbody>{{range .Accounts}}<tr>
+    <td>{{.Email}}</td><td>{{.Name}}</td>
+    <td>{{if .Owner}}{{t "admin.owner"}} {{end}}{{if .Pending}}{{t "admin.pending"}} {{end}}{{if .LockedUntil}}{{t "admin.locked"}}{{end}}</td>
+    <td>{{if .LockedUntil}}<form method="post" action="/admin/unlock" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="email" value="{{.Email}}">
+      <button type="submit">{{t "admin.unlock"}}</button></form>{{end}}</td>
+  </tr>{{end}}</tbody>
+</table>
+<form method="post" action="/admin/invite" class="row">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <label>{{t "admin.email"}} <input type="email" name="email" required></label>
+  <label>{{t "admin.name"}} <input name="name" maxlength="100"></label>
+  <button type="submit">{{t "admin.invite"}}</button>
+</form>
+
+<h2>{{t "admin.member"}}</h2>
+<form method="post" action="/admin/member" class="row">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <label>{{t "admin.account"}} <select name="account" required>{{range .Accounts}}<option value="{{.ID}}">{{.Email}}</option>{{end}}</select></label>
+  <label>{{t "admin.company"}} <select name="company" required>{{range .Companies}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+  <label>{{t "admin.role"}} <select name="role">{{range .Roles}}<option value="{{.}}">{{t (print "role." .)}}</option>{{end}}</select></label>
+  <button type="submit">{{t "admin.add"}}</button>
+</form>
+
+<h2>{{t "admin.serverlog"}}</h2>
+{{template "entries" .Entries}}
+{{end}}
+{{end}}
+{{define "entries"}}
+<table class="audit">
+  <thead><tr><th>#</th><th>{{t "audit.when"}}</th><th>{{t "audit.who"}}</th><th>{{t "audit.what"}}</th><th>{{t "audit.details"}}</th></tr></thead>
+  <tbody>{{range .}}<tr><td>{{.Entry.Seq}}</td><td>{{time .Entry.At}}</td><td>{{.Entry.Actor}}</td><td>{{.Entry.Action}}</td>
+  <td><code>{{range $k, $v := .Entry.Details}}{{$k}}={{$v}} {{end}}</code></td></tr>{{end}}</tbody>
+</table>
+{{end}}

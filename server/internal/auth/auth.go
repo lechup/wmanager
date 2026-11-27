@@ -251,7 +251,7 @@ type accountRow struct {
 func loadAccount(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, where string, lock bool, arg any) (*accountRow, error) {
-	sql := `SELECT id, email, password_hash, is_owner, disabled, totp_secret, totp_last_step, failed_codes, lockouts,
+	sql := `SELECT id, email, coalesce(password_hash, ''), is_owner, disabled, totp_secret, totp_last_step, failed_codes, lockouts,
 	               locked_until
 	        FROM accounts WHERE ` + where
 	if lock {
@@ -298,8 +298,11 @@ func (s *Service) SignIn(ctx context.Context, addr, email, password string) (str
 		s.Log.Warn("sign-in failed", append([]any{"why", why, "address", addressKey(addr)}, attrs...)...)
 		return "", ErrSignIn
 	}
-	if a == nil {
+	if a == nil || a.hash == "" {
 		checkPassword(ctx, dummyHash, password)
+		if a != nil {
+			return failed("no password yet (the setup link wasn't used)", "account", a.id)
+		}
 		// Not the address typed: people type passwords into the wrong field.
 		return failed("no such account")
 	}

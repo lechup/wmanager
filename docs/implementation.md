@@ -107,12 +107,18 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - row-level security in PostgreSQL as a second barrier against a query that forgets its company: a company's
     chain of the audit log is read only by its members. Entries are never changed or removed: the server's role has
     no right to, and triggers stop even the owner of the tables.
-- **1b, the panel and the image:**
-  - the panel's frame in ten languages, with a test that every language has every message;
-  - sessions in cookies (`Secure`, `HttpOnly`, `SameSite=Strict`), CSRF tokens and a strict Content Security Policy;
-  - a passkey as the other second factor (it needs the browser);
+- **1b, the panel:**
+  - the panel's frame in ten languages, with a test that every language has every message and its placeholders;
+  - sessions in cookies (`__Host-`, `Secure`, `HttpOnly`, `SameSite=Strict`), a CSRF token in every form of a
+    session, forms from another site refused (`Sec-Fetch-Site`, `Origin`), and a strict Content Security Policy
+    with no script at all;
+  - the second factor set up with a QR code drawn on the server (SVG), and the recovery codes shown once;
   - a one-time link for a new account to set its password and second factor, instead of a password made for it;
-  - every query limited to the signed-in account's companies;
+  - the owner's page (companies, accounts, invitations, members, unlocking, the server's audit log) and a
+    company's page (its people and its audit log, with the check of the chain and the export);
+  - every query limited to the signed-in account's companies: another company is "not found".
+- **1c, the image and the kit:**
+  - a passkey as the other second factor (it needs the browser's JavaScript);
   - the audit log's newest head sent to Loki every few minutes;
   - the Docker image;
   - `examples/selfhosted/` with Caddy, PostgreSQL, Loki and Grafana, and `selfhosted.sh` with backup and restore of

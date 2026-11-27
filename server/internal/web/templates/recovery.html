@@ -1,0 +1,7 @@
+{{define "title"}}{{t "recovery.title"}} · wmanager{{end}}
+{{define "content"}}
+<h1>{{t "recovery.title"}}</h1>
+<p>{{t "recovery.text"}}</p>
+<ul class="codes">{{range .Data}}<li><code>{{.}}</code></li>{{end}}</ul>
+<p><a class="button" href="/">{{t "recovery.continue"}}</a></p>
+{{end}}

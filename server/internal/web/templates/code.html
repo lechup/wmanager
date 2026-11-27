@@ -1,0 +1,10 @@
+{{define "title"}}{{t "code.title"}} · wmanager{{end}}
+{{define "content"}}
+<h1>{{t "code.title"}}</h1>
+<p>{{t "code.prompt"}}</p>
+<form method="post" action="/signin/code" class="stack">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>{{t "code.label"}} <input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus></label>
+  <button type="submit">{{t "code.submit"}}</button>
+</form>
+{{end}}
