@@ -79,6 +79,9 @@ changing anything.
 - [Languages](docs/languages.md): the languages, how one is chosen, adding a message or a language
 - [Tests](docs/testing.md): Pester, CI, test virtual machines
 - [Releases](docs/releases.md): publishing a version
+- [Architecture of v1](docs/architecture.md): the planned wmanager-server and wmanager-agent, with signing in
+  `wmanager-sign` (a design, not built yet), its [requirements](docs/requirements.md) and the
+  [implementation plan](docs/implementation.md)
 
 ## Files
 
