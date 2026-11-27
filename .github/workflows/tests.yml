@@ -6,6 +6,7 @@
 #   version, group scripts, jobs, the hourly task).
 # - grafana: the dashboard and the alert rules of examples/grafana against a real Loki and Grafana, and the
 #   self-hosting kit of examples/selfhosted end to end (Docker)
+# - go: the Go code of v1 (gofmt, vet, tests, the Windows build, govulncheck, the licenses of the dependencies)
 # - wizard-linux: the tests of the configuration wizard, the languages, the group tool and the companies helper
 #   (tools/wm.ps1) in PowerShell 7 on Linux (init.ps1 and lib/Lang.ps1 run there too)
 # It is Windows Server, not Windows 11 Home/Pro: debloat, privacy, notifications and Restore-Backup.ps1 still
@@ -89,6 +90,48 @@ jobs:
       # The self-hosting kit end to end: init, two companies, docker compose up, logins, tenants, Grafana provisioning
       - name: Check examples/selfhosted
         run: tests/ci/check-selfhosted.sh
+
+  # The Go code of v1 (docs/implementation.md): formatting, vet and tests on Linux, the Windows build checked from
+  # Linux too, known vulnerabilities, and the licenses of the dependencies, which must fit GPL v3 (requirement 9)
+  go:
+    name: Go (Linux, and the Windows build)
+    runs-on: ubuntu-24.04
+    env:
+      LICENSES: MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,MPL-2.0,ISC,GPL-3.0
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Tools
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          go install github.com/google/go-licenses/v2@v2.0.1
+
+      - name: Format and vet
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "::error::not formatted with gofmt: $unformatted"; exit 1; fi
+          go vet ./...
+          GOOS=windows go vet ./...
+
+      - name: Tests
+        run: go test -race ./...
+
+      - name: Windows build
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
+      - name: Known vulnerabilities
+        run: |
+          govulncheck ./...
+          GOOS=windows govulncheck ./...
+
+      - name: Licenses of the dependencies
+        run: |
+          go-licenses check ./... --allowed_licenses="$LICENSES"
+          GOOS=windows go-licenses check ./... --allowed_licenses="$LICENSES"
 
   wizard-linux:
     name: Configuration wizard (PowerShell 7, Linux)
