@@ -1,0 +1,26 @@
+{{define "title"}}{{t "account.title"}} · wmanager{{end}}
+{{define "scripts"}}<script src="/static/passkey.js" defer></script>{{end}}
+{{define "content"}}
+<h1>{{t "account.title"}}</h1>
+<h2>{{t "account.passkeys"}}</h2>
+<p>{{t "account.passkeystext"}}</p>
+{{with .Data.Passkeys}}
+<table>
+  <thead><tr><th>{{t "admin.name"}}</th><th>{{t "account.added"}}</th><th>{{t "account.used"}}</th><th></th></tr></thead>
+  <tbody>{{range .}}<tr><td>{{.Name}}{{if .Synced}} <span class="muted">({{t "account.synced"}})</span>{{end}}</td>
+    <td>{{time .Created}}</td><td>{{with .LastUsed}}{{time .}}{{else}}—{{end}}</td>
+    <td><form method="post" action="/account/passkey/remove" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{b64 .ID}}">
+      <button type="submit">{{t "account.remove"}}</button></form></td></tr>{{end}}</tbody>
+</table>
+{{else}}<p class="muted">{{t "account.none"}}</p>{{end}}
+{{if .Data.CanAdd}}
+<div class="row">
+  <label>{{t "account.passkeyname"}} <input id="passkey-name" maxlength="60" placeholder="{{t "account.passkeyexample"}}"></label>
+  <button type="button" data-passkey="register" data-begin="/account/passkey/begin" data-finish="/account/passkey/finish"
+    data-name-field="passkey-name" data-csrf="{{.CSRF}}" data-status="passkey-status"
+    data-failed="{{t "passkey.failed"}}" data-stale="{{t "passkey.stale"}}">{{t "account.addpasskey"}}</button>
+</div>
+<p id="passkey-status" class="error" role="status"></p>
+{{else}}<p class="muted">{{t "account.nopublicurl"}}</p>{{end}}
+{{end}}

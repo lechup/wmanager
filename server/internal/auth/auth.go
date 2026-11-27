@@ -333,16 +333,16 @@ func (s *Service) SignIn(ctx context.Context, addr, email, password string) (str
 }
 
 type sessionRow struct {
-	accountID, stage string
-	seen, expires    time.Time
-	pending          []byte
+	accountID, stage       string
+	created, seen, expires time.Time
+	pending                []byte
 }
 
 func (s *Service) loadSession(ctx context.Context, tx pgx.Tx, token string) (*sessionRow, error) {
 	var r sessionRow
-	err := tx.QueryRow(ctx, `SELECT account_id, stage, last_seen, expires_at, pending_totp
+	err := tx.QueryRow(ctx, `SELECT account_id, stage, created_at, last_seen, expires_at, pending_totp
 	                         FROM sessions WHERE token_hash = $1 FOR UPDATE`, tokenHash(token)).
-		Scan(&r.accountID, &r.stage, &r.seen, &r.expires, &r.pending)
+		Scan(&r.accountID, &r.stage, &r.created, &r.seen, &r.expires, &r.pending)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNoSession
 	}
@@ -389,8 +389,8 @@ func (s *Service) codeFailure(ctx context.Context, tx pgx.Tx, a *accountRow, ste
 }
 
 // atPasswordStep loads a session at the password step and its account, locked for update. answer is set when
-// the attempt ends there; a locked account ends there unless recoveryCode is set.
-func (s *Service) atPasswordStep(ctx context.Context, tx pgx.Tx, token string, recoveryCode bool) (r *sessionRow, a *accountRow, answer, err error) {
+// the attempt ends there; a locked account ends there unless unguessable is set (a recovery code, a passkey).
+func (s *Service) atPasswordStep(ctx context.Context, tx pgx.Tx, token string, unguessable bool) (r *sessionRow, a *accountRow, answer, err error) {
 	r, err = s.loadSession(ctx, tx, token)
 	if errors.Is(err, ErrNoSession) {
 		return nil, nil, err, nil
@@ -408,7 +408,7 @@ func (s *Service) atPasswordStep(ctx context.Context, tx pgx.Tx, token string, r
 	if a == nil || a.disabled {
 		return nil, nil, ErrNoSession, nil
 	}
-	if s.locked(a) && !recoveryCode {
+	if s.locked(a) && !unguessable {
 		return nil, nil, ErrLocked, nil
 	}
 	return r, a, nil, nil
@@ -485,8 +485,8 @@ func (s *Service) makeFull(ctx context.Context, tx pgx.Tx, token string, a *acco
 		return "", err
 	}
 	full, hash := newToken()
-	if _, err := tx.Exec(ctx, `INSERT INTO sessions (token_hash, account_id, stage, last_seen, expires_at)
-	                           VALUES ($1, $2, 'full', $3, $4)`, hash, a.id, now, now.Add(SessionMax)); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO sessions (token_hash, account_id, stage, created_at, last_seen, expires_at)
+	                           VALUES ($1, $2, 'full', $3, $3, $4)`, hash, a.id, now, now.Add(SessionMax)); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE accounts SET failed_codes = 0, lockouts = 0, locked_until = NULL WHERE id = $1`,

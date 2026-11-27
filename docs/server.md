@@ -26,7 +26,10 @@ before changing anything. With Caddy on other ports than 443 (`CADDY_HTTPS_PORT`
 `:8443`) so the links the panel gives out carry the port.
 
 Then open `https://<the panel's name>`, sign in, and set up the second factor: scan the QR code with an
-authenticator app and keep the ten recovery codes it shows once.
+authenticator app and keep the ten recovery codes it shows once. Later, on the page "Account", add a passkey (a
+security key, Windows Hello, a phone) to use instead of the code; the code and the recovery codes keep working. These
+passkeys sign in to the panel only: signing what a computer acts on needs a key in `wmanager-sign`, under a relying
+party id no web page can claim.
 
 - **The owner** makes companies, invites accounts and puts them into companies. An invited person gets a one-time
   link (valid 7 days) from the owner and sets their own password and second factor; the owner never knows them. A

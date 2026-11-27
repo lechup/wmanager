@@ -23,6 +23,7 @@ import (
 
 	"github.com/lechup/wmanager/server/internal/accounts"
 	"github.com/lechup/wmanager/server/internal/auth"
+	"github.com/lechup/wmanager/server/internal/auth/authtest"
 	"github.com/lechup/wmanager/server/internal/store/storetest"
 )
 
@@ -565,5 +566,132 @@ func TestClientAddrWalksProxies(t *testing.T) {
 	}
 	if redact("//setup/secret-token") != "//setup/…" || redact("/setup/x") != "/setup/…" {
 		t.Error("redact")
+	}
+}
+
+// postJSON sends a passkey request with the CSRF token of the last page, or a given one.
+func (b *browser) postJSON(path, csrfToken string, body []byte) (int, []byte) {
+	b.e.t.Helper()
+	if csrfToken == "" {
+		if m := regexp.MustCompile(`data-csrf="([^"]+)"`).FindStringSubmatch(b.last); m != nil {
+			csrfToken = m[1]
+		}
+	}
+	if body == nil {
+		body = []byte("{}")
+	}
+	req, _ := http.NewRequest(http.MethodPost, b.e.srv.URL+path, strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	if csrfToken != "-" {
+		req.Header.Set("X-CSRF-Token", csrfToken)
+	}
+	resp, err := b.c.Do(req)
+	if err != nil {
+		b.e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, out
+}
+
+func TestPasskeyInThePanel(t *testing.T) {
+	e := setup(t)
+	e.panel.PublicURL = "https://localhost" // the relying party: browsers refuse an IP address as its id
+	b := e.browser()
+	secret := b.enroll("owner@example.com")
+	pk := authtest.NewPasskey("localhost", "https://localhost")
+
+	code, body := b.get("/account")
+	if code != http.StatusOK || !strings.Contains(body, `src="/static/passkey.js"`) || !strings.Contains(body, "Add a passkey") {
+		t.Fatalf("account page: %d", code)
+	}
+	if code, _ := b.postJSON("/account/passkey/begin", "-", nil); code != http.StatusForbidden {
+		t.Fatalf("begin without the CSRF header: %d", code)
+	}
+	code, opts := b.postJSON("/account/passkey/begin", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("begin: %d %s", code, opts)
+	}
+	answer, err := pk.Register(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out := b.postJSON("/account/passkey/finish?name=YubiKey", "", answer); code != http.StatusOK ||
+		!strings.Contains(string(out), `"redirect":"/account"`) {
+		t.Fatalf("finish: %d %s", code, out)
+	}
+	if _, body := b.get("/account"); !strings.Contains(body, "<td>YubiKey") {
+		t.Fatal("the passkey isn't listed")
+	}
+
+	// Signing in again: the code page offers the passkey; the passkey makes the session full.
+	b.post("/signout", nil)
+	e.clock.add(time.Minute)
+	if _, body := b.post("/signin", url.Values{"email": {"owner@example.com"}, "password": {pw}}); !strings.Contains(body, "Use a passkey") {
+		t.Fatal("the code page doesn't offer the passkey")
+	}
+	code, opts = b.postJSON("/signin/passkey/begin", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("sign-in begin: %d", code)
+	}
+	wrong, _ := authtest.NewPasskey("localhost", "https://localhost").Assert(opts)
+	if code, _ := b.postJSON("/signin/passkey/finish", "", wrong); code != http.StatusBadRequest {
+		t.Fatalf("another key: %d", code)
+	}
+	b.get("/signin/code")
+	_, opts = b.postJSON("/signin/passkey/begin", "", nil)
+	answer, _ = pk.Assert(opts)
+	if code, out := b.postJSON("/signin/passkey/finish", "", answer); code != http.StatusOK || !strings.Contains(string(out), `"redirect":"/"`) {
+		t.Fatalf("sign-in finish: %d %s", code, out)
+	}
+	if code, body := b.get("/"); code != http.StatusOK || !strings.Contains(body, "belong to any company yet.") {
+		t.Fatalf("home after the passkey: %d", code)
+	}
+	_ = secret
+
+	// Removing it.
+	b.get("/account")
+	id := regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(b.last)
+	if id == nil {
+		t.Fatal("no remove form")
+	}
+	if code, _ := b.post("/account/passkey/remove", url.Values{"id": {id[1]}}); code != http.StatusOK {
+		t.Fatalf("remove: %d", code)
+	}
+	if _, body := b.get("/account"); strings.Contains(body, "<td>YubiKey") {
+		t.Fatal("the passkey is still listed")
+	}
+	resp, err := b.c.Get(e.srv.URL + "/static/passkey.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("passkey.js served as %q", ct)
+	}
+}
+
+func TestPasskeysNeedThePublicURL(t *testing.T) {
+	e := setup(t) // PublicURL unset: the relying party would come from a Host header, so there are no passkeys
+	b := e.browser()
+	b.enroll("owner@example.com")
+	if _, body := b.get("/account"); strings.Contains(body, `data-passkey="register"`) || !strings.Contains(body, "WMANAGER_PUBLIC_URL") {
+		t.Fatal("the account page offers passkeys without the panel's address")
+	}
+	tok := csrfRe.FindStringSubmatch(b.last)[1] // from the sign-out form: the page has no passkey button
+	if code, out := b.postJSON("/account/passkey/begin", tok, nil); code != http.StatusNotFound || !strings.Contains(string(out), "unavailable") {
+		t.Fatalf("begin without the panel's address: %d %s", code, out)
+	}
+}
+
+func TestPasskeyJSONAfterTheSessionEnds(t *testing.T) {
+	e := setup(t)
+	e.panel.PublicURL = "https://localhost"
+	b := e.browser()
+	b.enroll("owner@example.com")
+	b.get("/account")
+	e.clock.add(auth.SessionIdle + time.Hour)
+	if code, out := b.postJSON("/account/passkey/begin", "", nil); code != http.StatusUnauthorized || !strings.Contains(string(out), "signin") {
+		t.Fatalf("a JSON request after the session ended: %d %s", code, out)
 	}
 }

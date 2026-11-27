@@ -6,6 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <title>{{block "title" .}}wmanager{{end}}</title>
 <link rel="stylesheet" href="/static/style.css">
+{{block "scripts" .}}{{end}}
 </head>
 <body>
 <header>
@@ -14,6 +15,7 @@
     {{if .Session}}
       <a href="/">{{t "nav.companies"}}</a>
       {{if .Session.IsOwner}}<a href="/admin">{{t "nav.admin"}}</a>{{end}}
+      <a href="/account">{{t "nav.account"}}</a>
       <span class="who">{{.Session.Email}}</span>
       <form method="post" action="/signout" class="inline">
         <input type="hidden" name="csrf" value="{{.CSRF}}">

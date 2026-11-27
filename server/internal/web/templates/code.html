@@ -1,4 +1,5 @@
 {{define "title"}}{{t "code.title"}} · wmanager{{end}}
+{{define "scripts"}}{{if .Data}}<script src="/static/passkey.js" defer></script>{{end}}{{end}}
 {{define "content"}}
 <h1>{{t "code.title"}}</h1>
 <p>{{t "code.prompt"}}</p>
@@ -7,4 +8,9 @@
   <label>{{t "code.label"}} <input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus></label>
   <button type="submit">{{t "code.submit"}}</button>
 </form>
+{{if .Data}}
+<p><button type="button" data-passkey="signin" data-begin="/signin/passkey/begin" data-finish="/signin/passkey/finish"
+  data-csrf="{{.CSRF}}" data-status="passkey-status" data-failed="{{t "passkey.failed"}}">{{t "code.passkey"}}</button></p>
+<p id="passkey-status" class="error" role="status"></p>
+{{end}}
 {{end}}
