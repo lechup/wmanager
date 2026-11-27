@@ -1,8 +1,9 @@
 # Architecture of wmanager v1: server and agent
 
 > **Status: a design for review. Nothing in it is built yet.** wmanager today works as the other documents describe.
-> This document is the plan for v1, and every stage below is a pull request of its own. The requirements it must
-> meet are in [Requirements of v1](requirements.md); those marked "to design" there are not covered here yet.
+> This document is the plan for v1 and the releases after it; the stages and what each release brings are in the
+> [Implementation plan](implementation.md). The requirements it must meet are in [Requirements of v1](requirements.md);
+> those marked "to design" there are not covered here yet.
 
 wmanager today needs no server. A person provisions a computer from a USB drive or with the one-liner. After that the
 computer pulls a signed management source (a Git repository, a web server or a share). It runs only what that
@@ -17,7 +18,8 @@ In v1 a server is required, and four things come with it:
 
 One property must survive the move: **the server alone cannot make a computer run anything.** Every script, package
 list, setting, secret value, wmanager version and single job that a computer acts on is signed by an administrator
-of that company. The signer is a program on the administrator's own computer, not the panel. A hacked server can
+of that company, or by a person the company's signed state gives that right. The signer, `wmanager-sign`, is a
+program on that person's own computer, not the panel. A hacked server can
 read and withhold, but it can't make an enrolled computer run code. A new computer is safe only when its installer
 is checked (see [What a hacked server can and can't do](#what-a-hacked-server-can-and-cant-do)).
 
@@ -38,7 +40,7 @@ is checked (see [What a hacked server can and can't do](#what-a-hacked-server-ca
 
 ```mermaid
 flowchart LR
-  subgraph admin["Administrator's computer"]
+  subgraph admin["Administrator's or technician's computer"]
     browser["Browser: the panel<br/>password + second factor"]
     sign["wmanager-sign<br/>shows what is signed"]
     key(["Security key<br/>or Windows Hello"])
@@ -47,9 +49,9 @@ flowchart LR
   subgraph host["Server: Linux, Docker"]
     caddy["Caddy<br/>HTTPS"]
     server["wmanager-server<br/>panel, API, statements, jobs,<br/>installers, audit log"]
+    relay["Relay of remote support,<br/>part of wmanager-server"]
     db[("PostgreSQL")]
     loki[("Loki and Grafana")]
-    relay["Remote support relay"]
   end
   subgraph pc["Company computer: Windows"]
     agent["wmanager-agent<br/>service as SYSTEM,<br/>checks every signature"]
@@ -65,19 +67,22 @@ flowchart LR
   caddy --> server
   server --> db
   server -- "logs" --> loki
+  tpm -- "holds the key that<br/>signs the agent's requests" --> agent
   agent -- "HTTPS long poll,<br/>opened by the computer" --> caddy
-  tpm -- "proves who it is" --> agent
   agent -- "runs what passed the checks" --> payload
-  release -- "exe files and payload,<br/>checked against SHA256SUMS" --> server
-  release -- "updates, checked<br/>on the computer" --> agent
-  viewer -. "session signed<br/>by the technician's key" .-> relay
-  relay -.-> remote
+  release -- "exe files and payload,<br/>kept for the computers" --> server
+  release -- "wmanager-sign and<br/>the signed SHA256SUMS" --> sign
+  viewer -. "asks it to sign<br/>each session" .-> sign
+  viewer -. "session" .-> relay
+  remote -. "opened by the computer" .-> relay
+  agent -. "lets in only a<br/>session it verified" .-> remote
 ```
 
 The administrator works in the panel, and signs in `wmanager-sign` with a security key or Windows Hello. The server
 keeps everything and hands it out, but the agent acts only on what passes its checks against the company's admin
-list, so a hacked server can't make an enrolled computer run anything. The computer always opens the connection:
-nothing listens on it. The dashed lines are remote support, which comes in v2 (requirement 42).
+list and the rights in its signed state, so a hacked server can't make an enrolled computer run anything. The
+computer opens every connection itself: nothing listens on it, remote support included. The dashed lines are remote
+support, which comes in v2 (requirement 42).
 
 | Part | What it is |
 | --- | --- |
@@ -109,7 +114,7 @@ sequenceDiagram
   W->>S: the statement with its signature
   G->>S: long poll
   S-->>G: the statement with its signature
-  G->>G: the six checks, against the admin list
+  G->>G: the six checks, against the admin list<br/>and the rights in the state
   G->>G: acts on it, or refuses it
   G->>S: output and logs
 ```
@@ -140,10 +145,10 @@ One server holds many companies, and each is kept apart:
 
 | Key | Where it is | What it signs | Who checks it |
 | --- | --- | --- | --- |
-| A company administrator's signing key | a FIDO2 security key (e.g. YubiKey) or Windows Hello, tied to that device (no passkey synced between devices), used only by `wmanager-sign` and the viewer of [remote support](#remote-support) | the company's admin lists, its states, its single jobs and its remote sessions | the agent, before acting |
-| The signing key of a person who is not an administrator | the same kind of key, used the same way | the single jobs, `stop`s and remote sessions of the computers in that person's units | the agent, against the person's rights in the signed state |
+| A company administrator's signing key | a FIDO2 security key (e.g. YubiKey) or Windows Hello, tied to that device (no passkey synced between devices), used only by `wmanager-sign` | the company's admin lists, its states, its single jobs and its remote sessions | the agent, before acting |
+| The signing key of a person who is not an administrator | the same kind of key, used the same way | the single jobs and remote sessions of the computers in that person's units, and the `stop` of that person's own jobs | the agent, against the person's rights in the signed state |
 | The release key | with the maintainer, off the server | each release's `SHA256SUMS` (every file, including the Linux `wmanager-sign`), and the Windows exe files (Authenticode) | Windows, the agent (the payload and its own updates), `wmanager-sign` (its own updates, and a version before it signs it) |
-| A computer's key | made on the computer at enrollment, in the TPM when there is one; the computer's id is the SHA-256 of its public key | the computer's sign-in to the server | the server |
+| A computer's key | made on the computer at enrollment, in the TPM when there is one; the computer's id is the SHA-256 of its public key | the computer's sign-in to the server, and the key it makes for a remote session | the server; for a remote session, the viewer, against the computer's id in its verified state |
 | The server's TLS certificate | Caddy (Let's Encrypt) | the connection | the agent and the browser |
 
 The companies' own signing keys of today (`~/wmanager-companies/<company>/keys`, `osslsigncode`, `publish.sh`,
@@ -187,7 +192,7 @@ holds a random 128-bit value instead, which makes each company's id unique.
 | `state` | serial number, the server's address, the release certificate, the computers (id, name, groups), the people who are not administrators (their keys, units and rights), every file with its SHA-256 (package lists, the groups' scripts, jobs and triggers, the settings), the wmanager version with the hashes of its files, a salted SHA-256 of each secret's value: today's `manifest.psd1` and `groups.psd1`, as JSON |
 | `job` | a random 128-bit id, the ids of the computers it targets, the script's SHA-256, run as SYSTEM or the user, the secrets it may use, a time to start after, an expiry (at most 7 days after signing), a time limit |
 | `stop` | the id of a job, and the computers to stop it on: it stops the job when it runs, and refuses it when it arrives later |
-| `session` | a random 128-bit id, the computer, the technician, the public key the viewer made for this session, what the session may do (screen, keyboard, files, privacy mode), an expiry a few minutes after signing |
+| `session` | a random 128-bit id, the computer, the person, the public key the viewer made for this session, what the session may do (screen, keyboard, files, privacy mode), a time by which it must open (a few minutes after signing), and the longest it may last |
 
 `wmanager-sign` makes the serial numbers and job ids, not the server. A new state's serial is one more than the
 highest it knows of: the highest it has signed itself, the newest state it has verified, and the highest the
@@ -217,7 +222,7 @@ The agent accepts a statement only when all of this holds:
    right for every computer it targets (see [People and their rights](#people-and-their-rights));
 6. it fits what the computer already has: an admin list has the next sequence number and the previous hash; a state
    has a higher serial than the last one; for a job, see [Single jobs](#single-jobs); a session opens once, before
-   its expiry.
+   the time it names; a `stop` signed by a person who is not an administrator is for a job that person signed.
 
 Signing keys are separate from the keys used to sign in to the panel. A browser always puts the page's own
 `https://` address in the origin, so no web page, including one served by a hacked server, can make a signature with
@@ -230,8 +235,12 @@ they are refused.
 
 The *backup eligible* flag is what the key itself reports. A passkey manager or a software authenticator that lies
 about it would pass, unless registration also checks the key's attestation against a list of allowed models (see
-[Open questions](#open-questions)). A new key needs a signature from an administrator who sees it in `wmanager-sign`,
-so the server can't add such a key. An administrator who registers one weakens only their own companies.
+[Open questions](#open-questions)). An administrator who registers such a key weakens only their own companies.
+
+A new key reaches the administrator through the server, so a hacked server could put a key of its own in its place.
+So the new key's owner's `wmanager-sign` shows the key's fingerprint when the key is registered, and the
+administrator's `wmanager-sign` asks for it to be typed before it signs an admin list or a state that adds the key,
+the same way as the id of a new computer. The two compare it in person or by phone.
 
 ### wmanager-sign
 
@@ -275,6 +284,12 @@ Show and sign (1-2), quit (q)?
 - **Keys:** on Linux, a FIDO2 security key over USB or NFC (libfido2). On Windows, Windows Hello or a security key,
   through Windows' own WebAuthn API, which takes any relying party id and the client data from a desktop program. To
   check on a VM in stage 2: that this works with Windows Hello. macOS comes later.
+- **Rights are shown as they change.** For a state, it shows how each person's rights change, also through a computer
+  moved into or out of a group, so a change of groups can't widen someone's rights unseen.
+- **Remote sessions:** the viewer of [remote support](#remote-support) asks `wmanager-sign` to sign each session. It
+  shows the computer, the person, what the session may do and how long, and signs it like any statement.
+- **The audit log:** it remembers the newest head of the company's audit log it has seen, and warns when the history
+  the server shows no longer leads to it (see [The server inside](#the-server-inside)).
 - **`wmanager-sign` offers no signing from a phone.** This is the price of the property above.
 
 ### People and their rights
@@ -286,15 +301,17 @@ Requirement 24. A company's administrators can do everything in it. Anyone else 
 | --- | --- | --- |
 | seeing the data | the inventory, reports, logs and the output of jobs, in the panel | the server |
 | actions approved in advance | starting them from the panel | the server; the computer still checks the action's own limits |
-| remote session | view, control, files or privacy mode, as given; each session signed with the person's own key | the computer |
-| single jobs | scripts, signed with the person's own key; that is as much as full control of those computers | the computer |
+| remote session | view, control, files or privacy mode, as given; each session signed in `wmanager-sign` with the person's own key. Control lets the person do what the signed-in user can and answer a UAC prompt, so it can be full control of the computer | the computer |
+| single jobs | scripts, signed with the person's own key, with only the secrets the state grants that person; that is as much as full control of those computers | the computer |
 
 - **Only an administrator gives rights**, and a person can't pass them on. Rights that the computer checks are part
-  of the signed state: each person with the public keys of their signing keys, their units and their rights, given
-  in `wmanager-sign` like any change of the state. Rights that only the server checks are set in the panel.
-- **The agent's check:** a `job`, `stop` or `session` signed by a person's key is accepted only when the person has
-  that right and every computer it targets is in their units, with the groups taken from the verified state. A
-  person's key signs nothing else: no state and no admin list.
+  of the signed state: each person with the public keys of their signing keys, their units, their rights and the
+  secrets their jobs may use, given in `wmanager-sign` like any change of the state. Rights that only the server
+  checks are set in the panel.
+- **The agent's check:** a `job` or `session` signed by a person's key is accepted only when the person has that right
+  and every computer it targets is in their units, with the groups taken from the verified state. A person's job
+  may use only the secrets the state grants that person. A person's `stop` is accepted only for a job that person
+  signed; an administrator stops any. A person's key signs nothing else: no state and no admin list.
 - **Groups are resolved on the computer.** A server that moves a computer into a person's group in the panel widens
   nothing: the computer goes by the groups in its signed state.
 - **Taking rights away** is a new state. A hacked server can withhold it, as it can an admin list that removes a key.
@@ -317,7 +334,7 @@ Someone in control of the server (or of Caddy, or of the database) **can**:
 It **can't**, on an enrolled computer:
 
 - run a script, or change a group's content, a package list, a setting, a secret's value or the wmanager version;
-- make an administrator sign something other than what `wmanager-sign` shows;
+- make anyone sign something other than what `wmanager-sign` shows;
 - add an administrator or a key to a company, or give a person rights or widen them;
 - run a single job twice, after its expiry, or on a computer it doesn't target;
 - stop a job that is running, or make a computer go back to an older agent or state;
@@ -326,11 +343,13 @@ It **can't**, on an enrolled computer:
 
 What remains:
 
-- **A compromised computer of an administrator.** Malware there can change what `wmanager-sign` signs. It can also
+- **A compromised computer of an administrator, or of a person with rights.** Malware there can change what
+  `wmanager-sign` signs. It can also
   ask the key for a signature itself, through Windows' WebAuthn API or libfido2 (where the PIN passes through the
   computer). It still needs a touch. Keep that computer clean.
 - **A leaked key together with a hacked server** is a takeover, because the server can withhold the list that removes
-  the key.
+  the key. A leaked key of a person who is not an administrator, with a hacked server, is a takeover of that person's
+  units, for the same reason: the server can withhold the state that takes the rights away.
 - **A computer restored from a snapshot** forgets the jobs it ran after the snapshot. It may run one again that hasn't
   expired.
 
@@ -345,8 +364,8 @@ What remains:
      signature padding is on (`EnableCertPaddingCheck`).
    - Anyone can tag a file, so the agent reads the tag strictly. It trusts nothing in it that it can't check (the
      chain against the fingerprint typed in).
-   - Each tagged file has its own hash, so SmartScreen judges it only by the certificate. To check in stage 3: how
-     Windows and SmartScreen treat it.
+   - Each tagged file has its own hash, so SmartScreen judges it only by the certificate. How Windows and SmartScreen
+     treat it is checked in trial 2 of the [Implementation plan](implementation.md#stage-0-trials).
 2. **Check that the installer is genuine.** A hacked server could serve an installer of its own, and a false program
    shows whatever fingerprint it likes. So the exe must come with one of these:
    - Windows shows the name on a publicly trusted release certificate (see [Open questions](#open-questions)). It is
@@ -395,6 +414,18 @@ The untagged release exe asks for the server address and a code made in the pane
   - A script gets only those it declares, as today, masked in its output.
 - **When the server can't be reached** the computer goes on with its last verified copy, as today.
 
+## Inventory
+
+Requirement 12. Once a day, and when the action approved in advance "inventory refresh" runs, the agent reports the
+hardware, the programs and their versions, the Windows version and build, BitLocker, the TPM, Secure Boot, Defender,
+the local administrators and the last signed-in user. It is today's daily system report, sent through the server.
+
+- The server keeps the newest report of each computer, and when each value changed, in PostgreSQL.
+- The panel searches the company's computers by these values, e.g. a program older than a given version, BitLocker
+  off, or a local administrator who shouldn't be one.
+- Reporting needs no signature: the computer only tells. A hacked server can show false values, like anything else in
+  the panel.
+
 ## Single jobs
 
 - **In the panel:** the computers or groups, a script (from the library or typed), run as SYSTEM or as the signed-in
@@ -419,12 +450,15 @@ The untagged release exe asks for the server address and a code made in the pane
   - Stopping a job that is running needs a signed `stop`, because killing a firmware update or a disk change midway
     does harm.
   - A signed `stop` that arrives before its job is kept, and the job is refused when it comes.
+  - A person who is not an administrator stops only the jobs they signed (see
+    [People and their rights](#people-and-their-rights)).
 
 ### Actions approved in advance
 
 Some actions are needed often and do no harm beyond their timing: restart, a Defender scan, an inventory refresh, the
-update now, a diagnostics bundle, Wake-on-LAN, and isolating a computer (the firewall lets through only the wmanager
-server) and lifting that. They are started from the panel with one click, without a key:
+update now, a diagnostics bundle, and isolating a computer (the firewall lets through only the wmanager server) and
+lifting that. Wake-on-LAN joins them in v1.4 (requirement 17). They are started from the panel with one click,
+without a key:
 
 - **The state lists them.** Each action has its script (from the library), the groups that may run it, run as SYSTEM
   or the user, and the limits of its parameters. A parameter is only a number within bounds or a choice from a fixed
@@ -434,33 +468,47 @@ server) and lifting that. They are started from the panel with one click, withou
   computer is in one of its groups, the parameters fit their limits and the limit of runs isn't used up.
 - **Anything else is signed each time:** any other script, installing or removing a program, and a message to users
   (free text from a hacked server would be a ready phishing message).
-- **Wake-on-LAN:** the panel asks an agent in the same network to wake a computer. The target is a computer from the
-  signed state, and the agent takes its MAC address from there.
+- **Wake-on-LAN (v1.4):** the panel asks an agent in the same network to wake a computer. The target is a computer
+  from the signed state, and the agent takes its MAC address from there.
 
 ## Remote support
 
-Requirement 42. Who allows a session and where the viewer runs are decided; the rest is to design.
+Requirement 42, planned for v2. It is here because it has to fit the same design. Who allows a session and where the
+viewer runs are decided; the rest is to design.
 
 - **Our own fork of RustDesk** (AGPL-3.0), under a name of its own: RustDesk's name and logo aren't ours to use. The
   roles of its ID server and relay move into `wmanager-server`. On the computer it runs next to the agent, which
   installs it, updates it and sets it up, never with a secret on a command line.
-- **The viewer is a program from the release**, like `wmanager-sign`. In the panel the technician picks a computer and
-  clicks "Connect", and the panel opens the viewer by a link. The viewer signs in with the panel's accounts and rights
-  (SSO, roles limited to groups).
-- **The technician's key allows each session.** The viewer shows the computer (its name and the first characters of
-  its id, from the verified state) and has the key sign a `session` statement. The touch with a PIN is the second
-  factor before every connection. The agent checks the statement like any other and only then lets the session in.
-  So the panel's sign-in alone is not enough, and a hacked server can't open a session.
-- **No one in the middle.** The session is encrypted end to end between the viewer and the computer. The viewer takes
-  the computer's public key from the verified state, not from the server, and the `session` statement names the key
-  the viewer made for this session. A hacked server, as the ID server and the relay, can block a session but can't
-  see it or take part in it.
+- **The viewer is a program from the release.** In the panel the technician picks a computer and clicks "Connect",
+  and the panel opens the viewer by a link. The viewer signs in with the panel's accounts and rights (SSO, roles
+  limited to groups). It signs nothing itself.
+- **`wmanager-sign` signs each session.** The viewer asks it, and it shows the session: the computer (its name and the
+  first characters of its id, from the verified state), the person, what the session may do and how long. Then the
+  key signs a `session` statement. The touch with a PIN is the second factor before every connection. One program
+  shows and signs everything, so a fault in the viewer, which a link from a hacked panel opens, can't get a signature
+  for anything else.
+- **The agent checks the statement** like any other, and only then lets the session in.
+- **What the fork must hold to**, so that a hacked server can't open a session:
+  - no connection without a `session` the agent has verified;
+  - no password the server knows. If a password stays (requirement 42 asks that the agent pass it in a variable), it
+    is typed or made at the computer;
+  - the computer opens every connection itself, to the relay: discovery in the local network, direct access and
+    connections between the two ends are off, so nothing listens on the computer;
+  - the computer's part and the viewer are in the release's signed `SHA256SUMS` and in the version that the state
+    names, like the agent.
+- **No one in the middle.** The session is encrypted end to end between the viewer and the computer. The computer
+  signs the key it made for the session with its own key (in the TPM), and the viewer checks that key against the
+  computer's id in its verified state (the id is the hash of the computer's public key). The `session` statement
+  names the key the viewer made. So a hacked server, as the relay, can block a session but can't see it or take part
+  in it.
 - **Who may connect:** the company's administrators, and the people with the right to remote sessions in their units
-  (see [People and their rights](#people-and-their-rights)).
+  (see [People and their rights](#people-and-their-rights)). Control lets the technician do what the signed-in user
+  can and answer a UAC prompt, so it can be as much as a single job.
 - **Privacy mode:** the technician works in the user's own Windows session while the computer's screen is black and
   its keyboard and mouse are blocked (RustDesk has both). Since the person at the computer can't see what is done,
-  it is a right of its own in the `session` statement. The black screen shows who is working and since when, and
-  Ctrl+Alt+Del, which Windows lets no program block, gives the keyboard and mouse back.
+  it is a right of its own in the `session` statement. The black screen shows who is working (the name the state
+  gives the key that signed the session) and since when. The person at the computer can always end it: RustDesk lets
+  Ctrl+P through for that, and the fork keeps such a way out, tested on a virtual machine.
 - **Logged:** each session (who, when, which computer, the files moved, privacy mode turned on) goes to the audit log
   and the SIEM export.
 
@@ -468,15 +516,15 @@ To design:
 
 - the protocol, and how much of RustDesk stays;
 - following RustDesk's releases;
-- whether a session needs a password at all once a signature allows it (requirement 42 asks that the agent pass it in
-  a variable);
-- how long a `session` statement is valid;
-- what the person at the computer sees during a session without privacy mode.
+- whether a session needs a password at all once a signature allows it;
+- how long a session may wait to open and how long it may last;
+- what the person at the computer sees during a session without privacy mode;
+- whether `wmanager-server` takes code from `rustdesk-server` (see [License](#license)).
 
 ## Updates
 
 - **One release tag** builds the payload ZIP, `wmanager-agent.exe`, `wmanager-sign` (Windows and Linux), the server
-  image (`ghcr.io/lechup/wmanager-server`) and `SHA256SUMS`.
+  image (`ghcr.io/lechup/wmanager-server`) and `SHA256SUMS`; from v2 also the two parts of remote support.
   - The release key signs `SHA256SUMS`, which covers every file, including the payload and the Linux `wmanager-sign`
     that Authenticode can't sign. The format of that signature is chosen in stage 6.
   - The release key also signs the Windows exe files with Authenticode.
@@ -515,8 +563,8 @@ To design:
 
 ## Logs and monitoring
 
-- **Logs stay on our side.** The payload writes the same lines as today, and the agent sends them to the server.
-  Computers hold no Loki token.
+- **Logs stay on our side.** The payload writes the same lines as today, and the agent sends them to the server
+  (the proposal of an [open question](#open-questions)). Computers hold no Loki token.
   - The panel shows job output, the runs and the audit log from PostgreSQL.
   - The server passes the full logs to the company's tenant in Loki next to the server (the self-hosting kit), with
     today's Grafana dashboard and alerts. The run records that the dashboard reads stay.
@@ -532,7 +580,11 @@ To design:
 - **Roles:** the *owner* of the server makes companies and accounts. A company *admin* edits it and prepares
   statements (signing still needs a key in the company's admin list). Anyone else has the rights an administrator
   gave them in their units (see [People and their rights](#people-and-their-rights)).
-- **Audit log:** who did what and when, including sign-ins and signatures, in the panel and in Loki.
+- **Audit log** (requirement 25): who did what and when, including sign-ins, signatures and remote sessions, in the
+  panel and in Loki. Each entry holds the SHA-256 of the one before. The server alone could compute the whole chain
+  again, so it is anchored outside it twice: the newest head goes to Loki every few minutes (and to the SIEM export,
+  requirement 21), and `wmanager-sign` remembers the head it saw last and warns when the history the server shows no
+  longer leads to it. The log can be exported, with its hashes, as CSV and JSON.
 - **The panel is minimal:** few screens (companies, computers, groups and their files, jobs, installers, accounts,
   audit log), HTML from Go templates, no frontend framework and no build step. JavaScript only for passkeys, in one
   small static file. A strict Content Security Policy (no inline scripts), CSRF tokens, and sessions kept in the
@@ -592,12 +644,17 @@ Each will be asked before the stage it belongs to. The first option is the propo
 
 Every part (the server, the agent, `wmanager-sign`, the payload) stays under GPL v3, like wmanager today. Each
 dependency must have an open-source license that fits GPL v3 (MIT, BSD, Apache 2.0, MPL 2.0, LGPL). Running
-wmanager needs no closed component. The libraries named in this design fit: libfido2 (BSD), and Omaha's
+wmanager needs no closed component.
+
+The fork of RustDesk for remote support (v2) stays under AGPL-3.0, its own license. GPL v3 and AGPL-3.0 allow a work
+to combine the two (section 13 of each). If `wmanager-server` takes code from `rustdesk-server` (also AGPL-3.0),
+AGPL's terms reach that combined server too: its source must be offered to the people who use it over the network,
+which the public repository does. The libraries named in this design fit: libfido2 (BSD), and Omaha's
 `certificate_tag` (Apache 2.0). CI will list the licenses of the Go modules and fail on one that doesn't fit.
 
 ## Not in v1
 
-- a remote terminal (remote desktop is in [Remote support](#remote-support));
+- a remote terminal. Remote desktop comes in v2 (see [Remote support](#remote-support));
 - computers with macOS, and `wmanager-sign` on macOS;
 - computers with Linux: they come after Windows (requirement 23);
 - more than one server instance;

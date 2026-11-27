@@ -13,26 +13,26 @@
 | 3 | **The server makes the agent installer** (an exe) for each company. | 2026-11-26 | v1.0 | [Enrolling a computer](architecture.md#enrolling-a-computer) |
 | 4 | **Automatic updates** of the agent and of wmanager on the computers, without visiting them. | 2026-11-26 | v1.0 | [Updates](architecture.md#updates) |
 | 5 | **Single jobs**: run a script on one computer (or a group) now, and see its output. | 2026-11-26 | v1.0 | [Single jobs](architecture.md#single-jobs) |
-| 6 | **The server alone can't make an enrolled computer run code.** Everything a computer acts on is signed by an administrator of its company in `wmanager-sign`, with a security key or Windows Hello. | 2026-11-26 | v1.0 | [Who can make a computer run something](architecture.md#who-can-make-a-computer-run-something) |
+| 6 | **The server alone can't make an enrolled computer run code.** Everything a computer acts on is signed in `wmanager-sign`, with a security key or Windows Hello, by an administrator of its company or by a person the company's signed state gives that right. | 2026-11-26 | v1.0 | [Who can make a computer run something](architecture.md#who-can-make-a-computer-run-something) |
 | 7 | **Many companies on one server**, each kept apart: its own administrators and admin list, computers, groups, files, secrets, jobs, installers, audit log and Loki tenant. One person may work for several companies. | 2026-11-26 | v1.0 | [Several companies on one server](architecture.md#several-companies-on-one-server) |
 | 8 | **A minimal panel**: few screens, plain HTML from the server, no frontend framework and no build step; JavaScript only where the browser needs it (passkeys). | 2026-11-26 | v1.0 | [The server inside](architecture.md#the-server-inside) |
-| 9 | **An open-source license**: every part (server, agent, signer, payload) under an OSI-approved license, GPL v3 as today. Only dependencies whose licenses fit it (e.g. MIT, BSD, Apache 2.0, MPL 2.0), and no closed component needed to run it. | 2026-11-26 | v1.0 | [License](architecture.md#license) |
+| 9 | **An open-source license**: every part (server, agent, signer, payload) under an OSI-approved license, GPL v3 as today (the fork of RustDesk for remote support stays AGPL-3.0). Only dependencies whose licenses fit it (e.g. MIT, BSD, Apache 2.0, MPL 2.0), and no closed component needed to run it. | 2026-11-26 | v1.0 | [License](architecture.md#license) |
 | 10 | **What wmanager does today stays**: the provisioning steps, groups, packages, scripts, jobs, the startup, fixed-time, event and sign-in triggers, run-as user, secrets, the library, the ten languages, Loki and Grafana. | 2026-11-26 | v1.0 | [What stays the same](architecture.md#what-stays-the-same) |
 | 11 | **A person at the computer provisions it**, and the passwords are typed there, never stored. | 2026-11-26 | v1.0 | [Enrolling a computer](architecture.md#enrolling-a-computer) |
-| 12 | **Inventory with search**: hardware, programs and their versions, the Windows version, BitLocker, TPM, Secure Boot, Defender, local administrators and the last signed-in user, searchable across a company's computers (e.g. "Chrome older than X"). | 2026-11-26 | v1.0 | to design |
+| 12 | **Inventory with search**: hardware, programs and their versions, the Windows version, BitLocker, TPM, Secure Boot, Defender, local administrators and the last signed-in user, searchable across a company's computers (e.g. "Chrome older than X"). | 2026-11-26 | v1.0 | [Inventory](architecture.md#inventory) |
 | 13 | **Alerts**: a computer that is off, low disk space, a pending restart, old Defender signatures, a failed job; by e-mail and webhook. | 2026-11-26 | v1.1 | to design |
 | 14 | **A compliance report per company** (CSV and PDF): BitLocker, firewall, updates and more, e.g. for a client's audit or NIS2. | 2026-11-26 | v1.2 | to design |
 | 15 | **Windows Update under control**: the state of each computer, installing now or at a set time, and a restart the user can postpone. | 2026-11-26 | v1.1 | to design |
 | 16 | **Network discovery**: the agent finds devices without an agent in its local network (printers, NAS, unknown computers). | 2026-11-26 | v1.4 | to design |
 | 17 | **Wake-on-LAN**: an agent wakes a computer that is off in the same network. | 2026-11-26 | v1.4 | to design |
-| 18 | **One-click actions in the panel, approved in advance**: an administrator signs once a list of actions without free parameters (restart, Defender scan, inventory refresh, update now, a diagnostics bundle, Wake-on-LAN), and the panel starts them without a key. Anything else (any script, installing or removing a program, a message to users) is signed every time. | 2026-11-26 | v1.0 | [Actions approved in advance](architecture.md#actions-approved-in-advance) |
+| 18 | **One-click actions in the panel, approved in advance**: an administrator signs once a list of actions without free parameters (restart, Defender scan, inventory refresh, update now, a diagnostics bundle; Wake-on-LAN with requirement 17), and the panel starts them without a key. Anything else (any script, installing or removing a program, a message to users) is signed every time. | 2026-11-26 | v1.0 | [Actions approved in advance](architecture.md#actions-approved-in-advance) |
 | 19 | **Logs on our side**: job output, runs and the audit log in the panel (PostgreSQL); the computers' full logs in Loki next to the server (the self-hosting kit), with Grafana; Grafana Cloud only as an option. | 2026-11-26 | v1.0 | [Logs and monitoring](architecture.md#logs-and-monitoring) |
 | 20 | **SSO for the panel**: OIDC and SAML (Entra ID, Google Workspace, Keycloak, Authentik), roles from the provider's groups, MFA required at the provider. SSO opens only the panel: signing still needs a key in `wmanager-sign`. | 2026-11-26 | v1.3 | to design |
 | 21 | **Export to a SIEM, per company**: the audit log and security events from the computers (Defender detections, refused signatures, new computers), as syslog over TLS (JSON or CEF), a webhook or OpenTelemetry; enough for Splunk, Elastic, Sentinel and Wazuh. | 2026-11-26 | v1.3 | to design |
 | 22 | **API and webhooks**: a REST API with narrowly scoped tokens, and events sent to webhooks (e.g. a ticketing system). | 2026-11-26 | v1.3 | to design |
 | 23 | **Computers with Linux**, after Windows: the same server, agent and signatures, with a payload for Linux (apt or dnf, bash scripts, systemd timers). | 2026-11-26 | v2 | to design |
 | 24 | **Rights of people to units**: a person who is not an administrator gets rights to groups (e.g. one site of a company) and to single computers: seeing their data, the actions approved in advance, remote sessions and single jobs. Only the company's administrators give them. | 2026-11-26, extended 2026-11-27 | v1.0 | [People and their rights](architecture.md#people-and-their-rights) |
-| 25 | **An audit log that can't be changed unnoticed** (each entry holds the hash of the one before), exportable. | 2026-11-26 | v1.0 | to design |
+| 25 | **An audit log that can't be changed unnoticed** (each entry holds the hash of the one before), exportable. | 2026-11-26 | v1.0 | [The server inside](architecture.md#the-server-inside) |
 | 26 | **Retention of logs and output per company**, with deletion after it (GDPR). | 2026-11-26 | v1.3 | to design |
 | 27 | **BitLocker with key escrow**: turning BitLocker on, and the recovery keys kept on the server (which can read them, as it can read secrets). | 2026-11-26 | v1.2 | to design |
 | 28 | **Isolating a computer**: an action approved in advance in which the firewall cuts the computer off from everything but the wmanager server, e.g. when an infection is suspected; another action lifts it. | 2026-11-26 | v1.0 | [Actions approved in advance](architecture.md#actions-approved-in-advance) |
@@ -49,14 +49,14 @@
 | 39 | **Wi-Fi profiles per group**: WPA2 and WPA3 Personal, the network's password a secret; WPA2 and WPA3 Enterprise (802.1X, PEAP or EAP-TLS) with the account or certificate it needs. | 2026-11-26 | v1.1 | to design |
 | 40 | **VPN profiles per group**: the VPN built into Windows (IKEv2, SSTP, L2TP), WireGuard and OpenVPN; the programs from Chocolatey, the keys and passwords secrets. | 2026-11-26 | v1.1 | to design |
 | 41 | **A ready list of packages to choose from**, not installed by default: wmanager suggests Chocolatey packages (Chrome, LibreOffice, Adobe Acrobat Reader, 7-Zip, VLC, RustDesk, Notepad++), and an administrator picks the ones a group gets. Nothing is installed on every computer unless a package list says so. | 2026-11-26 | v1.1 | to design |
-| 42 | **Remote support built into wmanager**: our own fork of RustDesk (AGPL-3.0, under a name of its own), with the roles of its ID server and relay moved into `wmanager-server`. The part on the computer is set up by the agent and takes its password from a variable, never from a command line. A second factor before every connection. Everything is started from the web panel; technicians connect with a separate viewer that signs in with the same accounts and rights as the panel (SSO, roles limited to groups). **Privacy mode**: the computer's screen black and its keyboard and mouse blocked during a session, as a right of its own; the black screen shows who is working and since when, and turning it on is logged. | 2026-11-27 | v2 | [Remote support](architecture.md#remote-support) |
+| 42 | **Remote support built into wmanager**: our own fork of RustDesk (AGPL-3.0, under a name of its own), with the roles of its ID server and relay moved into `wmanager-server`. The part on the computer is set up by the agent and takes its password from a variable, never from a command line; the server never knows that password. A second factor before every connection. Everything is started from the web panel; technicians connect with a separate viewer that signs in with the same accounts and rights as the panel (SSO, roles limited to groups). **Privacy mode**: the computer's screen black and its keyboard and mouse blocked during a session, as a right of its own; the black screen shows who is working and since when, and turning it on is logged. | 2026-11-27 | v2 | [Remote support](architecture.md#remote-support) |
 
 ## Decisions so far
 
 - Go for the server, the agent and `wmanager-sign`. The agent runs today's PowerShell code.
 - PostgreSQL for the server's data.
 - The company's first admin list is its anchor. Each change is signed by a key from the version before.
-- Everything a computer acts on is signed in `wmanager-sign`, a program from the release on the administrator's
+- Everything a computer acts on is signed in `wmanager-sign`, a program from the release on the signer's own
   computer, not in the panel: the panel's page comes from the server, so a hacked server could change what is signed
   there.
 - One-click actions are approved in advance: their scripts and parameter limits are in the signed state, and the
@@ -66,12 +66,17 @@
 - Secrets are typed in `wmanager-sign`. The signed state holds a salted hash of each value, and the computer keeps the
   values its scripts need, readable only by SYSTEM, so they work at startup and without a network.
 - The serverless mode of today is removed, with no migration: there are no computers in production.
-- Remote support: the viewer is a program from the release, opened from the panel by a link, and the technician's
-  key allows each session in it. The computer checks that signature against the signed state, so the panel's
-  sign-in alone opens no session.
+- Remote support: the viewer is a program from the release, opened from the panel by a link. It signs nothing: it
+  asks `wmanager-sign`, which shows each session and signs it with the technician's key. The computer checks that
+  signature against the signed state, so the panel's sign-in alone opens no session.
 - Rights of people: the units are groups and single computers. The rights the computer checks (remote sessions,
   single jobs) are in the signed state, given by an administrator in `wmanager-sign`; seeing the data and the
-  actions approved in advance are checked by the server.
+  actions approved in advance are checked by the server. A person's jobs may use only the secrets granted to that
+  person, and a person stops only the jobs they signed.
+- A new key is added only with its fingerprint typed in the administrator's `wmanager-sign`, as a new computer's id
+  is, so the server can't swap it.
+- The audit log is anchored outside the server twice: its newest head goes to Loki, and `wmanager-sign` remembers the
+  head it saw last.
 
 ## Waiting to be done
 

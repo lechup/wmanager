@@ -74,7 +74,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
    follows the FIDO2 format. The same trial with a real key comes when there is one, before `wmanager-sign` is used
    on real computers.
 2. **The tag in a signed exe:** a Go exe signed with Authenticode, tagged in the "superfluous certificate" mode, on
-   Windows 11 with `EnableCertPaddingCheck` on: does Windows still accept the signature, and does Defender let it run?
+   Windows 11 with `EnableCertPaddingCheck` on: does Windows still accept the signature, does Defender let it run, and
+   what does SmartScreen say about it when it comes from the internet (with the mark of the web)?
 3. **The computer's key in the TPM:** making a key that can't leave the TPM, signing with it, and reading its public
    key, from Go, on a Windows 11 virtual machine with a virtual TPM; and what the agent does when there is no TPM.
 4. **Defender and Go exe files:** an unsigned and a signed Go exe on a clean Windows 11, which feeds the open
@@ -87,26 +88,29 @@ Short trials of what could overturn the design, each on a branch of its own. The
 - **1a, data and accounts:**
   - the settings from environment variables and files, never from the command line;
   - PostgreSQL with migrations;
-  - companies and accounts. The server's first owner is made by a command that asks for the password in the
-    terminal;
+  - companies, accounts and the panel's roles (owner, admin). The server's first owner is made by a command that
+    asks for the password in the terminal;
   - sign-in with argon2id, a mandatory TOTP code or passkey, and recovery codes;
   - sessions in cookies (`Secure`, `HttpOnly`, `SameSite=Strict`), CSRF tokens, a strict Content Security Policy,
     rate limits and a lockout;
-  - the audit log, each entry holding the hash of the one before (requirement 25);
+  - the audit log, each entry holding the hash of the one before, its newest head sent to Loki every few minutes,
+    and its export as CSV and JSON (requirement 25);
   - every query limited to the signed-in account's companies, and row-level security in PostgreSQL as a second
     barrier.
 - **1b, the panel and the image:**
   - the panel's frame in ten languages, with a test that every language has every message;
   - the Docker image;
-  - `examples/selfhosted/` with Caddy, PostgreSQL, Loki and Grafana.
+  - `examples/selfhosted/` with Caddy, PostgreSQL, Loki and Grafana, and `selfhosted.sh` with backup and restore of
+    the database.
 - **Tests:** unit tests, and integration tests against PostgreSQL, including tests that one company sees nothing of
   another.
 
 ### Stage 2: signatures
 
 - **2a, `verify/`:**
-  - the formats and their strict schemas: an unknown field is refused, and so is a key that appears twice (Go's
-    `encoding/json` accepts that);
+  - the formats and their strict schemas, decoded with `encoding/json/v2` and unknown members rejected. It also
+    refuses a name that appears twice and matches names exactly; the old `encoding/json` accepts the first and
+    matches `"Serial"` to `serial`;
   - the six checks;
   - a software authenticator for the tests, with a test for every refusal: a synced key, another company, a wrong
     origin, an old serial, a wrong algorithm.
@@ -114,6 +118,9 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - the first admin list and the company's fingerprint, then the changes of the list;
   - showing what is signed, with control characters made visible and the difference from the last verified state;
   - `add-file`, typing secrets, the clock check against the server, the serial numbers;
+  - a new key's fingerprint shown at registration and typed by the administrator, how each person's rights change,
+    and the head of the audit log it saw last;
+  - a test by hand with a real security key, once there is one;
   - the server's side: storing statements and handing them out.
 - **2c:** Windows Hello in `wmanager-sign`.
 
@@ -123,8 +130,9 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - the `wmanager` service as SYSTEM;
   - the computer's key in the TPM and its id;
   - enrollment with a token, the fingerprint typed at the computer, and the first 8 characters of the id shown;
-  - long polling and the time of last contact;
-  - a first inventory (requirement 12), from today's daily system report.
+  - long polling and the time of last contact, with Grafana's panel of computers that are off and its alert, read
+    from PostgreSQL;
+  - the inventory (requirement 12) from today's daily system report, and its search in the panel.
 - **3b, the installer:** the installer from the panel, tagged with the company's whole admin chain,
   `wmanager-sign check-installer`, and the list of computers.
 
@@ -133,13 +141,15 @@ Short trials of what could overturn the design, each on a branch of its own. The
 - **4a, edited, signed and checked:**
   - editing in the panel: groups, files, package lists, scripts, jobs, triggers, settings, the library;
   - signing in `wmanager-sign`, and the agent's check;
-  - the rights of people (requirement 24).
+  - the rights of people (requirement 24), with the secrets granted to each person and the `stop` of their own
+    jobs.
 - **4b, the payload, secrets and logs:**
-  - the agent writes the verified copy in today's format (`manifest.psd1`, `groups.psd1`), so the PowerShell code
-    changes as little as possible, and `wmanager-agent verify` lets the payload check that copy;
+  - the agent writes the verified copy in the format decided before this part (the proposal: today's
+    `manifest.psd1` and `groups.psd1`, so the PowerShell code changes as little as possible), and
+    `wmanager-agent verify` lets the payload check that copy;
   - the settings of today's `provision.config.psd1` taken from the state;
   - secrets checked against their hashes and kept for SYSTEM;
-  - logs through the server (requirement 19).
+  - logs (requirement 19), the way the open question decides (the proposal: through the server).
 
 ### Stage 5: jobs and actions
 
@@ -151,7 +161,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
 
 - the release: a reproducible build (`-trimpath`, a fixed date), the signed `SHA256SUMS` and exe files, and the
   server's image;
-- the agent updating itself and the payload, the check on the computer, and going back.
+- the agent updating itself and the payload, the check on the computer, and going back;
+- `wmanager-sign` updating itself, and a new release key, named by a release signed with the old one.
 
 ### Stage 7: without the serverless mode
 
