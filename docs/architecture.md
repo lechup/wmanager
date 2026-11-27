@@ -36,20 +36,48 @@ is checked (see [What a hacked server can and can't do](#what-a-hacked-server-ca
 
 ## Parts
 
+```mermaid
+flowchart LR
+  subgraph admin["Administrator's computer"]
+    browser["Browser: the panel<br/>password + second factor"]
+    sign["wmanager-sign<br/>shows what is signed"]
+    key(["Security key<br/>or Windows Hello"])
+    viewer["Remote support viewer"]
+  end
+  subgraph host["Server: Linux, Docker"]
+    caddy["Caddy<br/>HTTPS"]
+    server["wmanager-server<br/>panel, API, statements, jobs,<br/>installers, audit log"]
+    db[("PostgreSQL")]
+    loki[("Loki and Grafana")]
+    relay["Remote support relay"]
+  end
+  subgraph pc["Company computer: Windows"]
+    agent["wmanager-agent<br/>service as SYSTEM,<br/>checks every signature"]
+    tpm(["TPM: the computer's key"])
+    payload["Payload: today's PowerShell"]
+    remote["Remote support part"]
+  end
+  release["GitHub release<br/>signed with the release key"]
+
+  browser -- "HTTPS" --> caddy
+  key -- "signs" --> sign
+  sign -- "signed statements" --> caddy
+  caddy --> server
+  server --> db
+  server -- "logs" --> loki
+  agent -- "HTTPS long poll,<br/>opened by the computer" --> caddy
+  tpm -- "proves who it is" --> agent
+  agent -- "runs what passed the checks" --> payload
+  release -- "exe files and payload,<br/>checked against SHA256SUMS" --> server
+  release -- "updates, checked<br/>on the computer" --> agent
+  viewer -. "session signed<br/>by the technician's key" .-> relay
+  relay -.-> remote
 ```
- administrator                            wmanager-server (Linux, Docker, behind Caddy)
- ┌──────────────────────────┐   HTTPS     ┌───────────────────────────────────────────┐   ┌────────────┐
- │ browser: the panel       │ ──────────▶ │ panel and API (Go, HTML from templates)   │──▶│ PostgreSQL │
- │  (password + 2nd factor) │             │ companies, computers, groups, files,      │   └────────────┘
- │ wmanager-sign            │ ──────────▶ │ statements and signatures, jobs, output,  │──▶ Loki (logs)
- │  (shows and signs with a │  signatures │ audit log, installers                     │
- │  security key or Windows │             └───────────────────────────────────────────┘
- │  Hello)                  │                                  ▲ HTTPS, always opened by the computer
- └──────────────────────────┘                                  │ (long poll; no open port on the computer)
-                                                   wmanager-agent (Windows service, SYSTEM)
-                                                     checks every signature, keeps the verified copy,
-                                                     runs the PowerShell code, sends output and logs
-```
+
+The administrator works in the panel, and signs in `wmanager-sign` with a security key or Windows Hello. The server
+keeps everything and hands it out, but the agent acts only on what passes its checks against the company's admin
+list, so a hacked server can't make an enrolled computer run anything. The computer always opens the connection:
+nothing listens on it. The dashed lines are remote support, which comes in v2 (requirement 42).
 
 | Part | What it is |
 | --- | --- |
@@ -61,6 +89,34 @@ is checked (see [What a hacked server can and can't do](#what-a-hacked-server-ca
 
 All of them come from the same release and the same repository (`server/`, `agent/`, `sign/`, with the PowerShell
 code where it is now; where the fork of RustDesk lives is to design).
+
+### A change, from the panel to the computer
+
+```mermaid
+sequenceDiagram
+  actor A as Administrator
+  participant P as Panel
+  participant S as wmanager-server
+  participant W as wmanager-sign
+  participant K as Security key
+  participant G as wmanager-agent
+  A->>P: edits a group, a script or a job
+  P->>S: a draft
+  W->>S: fetches the draft and the last states
+  W->>A: shows the statement and what it changes
+  A->>K: touch and PIN
+  K-->>W: the signature
+  W->>S: the statement with its signature
+  G->>S: long poll
+  S-->>G: the statement with its signature
+  G->>G: the six checks, against the admin list
+  G->>G: acts on it, or refuses it
+  G->>S: output and logs
+```
+
+The panel only prepares a draft. What is signed is what `wmanager-sign` shows, and what the computer acts on is what
+it has checked itself. The server stands between them, so it can delay or withhold a statement, but it can't change
+one without breaking its signature.
 
 ## Several companies on one server
 
@@ -516,31 +572,8 @@ nothing in v1.
 
 ## Stages
 
-Each is a pull request of its own, with a review and tests before the merge.
-
-1. **The server's frame:** the Go module, PostgreSQL with migrations, accounts with the mandatory second factor,
-   companies, roles, the audit log, the panel's frame in ten languages, the Docker image in `examples/selfhosted/`,
-   and CI on Linux with PostgreSQL.
-2. **Signatures:**
-   - the statement formats and their strict schemas;
-   - one verification package shared by the server, the agent and the signer;
-   - `wmanager-sign`, with a security key on Linux first, then Windows Hello: showing, `add-file`, secrets, the
-     first admin list and its changes;
-   - tests with a software authenticator, also for refusals (a synced key, another company, a wrong origin, an old
-     serial), and by hand with a real key.
-3. **Agent and installer:** the service, the computer's key and id, enrollment, the tagged installer from the panel
-   with the whole chain, `check-installer`, the fingerprint typed at the computer, the sign of life, and the list of
-   computers.
-4. **The company's state:** editing in the panel, signing, and the agent's check, which hands the copy to the
-   payload (and `wmanager-agent verify` for it). Settings from the state, secrets checked against their hashes and
-   kept for SYSTEM, logs through the server.
-5. **Single jobs:** targets, the time and id checks, the output, and the signed `stop`.
-6. **Updates:** the release with the signed `SHA256SUMS`, the signed exe files and the server image, and the
-   self-update of the agent and the payload, with the check on the computer and going back.
-7. **Without the serverless mode:** removing `run.cmd`, `install.ps1`, the wizard, the source and its tools, and
-   Healthchecks. The documentation and the languages.
-8. **A full test on a VM:** the server in Docker on the host. A clean Windows 11 goes through the installer,
-   provisioning, a change of state, a single job, an update and going back.
+The stages of v1.0, each one pull request or more, and the releases after it are in the
+[Implementation plan](implementation.md).
 
 ## Open questions
 
