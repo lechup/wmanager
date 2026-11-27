@@ -486,8 +486,8 @@ viewer runs are decided; the rest is to design.
   installs it, updates it and sets it up, never with a secret on a command line.
 - **The viewer is a program from the release**, downloaded from GitHub and checked like `wmanager-sign`, with its
   updates checked against the release's signed `SHA256SUMS`. In the panel the technician picks a computer and clicks
-  "Connect", and the panel opens the viewer by a link that carries only the computer's id. The viewer signs in with the panel's accounts and rights (SSO, roles
-  limited to groups). It signs nothing itself.
+  "Connect", and the panel opens the viewer by a link that carries only the computer's id. The viewer signs in with
+  the panel's accounts and rights (SSO, roles limited to groups). It signs nothing itself.
 - **`wmanager-sign` signs each session.** The viewer asks it, and it shows the session: the computer (its name and the
   first characters of its id, from the verified state), the person, what the session may do and how long. Then the
   key signs a `session` statement. The touch with a PIN is the second factor before every connection. One program
@@ -512,10 +512,10 @@ viewer runs are decided; the rest is to design.
   (see [People and their rights](#people-and-their-rights)). Control lets the technician do what the signed-in user
   can and answer a UAC prompt, so it can be as much as a single job.
 - **Privacy mode:** the technician works in the user's own Windows session while the computer's screen is black and
-  its keyboard and mouse are blocked (RustDesk has both). Since the person at the computer can't see what is done,
-  it is a right of its own in the `session` statement. The black screen shows who is working (the name the admin
-  list or the state gives the key that signed the session) and since when. The person at the computer can always end it: RustDesk lets
-  Ctrl+P through for that, and the fork keeps such a way out, tested on a virtual machine.
+  its keyboard and mouse are blocked (RustDesk has both). Since the person at the computer can't see what is done, it
+  is a right of its own in the `session` statement. The black screen shows who is working (the name the admin list or
+  the state gives the key that signed the session) and since when. The person at the computer can always end it:
+  RustDesk lets Ctrl+P through for that, and the fork keeps such a way out, tested on a virtual machine.
 - **Logged:** each session (who, when, which computer, the files moved, privacy mode turned on) goes to the audit log
   and the SIEM export.
 
