@@ -194,6 +194,8 @@ holds a random 128-bit value instead, which makes each company's id unique.
 | `stop` | the id of a job, and the computers to stop it on: it stops the job when it runs, and refuses it when it arrives later |
 | `session` | a random 128-bit id, the computer, the person, the public key the viewer made for this session, what the session may do (screen, keyboard, files, privacy mode), a time by which it must open (a few minutes after signing), and the longest it may last |
 
+Their JSON form is in [Statements](statements.md).
+
 `wmanager-sign` makes the serial numbers and job ids, not the server. A new state's serial is one more than the
 highest it knows of: the highest it has signed itself, the newest state it has verified, and the highest the
 computers report. So a server restored from an older backup, or a state another administrator signed, doesn't make
