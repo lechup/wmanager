@@ -28,7 +28,9 @@ The integration tests (`tests\Managed.Integration.Tests.ps1`) change the compute
    another signer; a key change: the next certificate is trusted, forgotten when the source stops naming it, and
    becomes the computer's own when the source comes signed with it, while a source signed with a key the computer was
    never told about is rejected.
-3. Linux, Docker: the Grafana dashboard and the alert rules against a real Loki and Grafana.
+3. Linux, Docker: the Grafana dashboard and the alert rules against a real Loki and Grafana, and the self-hosting
+   kit end to end, wmanager-server in it (built from the repository, behind Caddy, its owner, a sign-in, the audit
+   heads in Loki, a backup and a restore).
 4. Linux, PowerShell 7: the tests of the configuration wizard (`init.ps1` also runs there), the languages,
    `tools/groups.ps1` and `tools/wm.ps1` (a new company signed with osslsigncode, when the runner's version can sign
    PowerShell files).

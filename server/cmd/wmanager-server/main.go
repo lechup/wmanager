@@ -3,6 +3,7 @@
 //	wmanager-server serve                       serve the panel (plain HTTP behind Caddy); migrates first when
 //	                                            WMANAGER_MIGRATE_DATABASE_URL is set
 //	wmanager-server migrate                     migrate the database, as the role that owns the tables
+//	wmanager-server healthcheck                 ask the running server's /healthz (for Docker's health check)
 //	wmanager-server create-owner <e-mail>       make the owner of the server; asks for the password
 //	wmanager-server unlock <e-mail>             end an account's lockout after wrong second-factor codes
 //	wmanager-server audit verify <chain> [<seq>:<hash>]
@@ -23,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -37,6 +39,7 @@ import (
 	"github.com/lechup/wmanager/server/internal/audit"
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/config"
+	"github.com/lechup/wmanager/server/internal/lokihead"
 	"github.com/lechup/wmanager/server/internal/store"
 	"github.com/lechup/wmanager/server/internal/web"
 )
@@ -51,7 +54,7 @@ func main() {
 }
 
 const usage = `usage:
-  wmanager-server serve | migrate
+  wmanager-server serve | migrate | healthcheck
   wmanager-server create-owner <e-mail>
   wmanager-server unlock <e-mail>
   wmanager-server audit verify <chain> [<seq>:<hash>]
@@ -60,6 +63,9 @@ const usage = `usage:
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) error {
 	if len(args) == 0 {
 		return errors.New(usage)
+	}
+	if args[0] == "healthcheck" && len(args) == 1 {
+		return healthcheck(getenv)
 	}
 	cfg, err := config.Load(getenv)
 	if err != nil {
@@ -72,6 +78,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if err := store.Migrate(ctx, cfg.MigrateDatabaseURL); err != nil {
 			return err
 		}
+		// And the server's own role is one it may run as (not the owner, in wmanager_runtime only).
+		s, err := store.Open(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return err
+		}
+		s.Close()
 		fmt.Fprintln(stdout, "the database is up to date")
 		return nil
 	}
@@ -184,6 +196,10 @@ func serve(ctx context.Context, cfg config.Config, s *store.Store, stderr io.Wri
 		return err
 	}
 	panel.PublicURL, panel.TrustedProxies = cfg.PublicURL, cfg.TrustedProxies
+	if cfg.LokiURL != "" {
+		p := &lokihead.Pusher{Store: s, URL: cfg.LokiURL, Tenant: cfg.LokiTenant, Every: cfg.LokiHeadEvery, Log: log}
+		go p.Run(ctx)
+	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           panel.Handler(),
@@ -205,4 +221,29 @@ func serve(ctx context.Context, cfg config.Config, s *store.Store, stderr io.Wri
 		defer cancel()
 		return srv.Shutdown(shut)
 	}
+}
+
+// healthcheck asks the server listening at WMANAGER_LISTEN (the image has no curl).
+func healthcheck(getenv func(string) string) error {
+	listen := getenv("WMANAGER_LISTEN")
+	if listen == "" {
+		listen = "127.0.0.1:8080"
+	}
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return err
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthz: %s", resp.Status)
+	}
+	return nil
 }

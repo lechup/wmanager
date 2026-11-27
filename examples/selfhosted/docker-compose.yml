@@ -1,10 +1,19 @@
-# wmanager: Grafana and Loki of your own (docs/monitoring.md: Hosting Grafana and Loki yourself). On a server with Docker, in
-# this folder (with ../grafana next to it, as in the repository):
-#   ./selfhosted.sh init                  the names, the e-mail for the certificates, the Grafana password
+# wmanager: Grafana and Loki of your own (docs/monitoring.md: Hosting Grafana and Loki yourself), and wmanager-server
+# with its PostgreSQL (docs/server.md). On a server with Docker, in this folder (with ../grafana next to it, as in the
+# repository):
+#   ./selfhosted.sh init                  the names, the e-mail for the certificates, the passwords (again after an
+#                                         update of the kit: it adds what a newer kit needs)
 #   ./selfhosted.sh add-company <name>    a Loki tenant for the company, its logins, a Grafana data source and alerts,
 #                                         a place for its management source
-#   docker compose up -d
+#   docker compose up -d --build
+#   ./selfhosted.sh create-owner <e-mail> the owner of wmanager-server (asks for the password)
 # Caddy gets the certificates (Let's Encrypt) and checks the logins; Loki keeps each company apart (a tenant each).
+#
+# Networks keep the parts apart: only Caddy reaches wmanager-server (network "front", where Caddy has the fixed
+# address the server trusts for X-Forwarded-For); only the server and its migrations reach PostgreSQL ("data", no way
+# out); the server reaches Loki for the audit heads ("heads", no way out); Caddy, Loki and Grafana share "logs".
+# The migrations run once at each start, as the owner of the tables, in a container of their own: the server never
+# holds that password.
 services:
   caddy:
     image: caddy:2.8.4
@@ -12,9 +21,14 @@ services:
     ports:
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
+    networks:
+      front:
+        ipv4_address: 172.31.250.2
+      logs: {}
     environment:
       LOKI_DOMAIN: ${LOKI_DOMAIN}
       GRAFANA_DOMAIN: ${GRAFANA_DOMAIN}
+      PANEL_DOMAIN: "${PANEL_DOMAIN:?PANEL_DOMAIN is not in .env - run ./selfhosted.sh init after updating the kit}"
       ACME_EMAIL: ${ACME_EMAIL}
       CADDY_GLOBAL: ${CADDY_GLOBAL:-}   # local_certs: certificates of Caddy's own (a test without public names)
     volumes:
@@ -25,6 +39,8 @@ services:
   loki:
     image: grafana/loki:3.3.2
     restart: unless-stopped
+    networks: [logs, heads]
+    cap_drop: [NET_RAW]
     command: -config.file=/etc/loki/config.yaml
     volumes:
       - ./loki.yaml:/etc/loki/config.yaml:ro
@@ -32,6 +48,8 @@ services:
   grafana:
     image: grafana/grafana:11.4.0
     restart: unless-stopped
+    networks: [logs]
+    cap_drop: [NET_RAW]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN}
@@ -46,7 +64,89 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
+  postgres:
+    image: postgres:17.11
+    restart: unless-stopped
+    networks: [data]
+    cap_drop: [NET_RAW]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+    secrets: [postgres-password, owner-password, server-password]
+    volumes:
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # Over TCP: the temporary server of the first start's init.sh listens on the socket only
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "wmanager"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  # The migrations, as the owner of the tables, then it ends; the server starts after it.
+  migrate:
+    build: &build
+      context: ../..
+      dockerfile: server/Dockerfile
+    image: ${WMANAGER_IMAGE:-wmanager-server:local}
+    pull_policy: build
+    networks: [data]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: migrate
+    environment:
+      # The server's own role too: migrate checks it can connect, and nothing more
+      WMANAGER_DATABASE_URL_FILE: /run/secrets/database-url
+      WMANAGER_MIGRATE_DATABASE_URL_FILE: /run/secrets/migrate-database-url
+    secrets: [database-url, migrate-database-url]
+  wmanager:
+    # Built from this repository until releases publish the image (docs/implementation.md, stage 6)
+    build: *build
+    image: ${WMANAGER_IMAGE:-wmanager-server:local}
+    pull_policy: build
+    restart: unless-stopped
+    networks: [front, data, heads]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      WMANAGER_DATABASE_URL_FILE: /run/secrets/database-url
+      WMANAGER_PUBLIC_URL: "https://${PANEL_DOMAIN:?PANEL_DOMAIN is not in .env - run ./selfhosted.sh init after updating the kit}${PANEL_PORT_SUFFIX:-}"
+      WMANAGER_TRUSTED_PROXIES: 172.31.250.2
+      WMANAGER_LOKI_URL: http://loki:3100
+      WMANAGER_LOKI_HEAD_EVERY: ${WMANAGER_LOKI_HEAD_EVERY:-5m}
+    secrets: [database-url]
+networks:
+  front:
+    ipam:
+      config:
+        # Caddy's fixed address is .2; the server takes its own from the upper half, so it can't take Caddy's first
+        - subnet: 172.31.250.0/24
+          ip_range: 172.31.250.128/25
+  data:
+    internal: true
+  heads:
+    internal: true
+  logs: {}
+# Written by selfhosted.sh init in secrets/ (a folder only you can open; the files readable by the containers)
+secrets:
+  postgres-password:
+    file: ./secrets/postgres-password
+  owner-password:
+    file: ./secrets/owner-password
+  server-password:
+    file: ./secrets/server-password
+  database-url:
+    file: ./secrets/database-url
+  migrate-database-url:
+    file: ./secrets/migrate-database-url
 volumes:
   caddy-data: {}
   loki-data: {}
   grafana-data: {}
+  postgres-data: {}

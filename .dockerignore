@@ -1,0 +1,7 @@
+# Only what server/Dockerfile copies: the Go module
+*
+!go.mod
+!go.sum
+!verify/
+!internal/
+!server/

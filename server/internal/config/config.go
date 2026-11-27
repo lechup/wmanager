@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // Config is the server's settings.
@@ -29,6 +30,12 @@ type Config struct {
 	// outside that Docker forwards may come from the network's gateway. Without them, the client's address is the
 	// connection's.
 	TrustedProxies []netip.Prefix
+	// LokiURL is where the audit log's heads are written down every LokiHeadEvery (WMANAGER_LOKI_URL, e.g.
+	// http://loki:3100; WMANAGER_LOKI_TENANT, default wmanager-server; WMANAGER_LOKI_HEAD_EVERY, default 5m).
+	// Without it, nothing is sent.
+	LokiURL       string
+	LokiTenant    string
+	LokiHeadEvery time.Duration
 }
 
 // Load reads the settings. getenv is os.Getenv outside tests.
@@ -67,6 +74,24 @@ func Load(getenv func(string) string) (Config, error) {
 			prefix = netip.PrefixFrom(addr, addr.BitLen())
 		}
 		c.TrustedProxies = append(c.TrustedProxies, netip.PrefixFrom(prefix.Addr().Unmap(), unmappedBits(prefix)).Masked())
+	}
+	if v := strings.TrimRight(getenv("WMANAGER_LOKI_URL"), "/"); v != "" {
+		u, err := url.Parse(v)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return Config{}, errors.New("config: WMANAGER_LOKI_URL must be http(s)://host[:port]")
+		}
+		c.LokiURL = v
+	}
+	c.LokiTenant, c.LokiHeadEvery = "wmanager-server", 5*time.Minute
+	if v := getenv("WMANAGER_LOKI_TENANT"); v != "" {
+		c.LokiTenant = v
+	}
+	if v := getenv("WMANAGER_LOKI_HEAD_EVERY"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < time.Second {
+			return Config{}, errors.New("config: WMANAGER_LOKI_HEAD_EVERY must be a duration of a second or more")
+		}
+		c.LokiHeadEvery = d
 	}
 	return c, nil
 }
