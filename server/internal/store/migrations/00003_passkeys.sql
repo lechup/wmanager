@@ -5,6 +5,7 @@
 CREATE TABLE passkeys (
     id           bytea PRIMARY KEY,               -- the credential's id
     account_id   uuid NOT NULL REFERENCES accounts ON DELETE CASCADE,
+    rp_id        text NOT NULL,                   -- the panel's host it was made for; others are not offered
     name         text NOT NULL CHECK (length(name) BETWEEN 1 AND 60),
     credential   bytea NOT NULL,                  -- the credential record as go-webauthn keeps it (JSON)
     created_at   timestamptz NOT NULL DEFAULT now(),

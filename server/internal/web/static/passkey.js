@@ -14,8 +14,10 @@
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
       body: JSON.stringify(body ?? {}),
     });
-    if (!r.ok) throw new Error(r.status);
-    return r.status === 204 ? {} : r.json();
+    if (r.status === 401) { location.assign("/signin"); throw new Error("signin"); } // the session has ended
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error ?? String(r.status));
+    return body;
   }
 
   function asJSON(cred) {
@@ -56,7 +58,9 @@
         const res = await (el.dataset.passkey === "register" ? register(el) : signin(el));
         location.assign(res?.redirect ?? location.pathname);
       } catch (e) {
-        if (status) status.textContent = el.dataset.failed;
+        if (status && e.message !== "signin") {
+          status.textContent = (e.message === "stale" && el.dataset.stale) || el.dataset.failed;
+        }
         el.disabled = false;
       }
     });

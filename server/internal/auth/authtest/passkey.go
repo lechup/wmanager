@@ -121,3 +121,6 @@ func (p *Passkey) Assert(options []byte) ([]byte, error) {
 		},
 	})
 }
+
+// SetCounter sets the signature counter the next answer counts from (to play a cloned authenticator).
+func (p *Passkey) SetCounter(n uint32) { p.counter = n }

@@ -264,6 +264,10 @@ func (s *Server) full(h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ses, err := s.Auth.Lookup(r.Context(), token(r))
 		if err != nil || !ses.Full {
+			if isJSON(r) {
+				jsonOut(w, http.StatusUnauthorized, []byte(`{"error":"signin"}`))
+				return
+			}
 			if r.Method == http.MethodGet {
 				http.Redirect(w, r, "/signin", http.StatusSeeOther)
 				return
@@ -272,11 +276,20 @@ func (s *Server) full(h handler) http.HandlerFunc {
 			return
 		}
 		if r.Method == http.MethodPost && !csrfOK(r) {
+			if isJSON(r) {
+				jsonOut(w, http.StatusForbidden, []byte(`{"error":"forbidden"}`))
+				return
+			}
 			s.fail(w, r, http.StatusForbidden, "error.forbidden")
 			return
 		}
 		h(w, r, ses)
 	}
+}
+
+// isJSON tells a request of passkey.js, which wants JSON answers, also when the session has ended.
+func isJSON(r *http.Request) bool {
+	return strings.HasPrefix(r.Header.Get("Content-Type"), "application/json")
 }
 
 func (s *Server) owner(h handler) http.HandlerFunc {
@@ -294,6 +307,10 @@ func (s *Server) passwordStep(h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ses, err := s.Auth.Lookup(r.Context(), token(r))
 		if err != nil {
+			if isJSON(r) {
+				jsonOut(w, http.StatusUnauthorized, []byte(`{"error":"signin"}`))
+				return
+			}
 			http.Redirect(w, r, "/signin", http.StatusSeeOther)
 			return
 		}
@@ -302,6 +319,10 @@ func (s *Server) passwordStep(h handler) http.HandlerFunc {
 			return
 		}
 		if r.Method == http.MethodPost && !csrfOK(r) {
+			if isJSON(r) {
+				jsonOut(w, http.StatusForbidden, []byte(`{"error":"forbidden"}`))
+				return
+			}
 			s.fail(w, r, http.StatusForbidden, "error.forbidden")
 			return
 		}
@@ -423,12 +444,15 @@ func (s *Server) codePage(w http.ResponseWriter, r *http.Request, ses auth.Sessi
 	s.renderCode(w, r, http.StatusOK, "")
 }
 
-// renderCode shows the page of the second factor, with the passkey button when the account has a passkey.
+// renderCode shows the page of the second factor, with the passkey button when the account has a passkey (and
+// the panel knows its own address, which passkeys need).
 func (s *Server) renderCode(w http.ResponseWriter, r *http.Request, status int, errKey string) {
-	has, err := s.Auth.HasPasskeys(r.Context(), token(r))
-	if err != nil {
-		s.internal(w, r, err)
-		return
+	has := false
+	if rp, err := s.rp(); err == nil {
+		if has, err = s.Auth.HasPasskeys(r.Context(), rp, token(r)); err != nil {
+			s.internal(w, r, err)
+			return
+		}
 	}
 	s.render(w, r, status, "code", nil, Page{Error: errKey, Data: has})
 }
@@ -801,11 +825,15 @@ func (s *Server) unlock(w http.ResponseWriter, r *http.Request, ses auth.Session
 
 // --- passkeys
 
-func (s *Server) rp(r *http.Request) (auth.RP, error) {
-	if s.PublicURL != "" {
-		return auth.RPFor(s.PublicURL)
+var errNoPublicURL = errors.New("web: passkeys need WMANAGER_PUBLIC_URL")
+
+// rp is the relying party of passkeys: from the panel's configured address only. Without one, there are no
+// passkeys: a request's Host header must never choose the relying party.
+func (s *Server) rp() (auth.RP, error) {
+	if s.PublicURL == "" {
+		return auth.RP{}, errNoPublicURL
 	}
-	return auth.RPFor("https://" + r.Host)
+	return auth.RPFor(s.PublicURL)
 }
 
 func jsonOut(w http.ResponseWriter, status int, body []byte) {
@@ -816,21 +844,28 @@ func jsonOut(w http.ResponseWriter, status int, body []byte) {
 
 // jsonFail answers a passkey request that didn't work, with no detail for the page (its text is the page's own).
 func (s *Server) jsonFail(w http.ResponseWriter, r *http.Request, err error) {
-	status := http.StatusBadRequest
+	status, code := http.StatusBadRequest, "failed"
+	var tooBig *http.MaxBytesError
 	switch {
+	case errors.As(err, &tooBig):
+		status = http.StatusRequestEntityTooLarge
+	case errors.Is(err, errNoPublicURL):
+		status, code = http.StatusNotFound, "unavailable"
+	case errors.Is(err, auth.ErrStale):
+		status, code = http.StatusForbidden, "stale"
 	case errors.Is(err, auth.ErrLocked):
 		status = http.StatusForbidden
 	case errors.Is(err, auth.ErrTooMany):
 		status = http.StatusTooManyRequests
 	case errors.Is(err, auth.ErrNoSession), errors.Is(err, auth.ErrWrongStage):
-		status = http.StatusUnauthorized
+		status, code = http.StatusUnauthorized, "signin"
 	case errors.Is(err, auth.ErrPasskey), errors.Is(err, auth.ErrNoCeremony), errors.Is(err, auth.ErrNoPasskeys),
 		errors.Is(err, auth.ErrBadName), errors.Is(err, auth.ErrCode):
 	default:
 		s.Log.Error("passkey", "path", r.URL.Path, "err", err)
 		status = http.StatusInternalServerError
 	}
-	jsonOut(w, status, []byte(`{"error":true}`))
+	jsonOut(w, status, []byte(`{"error":"`+code+`"}`))
 }
 
 func readJSON(r *http.Request) ([]byte, error) {
@@ -840,7 +875,7 @@ func readJSON(r *http.Request) ([]byte, error) {
 }
 
 func (s *Server) passkeySignInBegin(w http.ResponseWriter, r *http.Request, ses auth.Session) {
-	rp, err := s.rp(r)
+	rp, err := s.rp()
 	if err == nil {
 		var opts []byte
 		if opts, err = s.Auth.BeginPasskeySignIn(r.Context(), rp, token(r)); err == nil {
@@ -853,7 +888,7 @@ func (s *Server) passkeySignInBegin(w http.ResponseWriter, r *http.Request, ses 
 
 func (s *Server) passkeySignInFinish(w http.ResponseWriter, r *http.Request, ses auth.Session) {
 	body, err := readJSON(r)
-	rp, err2 := s.rp(r)
+	rp, err2 := s.rp()
 	if err == nil {
 		err = err2
 	}
@@ -872,6 +907,7 @@ func (s *Server) passkeySignInFinish(w http.ResponseWriter, r *http.Request, ses
 // AccountPage is the data of the account's page.
 type AccountPage struct {
 	Passkeys []auth.Passkey
+	CanAdd   bool // the panel knows its own address (WMANAGER_PUBLIC_URL), which passkeys need
 }
 
 func (s *Server) account(w http.ResponseWriter, r *http.Request, ses auth.Session) {
@@ -880,11 +916,12 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request, ses auth.Sessio
 		s.internal(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "account", &ses, Page{Data: AccountPage{Passkeys: keys}})
+	_, rpErr := s.rp()
+	s.render(w, r, http.StatusOK, "account", &ses, Page{Data: AccountPage{Passkeys: keys, CanAdd: rpErr == nil}})
 }
 
 func (s *Server) passkeyAddBegin(w http.ResponseWriter, r *http.Request, ses auth.Session) {
-	rp, err := s.rp(r)
+	rp, err := s.rp()
 	if err == nil {
 		var opts []byte
 		if opts, err = s.Auth.BeginPasskeyRegistration(r.Context(), rp, token(r)); err == nil {
@@ -897,7 +934,7 @@ func (s *Server) passkeyAddBegin(w http.ResponseWriter, r *http.Request, ses aut
 
 func (s *Server) passkeyAddFinish(w http.ResponseWriter, r *http.Request, ses auth.Session) {
 	body, err := readJSON(r)
-	rp, err2 := s.rp(r)
+	rp, err2 := s.rp()
 	if err == nil {
 		err = err2
 	}
@@ -913,9 +950,11 @@ func (s *Server) passkeyAddFinish(w http.ResponseWriter, r *http.Request, ses au
 
 func (s *Server) passkeyRemove(w http.ResponseWriter, r *http.Request, ses auth.Session) {
 	id, err := base64.RawURLEncoding.DecodeString(r.PostFormValue("id"))
-	if err == nil {
-		err = s.Auth.RemovePasskey(r.Context(), token(r), id)
+	if err != nil {
+		http.Redirect(w, r, "/account", http.StatusSeeOther) // not one of its ids
+		return
 	}
+	err = s.Auth.RemovePasskey(r.Context(), token(r), id)
 	if err != nil && !errors.Is(err, auth.ErrNoSuchKey) {
 		s.internal(w, r, err)
 		return

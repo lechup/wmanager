@@ -670,3 +670,28 @@ func TestPasskeyInThePanel(t *testing.T) {
 		t.Fatalf("passkey.js served as %q", ct)
 	}
 }
+
+func TestPasskeysNeedThePublicURL(t *testing.T) {
+	e := setup(t) // PublicURL unset: the relying party would come from a Host header, so there are no passkeys
+	b := e.browser()
+	b.enroll("owner@example.com")
+	if _, body := b.get("/account"); strings.Contains(body, `data-passkey="register"`) || !strings.Contains(body, "WMANAGER_PUBLIC_URL") {
+		t.Fatal("the account page offers passkeys without the panel's address")
+	}
+	tok := csrfRe.FindStringSubmatch(b.last)[1] // from the sign-out form: the page has no passkey button
+	if code, out := b.postJSON("/account/passkey/begin", tok, nil); code != http.StatusNotFound || !strings.Contains(string(out), "unavailable") {
+		t.Fatalf("begin without the panel's address: %d %s", code, out)
+	}
+}
+
+func TestPasskeyJSONAfterTheSessionEnds(t *testing.T) {
+	e := setup(t)
+	e.panel.PublicURL = "https://localhost"
+	b := e.browser()
+	b.enroll("owner@example.com")
+	b.get("/account")
+	e.clock.add(auth.SessionIdle + time.Hour)
+	if code, out := b.postJSON("/account/passkey/begin", "", nil); code != http.StatusUnauthorized || !strings.Contains(string(out), "signin") {
+		t.Fatalf("a JSON request after the session ended: %d %s", code, out)
+	}
+}
