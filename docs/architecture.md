@@ -131,7 +131,7 @@ holds a random 128-bit value instead, which makes each company's id unique.
 | `state` | serial number, the server's address, the release certificate, the computers (id, name, groups), the people who are not administrators (their keys, units and rights), every file with its SHA-256 (package lists, the groups' scripts, jobs and triggers, the settings), the wmanager version with the hashes of its files, a salted SHA-256 of each secret's value: today's `manifest.psd1` and `groups.psd1`, as JSON |
 | `job` | a random 128-bit id, the ids of the computers it targets, the script's SHA-256, run as SYSTEM or the user, the secrets it may use, a time to start after, an expiry (at most 7 days after signing), a time limit |
 | `stop` | the id of a job, and the computers to stop it on: it stops the job when it runs, and refuses it when it arrives later |
-| `session` | a random 128-bit id, the computer, the technician, the public key the viewer made for this session, what the session may do (screen, keyboard, files), an expiry a few minutes after signing |
+| `session` | a random 128-bit id, the computer, the technician, the public key the viewer made for this session, what the session may do (screen, keyboard, files, privacy mode), an expiry a few minutes after signing |
 
 `wmanager-sign` makes the serial numbers and job ids, not the server. A new state's serial is one more than the
 highest it knows of: the highest it has signed itself, the newest state it has verified, and the highest the
@@ -230,7 +230,7 @@ Requirement 24. A company's administrators can do everything in it. Anyone else 
 | --- | --- | --- |
 | seeing the data | the inventory, reports, logs and the output of jobs, in the panel | the server |
 | actions approved in advance | starting them from the panel | the server; the computer still checks the action's own limits |
-| remote session | view, control or files, as given; each session signed with the person's own key | the computer |
+| remote session | view, control, files or privacy mode, as given; each session signed with the person's own key | the computer |
 | single jobs | scripts, signed with the person's own key; that is as much as full control of those computers | the computer |
 
 - **Only an administrator gives rights**, and a person can't pass them on. Rights that the computer checks are part
@@ -401,7 +401,12 @@ Requirement 42. Who allows a session and where the viewer runs are decided; the 
   see it or take part in it.
 - **Who may connect:** the company's administrators, and the people with the right to remote sessions in their units
   (see [People and their rights](#people-and-their-rights)).
-- **Logged:** each session (who, when, which computer, the files moved) goes to the audit log and the SIEM export.
+- **Privacy mode:** the technician works in the user's own Windows session while the computer's screen is black and
+  its keyboard and mouse are blocked (RustDesk has both). Since the person at the computer can't see what is done,
+  it is a right of its own in the `session` statement. The black screen shows who is working and since when, and
+  Ctrl+Alt+Del, which Windows lets no program block, gives the keyboard and mouse back.
+- **Logged:** each session (who, when, which computer, the files moved, privacy mode turned on) goes to the audit log
+  and the SIEM export.
 
 To design:
 
@@ -410,7 +415,7 @@ To design:
 - whether a session needs a password at all once a signature allows it (requirement 42 asks that the agent pass it in
   a variable);
 - how long a `session` statement is valid;
-- what the person at the computer sees during a session.
+- what the person at the computer sees during a session without privacy mode.
 
 ## Updates
 
