@@ -6,7 +6,8 @@
 #   version, group scripts, jobs, the hourly task).
 # - grafana: the dashboard and the alert rules of examples/grafana against a real Loki and Grafana, and the
 #   self-hosting kit of examples/selfhosted end to end (Docker)
-# - go: the Go code of v1 (gofmt, vet, tests, the Windows build, govulncheck, the licenses of the dependencies)
+# - go: the Go code of v1 (gofmt, vet, tests, the Windows build, govulncheck, the licenses of the dependencies,
+#   the installer's tag against osslsigncode); go-windows: its Windows-only code (the computer's key, NCrypt)
 # - wizard-linux: the tests of the configuration wizard, the languages, the group tool and the companies helper
 #   (tools/wm.ps1) in PowerShell 7 on Linux (init.ps1 and lib/Lang.ps1 run there too)
 # It is Windows Server, not Windows 11 Home/Pro: debloat, privacy, notifications and Restore-Backup.ps1 still
@@ -132,6 +133,27 @@ jobs:
         run: |
           go-licenses check ./... --allowed_licenses="$LICENSES"
           GOOS=windows go-licenses check ./... --allowed_licenses="$LICENSES"
+
+      # The installer's tag against a real Authenticode signature with a two-certificate chain
+      - name: Tags keep osslsigncode's signature valid
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends osslsigncode
+          tests/ci/check-certtag.sh
+
+  # The agent's Windows-only code: the computer's key through NCrypt (the software provider; the TPM only where the
+  # runner has one), as an administrator, which the runner is
+  go-windows:
+    name: Go (Windows)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Tests
+        run: go test ./internal/tpmkey/...
 
   wizard-linux:
     name: Configuration wizard (PowerShell 7, Linux)

@@ -23,11 +23,16 @@ authenticator that builds the authenticator data and the signature as a security
 
 - A good signature passes for all three algorithms, also with the public key read from its COSE form, as a key gives
   it at registration.
-- Each of these is refused, for the reason it should be: another relying party, no touch, no PIN, a synced passkey
-  (*backup eligible*), a web page's origin, `crossOrigin: true`, a registration (`webauthn.create`) instead of a
-  signature, an unknown member of the client data, a member twice, a member in other case, another statement's hash,
-  a changed byte in the authenticator data or the signature, extra bytes after the authenticator data, and a
-  signature with another algorithm than the one pinned for the key.
+- Each of these is refused, and the tests check the reason: another relying party, no touch, no PIN, a synced
+  passkey (*backup eligible*, or *backed up* alone), attested data or extensions in a signature, a web page's
+  origin, `crossOrigin: true`, a registration (`webauthn.create`) instead of a signature, an unknown member of the
+  client data, a member twice, a member in other case, another statement's hash, a changed byte in the
+  authenticator data or the signature, extra bytes after the authenticator data, and a signature with another
+  algorithm than the one pinned for the key.
+- A key's COSE form is accepted only as a real key writes it: one canonical CBOR encoding (no unknown labels, no
+  byte string written as an array, shortest integers, no tags), P-256 on the curve, an Ed25519 key not of small
+  order (with the identity point as the key, a fixed signature verifies on any message), and RSA of 2048 to 4096
+  bits with exponent 65537.
 - `encoding/json/v2` with `RejectUnknownMembers` refuses a member twice and a member in other case. The old
   `encoding/json` keeps the last of two members and binds `"SERIAL"` to `serial`, even with `DisallowUnknownFields`
   (checked with Go 1.27.4).
@@ -38,7 +43,15 @@ and reports *user verified* and *backup eligible* as expected.
 
 ## Trial 2: the tag in a signed exe
 
-Waiting for the virtual machine run.
+**Before the virtual machine, in CI** (`tests/ci/check-certtag.sh`): a Go exe signed by `osslsigncode` with a
+leaf certificate under a CA, the chain written leaf first as a commercial certificate brings it, stays valid for
+`osslsigncode verify` after a tag, a 30 kB tag, and the first tag again (the file doesn't grow). A first version
+of `certtag`, which re-encoded the signature with `encoding/asn1` as Omaha does, would have broken this: DER sorts a
+SET OF, so about half of all two-certificate chains were refused. It now keeps the signature's bytes and only
+replaces its certificates, in their order. A fuzz test (`FuzzGetSet`) finds no input that crashes it.
+
+**On Windows:** waiting for the virtual machine run (Windows' own check, `EnableCertPaddingCheck`, Defender,
+SmartScreen).
 
 ## Trial 3: the computer's key in the TPM
 

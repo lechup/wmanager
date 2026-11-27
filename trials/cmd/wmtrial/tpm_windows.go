@@ -25,7 +25,7 @@ func tpmTrial() error {
 
 func oneProvider(provider string) error {
 	start := time.Now()
-	k, err := tpmkey.Create(provider, keyName)
+	k, err := tpmkey.Replace(provider, keyName)
 	if err != nil {
 		return err
 	}

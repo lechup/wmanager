@@ -89,6 +89,7 @@ type Options struct {
 	NoTouch        bool   // user present not set
 	NoPIN          bool   // user verified not set
 	BackupEligible bool   // a synced passkey
+	ExtraFlags     byte   // other flags of the authenticator data, set as given
 	ClientData     []byte // default verify.ClientDataJSON(hash)
 }
 
@@ -112,6 +113,7 @@ func (k *Key) Sign(statementHash [32]byte, o Options) (verify.Assertion, error) 
 	if o.BackupEligible {
 		flags |= 0x08
 	}
+	flags |= o.ExtraFlags
 	k.counter++
 	rpHash := sha256.Sum256([]byte(rpID))
 	ad := make([]byte, 0, 37)

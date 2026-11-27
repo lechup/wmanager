@@ -45,8 +45,11 @@ var (
 	procNCryptGetProperty         = ncrypt.NewProc("NCryptGetProperty")
 )
 
-// ErrNotFound is returned by Open when there is no key of that name.
-var ErrNotFound = errors.New("tpmkey: no such key")
+// Errors.
+var (
+	ErrNotFound = errors.New("tpmkey: no such key")
+	ErrExists   = errors.New("tpmkey: a key of that name exists already")
+)
 
 // Key is a machine key in an NCrypt provider. Only SYSTEM and administrators can use a machine key.
 type Key struct {
@@ -62,6 +65,8 @@ func status(op string, r uintptr) error {
 	switch uint32(r) {
 	case nteBadKeyset:
 		return fmt.Errorf("tpmkey: %s: %w", op, ErrNotFound)
+	case nteExists:
+		return fmt.Errorf("tpmkey: %s: %w", op, ErrExists)
 	case ntePermissionDenied:
 		return fmt.Errorf("tpmkey: %s: permission denied (needs SYSTEM or an administrator)", op)
 	}
@@ -78,8 +83,17 @@ func openProvider(name string) (uintptr, error) {
 	return h, status("open "+name, r)
 }
 
-// Create makes a new ECDSA P-256 machine key of that name in the provider, replacing one of the same name.
-func Create(provider, name string) (*Key, error) {
+// Create makes a new ECDSA P-256 machine key of that name in the provider. It refuses when the name is taken:
+// the computer's key is its identity, and losing it means enrolling the computer again.
+func Create(provider, name string) (*Key, error) { return create(provider, name, 0) }
+
+// Replace makes a new key of that name, replacing one that exists. Only for keys that may be lost, such as the
+// trials'.
+func Replace(provider, name string) (*Key, error) {
+	return create(provider, name, ncryptOverwriteKeyFlag)
+}
+
+func create(provider, name string, flags uintptr) (*Key, error) {
 	prov, err := openProvider(provider)
 	if err != nil {
 		return nil, err
@@ -92,7 +106,7 @@ func Create(provider, name string) (*Key, error) {
 	}
 	var key uintptr
 	r, _, _ := procNCryptCreatePersistedKey.Call(prov, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(alg)),
-		uintptr(unsafe.Pointer(kn)), 0, ncryptMachineKeyFlag|ncryptOverwriteKeyFlag)
+		uintptr(unsafe.Pointer(kn)), 0, ncryptMachineKeyFlag|flags)
 	if err := status("create key", r); err != nil {
 		free(prov)
 		return nil, err
@@ -156,6 +170,9 @@ func (k *Key) export() ([]byte, error) {
 	if err := status("export public key", r); err != nil {
 		return nil, err
 	}
+	if n == 0 || n > 4096 {
+		return nil, fmt.Errorf("tpmkey: public key blob of %d bytes", n)
+	}
 	buf := make([]byte, n)
 	r, _, _ = procNCryptExportKey.Call(k.key, 0, uintptr(unsafe.Pointer(typ)), 0, uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(n), uintptr(unsafe.Pointer(&n)), 0)
@@ -203,7 +220,9 @@ func (k *Key) PlatformType() string {
 // Delete removes the key from the provider. The Key can't be used after it.
 func (k *Key) Delete() error {
 	r, _, _ := procNCryptDeleteKey.Call(k.key, 0)
-	k.key = 0
+	if r == 0 {
+		k.key = 0 // NCryptDeleteKey frees the handle when it succeeds
+	}
 	k.Close()
 	return status("delete key", r)
 }

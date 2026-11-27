@@ -6,9 +6,11 @@
 // installers; the older way of appending data after the signature fails when Windows checks the signature's
 // padding (EnableCertPaddingCheck).
 //
-// Ported from https://github.com/google/omaha/blob/main/common/certificate_tag/certificate_tag.go
+// After Omaha's https://github.com/google/omaha/blob/main/common/certificate_tag/certificate_tag.go
 // (Copyright 2015 Google Inc., Apache License 2.0), keeping only PE files and the superfluous certificate.
-// Changes: an OID of our own, a SHA-256 signature on the extra certificate, and a strict reader for the agent.
+// Changes: an OID of our own; the signature's structure kept byte for byte, its certificates in their own order
+// (Omaha re-encodes them, which sorts them); stricter checks of the PE headers; no appended data, which the
+// padding check refuses; and a strict reader for the agent.
 package certtag
 
 import (
@@ -21,9 +23,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"time"
+
+	"golang.org/x/crypto/cryptobyte"
+	cbasn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
 
 // OID is the extension that holds the tag.
@@ -38,27 +42,31 @@ var OID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1}
 const MaxTag = 1 << 20
 
 // Get returns the tag of a signed PE file. ok is false when the file is signed but has no tag. A file with more
-// than one tag certificate is refused: the agent reads its tag strictly, since anyone can tag a file.
+// than one tag certificate, or with data appended after the signature, is refused: the agent reads its tag
+// strictly, since anyone can tag a file.
 func Get(pe []byte) (tag []byte, ok bool, err error) {
 	f, err := parse(pe)
 	if err != nil {
 		return nil, false, err
 	}
-	found := -1
-	for i, raw := range f.signed.PKCS7.Certs {
-		v, has, err := tagExtension(raw.FullBytes)
+	if !allZero(f.appended) {
+		return nil, false, errors.New("certtag: data appended after the signature")
+	}
+	found := false
+	for _, der := range f.sd.certs {
+		v, has, err := tagExtension(der)
 		if err != nil {
 			return nil, false, err
 		}
 		if !has {
 			continue
 		}
-		if found >= 0 {
+		if found {
 			return nil, false, errors.New("certtag: more than one tag certificate")
 		}
-		found, tag = i, v
+		found, tag = true, v
 	}
-	if found < 0 {
+	if !found {
 		return nil, false, nil
 	}
 	if len(tag) > MaxTag {
@@ -67,7 +75,8 @@ func Get(pe []byte) (tag []byte, ok bool, err error) {
 	return tag, true, nil
 }
 
-// Set returns a copy of the signed PE file with the given tag, replacing a tag it already has.
+// Set returns a copy of the signed PE file with the given tag, replacing a tag it already has. The signature's
+// other certificates stay as they are, in their order.
 func Set(pe, tag []byte) ([]byte, error) {
 	if len(tag) > MaxTag {
 		return nil, fmt.Errorf("certtag: tag of %d bytes", len(tag))
@@ -76,26 +85,55 @@ func Set(pe, tag []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var kept []asn1.RawValue
-	for _, raw := range f.signed.PKCS7.Certs {
-		_, has, err := tagExtension(raw.FullBytes)
+	if !allZero(f.appended) {
+		return nil, errors.New("certtag: data appended after the signature (an old-style tag)")
+	}
+	var kept [][]byte
+	for _, der := range f.sd.certs {
+		_, has, err := tagExtension(der)
 		if err != nil {
 			return nil, err
 		}
 		if !has {
-			kept = append(kept, raw)
+			kept = append(kept, der)
 		}
 	}
 	cert, err := tagCertificate(tag)
 	if err != nil {
 		return nil, err
 	}
-	f.signed.PKCS7.Certs = append(kept, asn1.RawValue{FullBytes: cert})
-	der, err := asn1.Marshal(f.signed)
+	sd := f.sd
+	sd.certs = append(kept, cert)
+	sd.hasCerts = true
+	der, err := sd.marshal()
 	if err != nil {
-		return nil, fmt.Errorf("certtag: %w", err)
+		return nil, err
 	}
-	return f.build(der), nil
+	return f.build(der, nil), nil
+}
+
+// AppendAfterSignature returns a copy of the signed PE file with data appended after the SignedData, inside the
+// attribute certificate table: the older way of tagging. It is kept only for trial 2, to show that Windows refuses
+// such a file when EnableCertPaddingCheck is on; nothing in wmanager tags files this way, and Get refuses them.
+func AppendAfterSignature(pe, data []byte) ([]byte, error) {
+	f, err := parse(pe)
+	if err != nil {
+		return nil, err
+	}
+	der, err := f.sd.marshal()
+	if err != nil {
+		return nil, err
+	}
+	return f.build(der, append(append([]byte{}, f.appended...), data...)), nil
+}
+
+func allZero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // tagExtension returns the value of the tag extension of a certificate, if it has one.
@@ -146,27 +184,132 @@ func tagCertificate(tag []byte) ([]byte, error) {
 	return x509.CreateCertificate(rand.Reader, &template, &issuer, &key.PublicKey, key)
 }
 
-// signedData is a PKCS#7 SignedData, enough of it to change its set of certificates.
+// signedData is a PKCS#7 ContentInfo with SignedData (RFC 2315), its parts kept as the exact bytes they were,
+// so that writing it again changes nothing but the certificates.
 type signedData struct {
-	Type  asn1.ObjectIdentifier
-	PKCS7 struct {
-		Version     int
-		Digests     asn1.RawValue
-		ContentInfo asn1.RawValue
-		Certs       []asn1.RawValue `asn1:"tag:0,optional,set"`
-		SignerInfos asn1.RawValue
-	} `asn1:"explicit,tag:0"`
+	contentType []byte   // the OID element
+	version     []byte   // INTEGER element
+	digests     []byte   // SET element
+	content     []byte   // SEQUENCE element (the Authenticode SpcIndirectDataContent)
+	hasCerts    bool     // whether the [0] certificates element is there
+	certs       [][]byte // each Certificate element, in order
+	crls        []byte   // the [1] element, if any
+	signers     []byte   // SET element
+}
+
+var oidSignedData = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
+
+var (
+	tagCerts = cbasn1.Tag(0).ContextSpecific().Constructed()
+	tagCRLs  = cbasn1.Tag(1).ContextSpecific().Constructed()
+)
+
+func readElement(s *cryptobyte.String, tag cbasn1.Tag) ([]byte, bool) {
+	var e cryptobyte.String
+	if !s.ReadASN1Element(&e, tag) {
+		return nil, false
+	}
+	return e, true
+}
+
+func parseSignedData(der []byte) (signedData, []byte, error) {
+	bad := func(what string) (signedData, []byte, error) {
+		return signedData{}, nil, fmt.Errorf("certtag: the signature: %s", what)
+	}
+	input := cryptobyte.String(der)
+	var outer cryptobyte.String
+	if !input.ReadASN1(&outer, cbasn1.SEQUENCE) {
+		return bad("not a SEQUENCE")
+	}
+	rest := []byte(input)
+	var sd signedData
+	var ok bool
+	if sd.contentType, ok = readElement(&outer, cbasn1.OBJECT_IDENTIFIER); !ok {
+		return bad("no content type")
+	}
+	oid := cryptobyte.String(sd.contentType)
+	var got asn1.ObjectIdentifier
+	if !oid.ReadASN1ObjectIdentifier(&got) || !got.Equal(oidSignedData) {
+		return bad("not SignedData")
+	}
+	var explicit, inner cryptobyte.String
+	if !outer.ReadASN1(&explicit, cbasn1.Tag(0).ContextSpecific().Constructed()) || !outer.Empty() {
+		return bad("no [0] content")
+	}
+	if !explicit.ReadASN1(&inner, cbasn1.SEQUENCE) || !explicit.Empty() {
+		return bad("SignedData is not a SEQUENCE")
+	}
+	if sd.version, ok = readElement(&inner, cbasn1.INTEGER); !ok {
+		return bad("no version")
+	}
+	if sd.digests, ok = readElement(&inner, cbasn1.SET); !ok {
+		return bad("no digest algorithms")
+	}
+	if sd.content, ok = readElement(&inner, cbasn1.SEQUENCE); !ok {
+		return bad("no content")
+	}
+	if inner.PeekASN1Tag(tagCerts) {
+		var certs cryptobyte.String
+		if !inner.ReadASN1(&certs, tagCerts) {
+			return bad("certificates")
+		}
+		sd.hasCerts = true
+		for !certs.Empty() {
+			c, ok := readElement(&certs, cbasn1.SEQUENCE)
+			if !ok {
+				return bad("a certificate")
+			}
+			sd.certs = append(sd.certs, c)
+		}
+	}
+	if inner.PeekASN1Tag(tagCRLs) {
+		if sd.crls, ok = readElement(&inner, tagCRLs); !ok {
+			return bad("CRLs")
+		}
+	}
+	if sd.signers, ok = readElement(&inner, cbasn1.SET); !ok || !inner.Empty() {
+		return bad("signer infos")
+	}
+	return sd, rest, nil
+}
+
+func (sd signedData) marshal() ([]byte, error) {
+	var b cryptobyte.Builder
+	b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+		b.AddBytes(sd.contentType)
+		b.AddASN1(cbasn1.Tag(0).ContextSpecific().Constructed(), func(b *cryptobyte.Builder) {
+			b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+				b.AddBytes(sd.version)
+				b.AddBytes(sd.digests)
+				b.AddBytes(sd.content)
+				if sd.hasCerts {
+					b.AddASN1(tagCerts, func(b *cryptobyte.Builder) {
+						for _, c := range sd.certs {
+							b.AddBytes(c)
+						}
+					})
+				}
+				b.AddBytes(sd.crls)
+				b.AddBytes(sd.signers)
+			})
+		})
+	})
+	out, err := b.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("certtag: %w", err)
+	}
+	return out, nil
 }
 
 type peFile struct {
 	contents       []byte
 	attrCertOffset int // where the attribute certificate table starts
 	certSizeOffset int // where its size is written in the data directory
-	signed         signedData
-	appended       []byte // bytes after the SignedData, kept as they are
+	sd             signedData
+	appended       []byte // bytes after the SignedData in the table
 }
 
-// Attribute certificate constants (WIN_CERTIFICATE).
+// Attribute certificate constants (WIN_CERTIFICATE) and PE layout.
 const (
 	certRevision      = 0x200
 	certTypePKCS7     = 2
@@ -177,6 +320,7 @@ const (
 	charDLL           = 0x2000
 	peHeaderOffsetPos = 0x3c
 	fileHeaderSize    = 20
+	sectionHeaderSize = 40
 )
 
 func parse(contents []byte) (*peFile, error) {
@@ -198,28 +342,22 @@ func parse(contents []byte) (*peFile, error) {
 		return nil, fmt.Errorf("certtag: attribute certificate type %d", typ)
 	}
 	der := certs[8:]
-	var sd signedData
-	rest, err := asn1.Unmarshal(der, &sd)
+	sd, rest, err := parseSignedData(der)
 	if err != nil {
-		return nil, fmt.Errorf("certtag: the signature: %w", err)
+		return nil, err
 	}
-	inner := der[:len(der)-len(rest)]
-	again, err := asn1.Marshal(sd)
-	if err != nil || !bytes.Equal(again, inner) {
-		return nil, errors.New("certtag: the signature doesn't survive reading and writing again")
+	// Writing it again must give the same bytes: then Set changes nothing but the certificates.
+	again, err := sd.marshal()
+	if err != nil || !bytes.Equal(again, der[:len(der)-len(rest)]) {
+		return nil, errors.New("certtag: the signature isn't in the DER form expected")
 	}
-	return &peFile{
-		contents:       contents,
-		attrCertOffset: offset,
-		certSizeOffset: sizeOffset,
-		signed:         sd,
-		appended:       rest,
-	}, nil
+	return &peFile{contents: contents, attrCertOffset: offset, certSizeOffset: sizeOffset, sd: sd, appended: rest}, nil
 }
 
-// build writes the file again with new SignedData bytes, padded to 8 bytes as the format needs.
-func (f *peFile) build(der []byte) []byte {
-	tail := append([]byte{}, f.appended...)
+// build writes the file again with new SignedData bytes and the given appended bytes, padded with zeros to 8
+// bytes as the format needs.
+func (f *peFile) build(der, appended []byte) []byte {
+	tail := append([]byte{}, appended...)
 	for (len(der)+len(tail))&7 != 0 {
 		tail = append(tail, 0)
 	}
@@ -235,115 +373,61 @@ func (f *peFile) build(der []byte) []byte {
 	return append(out, tail...)
 }
 
-type fileHeader struct {
-	Machine              uint16
-	NumberOfSections     uint16
-	TimeDateStamp        uint32
-	PointerToSymbolTable uint32
-	NumberOfSymbols      uint32
-	SizeOfOptionalHeader uint16
-	Characteristics      uint16
-}
-
-type optionalHeaderStart struct {
-	Magic                   uint16
-	MajorLinkerVersion      uint8
-	MinorLinkerVersion      uint8
-	SizeOfCode              uint32
-	SizeOfInitializedData   uint32
-	SizeOfUninitializedData uint32
-	AddressOfEntryPoint     uint32
-	BaseOfCode              uint32
-}
-
-type dataDirectory struct {
-	VirtualAddress uint32 // for the certificate table: a file offset
-	Size           uint32
-}
-
-// attributeCertificates finds the attribute certificate table of a PE file. It must be the end of the file.
+// attributeCertificates finds the attribute certificate table of a PE file. Every offset is checked against the
+// file before use: the table must come after the headers and end the file.
 func attributeCertificates(bin []byte) (offset, size, sizeOffset int, err error) {
 	if len(bin) < peHeaderOffsetPos+4 {
 		return 0, 0, 0, errors.New("file truncated")
 	}
 	peOffset := int(binary.LittleEndian.Uint32(bin[peHeaderOffsetPos:]))
-	if peOffset < 0 || peOffset > len(bin)-4 {
+	if peOffset < 0 || peOffset > len(bin)-4-fileHeaderSize {
 		return 0, 0, 0, errors.New("PE header out of the file")
 	}
 	if !bytes.Equal(bin[peOffset:peOffset+4], []byte("PE\x00\x00")) {
 		return 0, 0, 0, errors.New("not a PE file")
 	}
-	r := bytes.NewReader(bin[peOffset+4:])
-	var fh fileHeader
-	if err := binary.Read(r, binary.LittleEndian, &fh); err != nil {
-		return 0, 0, 0, err
-	}
-	if fh.Characteristics&charExecutable == 0 || fh.Characteristics&charDLL != 0 {
+	fh := bin[peOffset+4 : peOffset+4+fileHeaderSize]
+	sections := int(binary.LittleEndian.Uint16(fh[2:]))
+	optSize := int(binary.LittleEndian.Uint16(fh[16:]))
+	chars := binary.LittleEndian.Uint16(fh[18:])
+	if chars&charExecutable == 0 || chars&charDLL != 0 {
 		return 0, 0, 0, errors.New("not an exe")
 	}
-	opt := io.LimitReader(r, int64(fh.SizeOfOptionalHeader))
-	var oh optionalHeaderStart
-	if err := binary.Read(opt, binary.LittleEndian, &oh); err != nil {
-		return 0, 0, 0, err
+	optStart := peOffset + 4 + fileHeaderSize
+	if optStart+optSize > len(bin) {
+		return 0, 0, 0, errors.New("optional header out of the file")
 	}
-	var addr int
-	switch oh.Magic {
-	case pe32PlusMagic:
-		addr = 8
-	case pe32Magic:
-		addr = 4
-		var baseOfData uint32
-		if err := binary.Read(opt, binary.LittleEndian, &baseOfData); err != nil {
-			return 0, 0, 0, err
-		}
+	opt := bin[optStart : optStart+optSize]
+	// The fixed part of the optional header ends with the number of data directories.
+	var countAt int
+	switch {
+	case len(opt) >= 2 && binary.LittleEndian.Uint16(opt) == pe32PlusMagic:
+		countAt = 108
+	case len(opt) >= 2 && binary.LittleEndian.Uint16(opt) == pe32Magic:
+		countAt = 92
 	default:
-		return 0, 0, 0, fmt.Errorf("optional header magic %#x", oh.Magic)
+		return 0, 0, 0, errors.New("unknown optional header")
 	}
-	// The Windows-specific fields up to the number of data directories.
-	if _, err := io.CopyN(io.Discard, opt, int64(addr+40+addr*4+4)); err != nil {
-		return 0, 0, 0, err
+	if len(opt) < countAt+4 {
+		return 0, 0, 0, errors.New("optional header truncated")
 	}
-	var count uint32
-	if err := binary.Read(opt, binary.LittleEndian, &count); err != nil {
-		return 0, 0, 0, err
-	}
-	if count <= certTableIndex || count > 4096 {
+	count := int(binary.LittleEndian.Uint32(opt[countAt:]))
+	if count <= certTableIndex || count > 16 {
 		return 0, 0, 0, fmt.Errorf("%d data directories", count)
 	}
-	dirs := make([]dataDirectory, count)
-	if err := binary.Read(opt, binary.LittleEndian, dirs); err != nil {
-		return 0, 0, 0, err
+	if countAt+4+8*count != len(opt) {
+		return 0, 0, 0, errors.New("the optional header's size doesn't match its data directories")
 	}
-	if n, _ := io.Copy(io.Discard, opt); n != 0 {
-		return 0, 0, 0, errors.New("extra data after the data directories")
-	}
-	cert := dirs[certTableIndex]
-	if cert.VirtualAddress == 0 {
+	dir := countAt + 4 + 8*certTableIndex
+	tableOffset := int(binary.LittleEndian.Uint32(opt[dir:])) // a file offset for this directory
+	tableSize := int(binary.LittleEndian.Uint32(opt[dir+4:]))
+	if tableOffset == 0 {
 		return 0, 0, 0, errors.New("the file is not signed")
 	}
-	end := uint64(cert.VirtualAddress) + uint64(cert.Size)
-	if end != uint64(len(bin)) {
-		return 0, 0, 0, fmt.Errorf("the signature is not at the end of the file (%d of %d)", end, len(bin))
+	headersEnd := optStart + optSize + sections*sectionHeaderSize
+	if tableOffset < headersEnd || tableOffset > len(bin) || tableSize != len(bin)-tableOffset {
+		return 0, 0, 0, fmt.Errorf("the signature table (%d, %d bytes) is not after the headers at the end of the file",
+			tableOffset, tableSize)
 	}
-	sizeOffset = peOffset + 4 + fileHeaderSize + int(fh.SizeOfOptionalHeader) - 8*(int(count)-certTableIndex) + 4
-	if binary.LittleEndian.Uint32(bin[sizeOffset:]) != cert.Size {
-		return 0, 0, 0, errors.New("internal error: the size of the certificate table not where expected")
-	}
-	return int(cert.VirtualAddress), int(cert.Size), sizeOffset, nil
-}
-
-// AppendAfterSignature returns a copy of the signed PE file with data appended after the SignedData, inside the
-// attribute certificate table: the older way of tagging. It is kept only for trial 2, to show that Windows refuses
-// such a file when EnableCertPaddingCheck is on; nothing in wmanager tags files this way.
-func AppendAfterSignature(pe, data []byte) ([]byte, error) {
-	f, err := parse(pe)
-	if err != nil {
-		return nil, err
-	}
-	f.appended = append(append([]byte{}, f.appended...), data...)
-	der, err := asn1.Marshal(f.signed)
-	if err != nil {
-		return nil, fmt.Errorf("certtag: %w", err)
-	}
-	return f.build(der), nil
+	return tableOffset, tableSize, optStart + dir + 4, nil
 }

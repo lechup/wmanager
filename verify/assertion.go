@@ -8,12 +8,15 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+
+	"filippo.io/edwards25519"
 )
 
 // RPID is the relying party id of the signing keys. No website can claim it, so a page in a browser can't get a
@@ -157,36 +160,64 @@ func checkAuthenticatorData(ad []byte) error {
 	return nil
 }
 
-func checkSignature(key PublicKey, signed, sig []byte) error {
+// CheckKey checks that a public key is one a real security key makes, for its algorithm: P-256 for ES256, a
+// 32-byte Ed25519 key that isn't of small order for EdDSA, and RSA of 2048 to 4096 bits with exponent 65537 for
+// RS256. The admin list's keys are checked when they are read, and again before each use.
+func CheckKey(key PublicKey) error {
 	switch key.Alg {
 	case ES256:
 		pk, ok := key.Key.(*ecdsa.PublicKey)
-		if !ok {
-			return refuse("the key is not ECDSA")
-		}
-		h := sha256.Sum256(signed)
-		if !ecdsa.VerifyASN1(pk, h[:], sig) {
-			return refuse("ES256 signature doesn't match")
+		if !ok || pk.Curve != elliptic.P256() {
+			return refuse("the ES256 key is not a P-256 key")
 		}
 	case EdDSA:
 		pk, ok := key.Key.(ed25519.PublicKey)
-		if !ok {
-			return refuse("the key is not Ed25519")
+		if !ok || len(pk) != ed25519.PublicKeySize {
+			return refuse("the EdDSA key is not an Ed25519 key")
 		}
-		if !ed25519.Verify(pk, signed, sig) {
-			return refuse("EdDSA signature doesn't match")
+		if smallOrder(pk) {
+			return refuse("the Ed25519 key is a point of small order")
 		}
 	case RS256:
 		pk, ok := key.Key.(*rsa.PublicKey)
-		if !ok {
-			return refuse("the key is not RSA")
-		}
-		h := sha256.Sum256(signed)
-		if err := rsa.VerifyPKCS1v15(pk, cryptoSHA256, h[:], sig); err != nil {
-			return refuse("RS256 signature doesn't match")
+		if !ok || pk.N == nil || pk.N.BitLen() < 2048 || pk.N.BitLen() > 4096 || pk.E != 65537 {
+			return refuse("the RS256 key is not RSA of 2048 to 4096 bits with exponent 65537")
 		}
 	default:
 		return refuse("algorithm %v not allowed", key.Alg)
+	}
+	return nil
+}
+
+// smallOrder tells whether an Ed25519 public key is a point of small order (or doesn't decode): with such a
+// key a fixed signature verifies on any message.
+func smallOrder(pk []byte) bool {
+	p, err := new(edwards25519.Point).SetBytes(pk)
+	if err != nil {
+		return true
+	}
+	return new(edwards25519.Point).MultByCofactor(p).Equal(edwards25519.NewIdentityPoint()) == 1
+}
+
+func checkSignature(key PublicKey, signed, sig []byte) error {
+	if err := CheckKey(key); err != nil {
+		return err
+	}
+	switch key.Alg {
+	case ES256:
+		h := sha256.Sum256(signed)
+		if !ecdsa.VerifyASN1(key.Key.(*ecdsa.PublicKey), h[:], sig) {
+			return refuse("ES256 signature doesn't match")
+		}
+	case EdDSA:
+		if !ed25519.Verify(key.Key.(ed25519.PublicKey), signed, sig) {
+			return refuse("EdDSA signature doesn't match")
+		}
+	case RS256:
+		h := sha256.Sum256(signed)
+		if err := rsa.VerifyPKCS1v15(key.Key.(*rsa.PublicKey), cryptoSHA256, h[:], sig); err != nil {
+			return refuse("RS256 signature doesn't match")
+		}
 	}
 	return nil
 }

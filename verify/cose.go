@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -45,8 +46,9 @@ var cborStrict = func() cbor.DecMode {
 }()
 
 // ParseCOSEKey reads the public key a FIDO2 key gives at registration (in its attested credential data), with
-// the algorithm it was registered for. Only P-256 with ES256, Ed25519 with EdDSA and RSA (2048 bits or more) with
-// RS256 are accepted.
+// the algorithm it was registered for. Only P-256 with ES256, Ed25519 with EdDSA and RSA (2048 to 4096 bits,
+// exponent 65537) with RS256 are accepted, and only in the one canonical CBOR form a key has: the parameters of
+// its type and no others, shortest integers, byte strings, keys in canonical order. So one key has one encoding.
 func ParseCOSEKey(raw []byte) (PublicKey, error) {
 	var m map[int]cbor.RawMessage
 	if err := cborStrict.Unmarshal(raw, &m); err != nil {
@@ -59,6 +61,8 @@ func ParseCOSEKey(raw []byte) (PublicKey, error) {
 	if err := intParam(m, coseAlg, &alg); err != nil {
 		return PublicKey{}, err
 	}
+	var pk PublicKey
+	canonical := map[int]any{coseKty: kty, coseAlg: alg}
 	switch {
 	case kty == ktyEC2 && Alg(alg) == ES256:
 		var crv int
@@ -79,11 +83,12 @@ func ParseCOSEKey(raw []byte) (PublicKey, error) {
 			return PublicKey{}, fmt.Errorf("COSE key: P-256 coordinates of %d and %d bytes", len(x), len(y))
 		}
 		uncompressed := append(append([]byte{4}, x...), y...)
-		pk, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed)
+		key, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed)
 		if err != nil {
 			return PublicKey{}, fmt.Errorf("COSE key: %w", err)
 		}
-		return PublicKey{Alg: ES256, Key: pk}, nil
+		pk = PublicKey{Alg: ES256, Key: key}
+		canonical[coseCrvOrN], canonical[coseXOrE], canonical[coseY] = crv, x, y
 	case kty == ktyOKP && Alg(alg) == EdDSA:
 		var crv int
 		var x []byte
@@ -96,10 +101,8 @@ func ParseCOSEKey(raw []byte) (PublicKey, error) {
 		if err := bytesParam(m, coseXOrE, &x); err != nil {
 			return PublicKey{}, err
 		}
-		if len(x) != ed25519.PublicKeySize {
-			return PublicKey{}, fmt.Errorf("COSE key: Ed25519 key of %d bytes", len(x))
-		}
-		return PublicKey{Alg: EdDSA, Key: ed25519.PublicKey(x)}, nil
+		pk = PublicKey{Alg: EdDSA, Key: ed25519.PublicKey(x)}
+		canonical[coseCrvOrN], canonical[coseXOrE] = crv, x
 	case kty == ktyRSA && Alg(alg) == RS256:
 		var n, e []byte
 		if err := bytesParam(m, coseCrvOrN, &n); err != nil {
@@ -108,17 +111,31 @@ func ParseCOSEKey(raw []byte) (PublicKey, error) {
 		if err := bytesParam(m, coseXOrE, &e); err != nil {
 			return PublicKey{}, err
 		}
-		if len(e) == 0 || len(e) > 4 {
-			return PublicKey{}, fmt.Errorf("COSE key: RSA exponent of %d bytes", len(e))
+		if len(e) == 0 || len(e) > 4 || len(n) == 0 || n[0] == 0 || e[0] == 0 {
+			return PublicKey{}, fmt.Errorf("COSE key: RSA modulus or exponent not in its shortest form")
 		}
-		pk := &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(new(big.Int).SetBytes(e).Int64())}
-		if pk.N.BitLen() < 2048 {
-			return PublicKey{}, fmt.Errorf("COSE key: RSA key of %d bits, want 2048 or more", pk.N.BitLen())
-		}
-		return PublicKey{Alg: RS256, Key: pk}, nil
+		pk = PublicKey{Alg: RS256, Key: &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(new(big.Int).SetBytes(e).Int64())}}
+		canonical[coseCrvOrN], canonical[coseXOrE] = n, e
+	default:
+		return PublicKey{}, fmt.Errorf("COSE key: key type %d with algorithm %d is not allowed", kty, alg)
 	}
-	return PublicKey{}, fmt.Errorf("COSE key: key type %d with algorithm %d is not allowed", kty, alg)
+	again, err := cborCanonical.Marshal(canonical)
+	if err != nil || !bytes.Equal(again, raw) {
+		return PublicKey{}, fmt.Errorf("COSE key: not in canonical form, or with parameters it shouldn't have")
+	}
+	if err := CheckKey(pk); err != nil {
+		return PublicKey{}, fmt.Errorf("COSE key: %w", err)
+	}
+	return pk, nil
 }
+
+var cborCanonical = func() cbor.EncMode {
+	m, err := cbor.CoreDetEncOptions().EncMode()
+	if err != nil {
+		panic(err)
+	}
+	return m
+}()
 
 func intParam(m map[int]cbor.RawMessage, label int, v *int) error {
 	raw, ok := m[label]
