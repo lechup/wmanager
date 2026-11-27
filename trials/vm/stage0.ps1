@@ -23,8 +23,10 @@ $os = Get-CimInstance Win32_OperatingSystem
 $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=wmanager trial' `
     -CertStoreLocation Cert:\LocalMachine\My -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256
 Export-Certificate -Cert $cert -FilePath trial.cer | Out-Null
-Import-Certificate -FilePath trial.cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-Import-Certificate -FilePath trial.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+# certutil: Import-Certificate is refused (E_ACCESSDENIED) for the Root store on Windows 11 build 26300, also as
+# SYSTEM, while certutil adds it
+certutil -addstore -f Root trial.cer | Out-Null
+certutil -addstore -f TrustedPublisher trial.cer | Out-Null
 Copy-Item wmtrial.exe unsigned.exe -Force
 Copy-Item wmtrial.exe signed.exe -Force
 Set-AuthenticodeSignature -FilePath signed.exe -Certificate $cert -HashAlgorithm SHA256 | Out-Null
