@@ -222,7 +222,9 @@ The agent accepts a statement only when all of this holds:
 5. the signature is valid, with the algorithm the admin list names for that key, for a key in the company's current
    admin list. A `job`, a `stop` or a `session` may also be signed by the key of a person whom the state gives that
    right for every computer it targets (see [People and their rights](#people-and-their-rights));
-6. it fits what the computer already has: an admin list has the next sequence number and the previous hash; a state
+6. it fits what the computer already has: a chain of admin lists starts with the one the computer holds, byte for
+   byte (an older chain or a fork could bring back a removed key), and each new list has the next sequence number
+   and the previous hash; a state
    has a higher serial than the last one; for a job, see [Single jobs](#single-jobs); a session opens once, before
    the time it names; a `stop` signed by a person who is not an administrator is for a job that person signed.
 
@@ -280,8 +282,10 @@ Show and sign (1-2), quit (q)?
 - **New computers are added by their id.** The installer shows the computer's id at the end (its first 8
   characters), and `wmanager-sign` asks for them when the computer is added to the state. So the server can't swap
   two waiting computers.
-- **The company chain:** it keeps each company's fingerprint after the first use, and refuses an admin list that
-  doesn't follow the chain. It makes the first admin list of a new company, adds and removes administrators and keys,
+- **The company chain:** it keeps each company's fingerprint and the whole chain it has verified, and refuses a
+  chain that doesn't start with it: a server showing an older chain, with a key removed since, can't make the next
+  list it signs keep that key. It also refuses a serial far above the highest it knows, which a server's report
+  could inflate. It makes the first admin list of a new company, adds and removes administrators and keys,
   and prints the fingerprint. It also checks an installer file (`wmanager-sign check-installer <file>`): the release
   signature and the chain in its tag.
 - **Keys:** on Linux, a FIDO2 security key over USB or NFC (libfido2). On Windows, Windows Hello or a security key,

@@ -141,12 +141,78 @@ func TestChainRefusals(t *testing.T) {
 		}()), c.fingerprint()},
 		"no lists": {nil, c.fingerprint()},
 	}
+	reasons := map[string]string{
+		"another fingerprint":                         "fingerprint",
+		"a first list signed by a key not in it":      "not one that may sign",
+		"a second list signed by a key it adds":       "not one that may sign",
+		"a second list of another company":            "another company",
+		"a second list that doesn't follow the first": "doesn't follow",
+		"a list skipping a number":                    "admin list 3 after 1",
+		"no lists":                                    "empty chain",
+	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := verify.VerifyChain(tc.fingerprint, tc.lists); err == nil {
-				t.Fatal("accepted")
+			_, err := verify.VerifyChain(tc.fingerprint, tc.lists)
+			if err == nil || !strings.Contains(err.Error(), reasons[name]) {
+				t.Fatalf("err = %v, want one about %q", err, reasons[name])
 			}
 		})
+	}
+	// A chain starting with a later list whose own hash is given as the fingerprint.
+	second := c.next(c.anna, both...)
+	if _, err := verify.VerifyChain(verify.Fingerprint(second.Hash()), []verify.Signed{second}); err == nil ||
+		!strings.Contains(err.Error(), "doesn't start with the first") {
+		t.Fatalf("a chain starting at list 2: %v", err)
+	}
+	// One key for two administrators.
+	twice := verify.Admins{Format: 1, Type: "admins", SignedAt: now, Nonce: nonce(), Sequence: 1,
+		Administrators: []verify.Administrator{{Name: "Anna", Keys: []verify.Key{c.anna.ListKey()}},
+			{Name: "Anna's twin", Keys: []verify.Key{c.anna.ListKey()}}}}
+	if _, err := verify.ParseAdmins(marshal(t, twice)); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Fatalf("one key for two administrators: %v", err)
+	}
+}
+
+// A computer holding [1,2,3], where list 3 removed key K, refuses an older prefix [1,2] and a fork [1,2,3',4']
+// signed by K: either would bring K back.
+func TestUpdateRefusesRollbackAndFork(t *testing.T) {
+	c := newCompany(t)
+	k := newKey(t, verify.ES256)
+	withK := []verify.Administrator{{Name: "Anna", Keys: []verify.Key{c.anna.ListKey()}}, {Name: "K", Keys: []verify.Key{k.ListKey()}}}
+	annaOnly := []verify.Administrator{{Name: "Anna", Keys: []verify.Key{c.anna.ListKey()}}}
+	c.lists = append(c.lists, c.next(c.anna, withK...))
+	prefix := append([]verify.Signed{}, c.lists...)
+	c.lists = append(c.lists, c.next(c.anna, annaOnly...))
+	held, err := verify.VerifyChain(c.fingerprint(), c.lists)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fork: a list 3' signed by K keeping K, and 4' adding Mallory.
+	fork := &company{t: t, anna: c.anna, lists: append([]verify.Signed{}, prefix...)}
+	fork.lists = append(fork.lists, fork.next(k, withK...))
+	mallory := newKey(t, verify.ES256)
+	fork.lists = append(fork.lists, fork.next(k, append(withK, verify.Administrator{Name: "Mallory", Keys: []verify.Key{mallory.ListKey()}})...))
+
+	if err := held.Update(prefix); err == nil || !strings.Contains(err.Error(), "older") {
+		t.Fatalf("an older prefix: %v", err)
+	}
+	if err := held.Update(fork.lists); err == nil || !strings.Contains(err.Error(), "differs") {
+		t.Fatalf("a fork: %v", err)
+	}
+	if len(held.Lists) != 3 {
+		t.Fatal("a refused update changed the chain held")
+	}
+	// The same chain again, and a longer one that follows it, are taken.
+	if err := held.Update(c.lists); err != nil {
+		t.Fatalf("the same chain: %v", err)
+	}
+	c.lists = append(c.lists, c.next(c.anna, annaOnly...))
+	if err := held.Update(c.lists); err != nil || len(held.Lists) != 4 {
+		t.Fatalf("a longer chain: %v", err)
+	}
+	// K's state is refused by the chain held.
+	if _, err := held.VerifyState(sign(t, k, marshal(t, state(t, c, 1000))), 999); !errors.Is(err, verify.ErrSignature) {
+		t.Fatalf("a state signed by a removed key: %v", err)
 	}
 }
 
@@ -254,9 +320,53 @@ func TestState(t *testing.T) {
 	}
 }
 
+func TestMembersAndLimits(t *testing.T) {
+	c := newCompany(t)
+	good := string(marshal(t, state(t, c, 5)))
+	for name, raw := range map[string]string{
+		"no secrets":               strings.Replace(good, `,"secrets":{"wifi-office":"`+strings.Repeat("23", 32)+`"}`, "", 1),
+		"secrets null":             strings.Replace(good, `"secrets":{"wifi-office":"`+strings.Repeat("23", 32)+`"}`, `"secrets":null`, 1),
+		"Secrets as well":          strings.Replace(good, `"secrets":{`, `"Secrets":{},"secrets":{`, 1),
+		"a huge serial":            strings.Replace(good, `"serial":5`, `"serial":9223372036854775807`, 1),
+		"a server with a user":     strings.Replace(good, `https://wm.example.com`, `https://u:p@wm.example.com`, 1),
+		"a server with a query":    strings.Replace(good, `https://wm.example.com`, `https://wm.example.com?x=1`, 1),
+		"a server with a bad port": strings.Replace(good, `https://wm.example.com`, `https://wm.example.com:99999`, 1),
+		"a server in capitals":     strings.Replace(good, `https://wm.example.com`, `HTTPS://wm.example.com`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if raw == good {
+				t.Fatal("the case didn't change the statement")
+			}
+			if _, err := verify.ParseState([]byte(raw)); !errors.Is(err, verify.ErrStatement) {
+				t.Fatalf("accepted: %v", err)
+			}
+		})
+	}
+	// A first list with a null company.
+	first := string(c.lists[0].Statement)
+	if _, err := verify.ParseAdmins([]byte(strings.Replace(first, `"format":1`, `"company":null,"format":1`, 1))); err == nil {
+		t.Fatal("a null company")
+	}
+	// Too large: refused before it is read.
+	big := `{"format":1,"type":"admins","pad":"` + strings.Repeat("x", 300<<10) + `"}`
+	if _, err := verify.ParseAdmins([]byte(big)); err == nil || !strings.Contains(err.Error(), "bytes") {
+		t.Fatalf("a large statement: %v", err)
+	}
+	for _, name := range []string{"Ann a", "Annㅤa", "ᅟanna"} {
+		a := verify.Admins{Format: 1, Type: "admins", SignedAt: now, Nonce: nonce(), Sequence: 1,
+			Administrators: []verify.Administrator{{Name: name, Keys: []verify.Key{c.anna.ListKey()}}}}
+		if _, err := verify.ParseAdmins(marshal(t, a)); err == nil {
+			t.Errorf("a name with an invisible or separator character: %q", name)
+		}
+	}
+}
+
 func TestJobStopSession(t *testing.T) {
 	c := newCompany(t)
-	ch, _ := verify.VerifyChain(c.fingerprint(), c.lists)
+	ch, err := verify.VerifyChain(c.fingerprint(), c.lists)
+	if err != nil {
+		t.Fatal(err)
+	}
 	job := func() verify.Job {
 		return verify.Job{Format: 1, Type: "job", SignedAt: now, Company: c.id(), ID: nonce(),
 			Computers: []string{strings.Repeat("cd", 32)}, Script: strings.Repeat("ef", 32), RunAs: "system",
@@ -270,9 +380,15 @@ func TestJobStopSession(t *testing.T) {
 		"expired before start": func(j *verify.Job) { j.StartAfter = now.Add(2 * time.Hour); j.Expires = now.Add(time.Hour) },
 		"run as admin":         func(j *verify.Job) { j.RunAs = "admin" },
 		"a computer twice":     func(j *verify.Job) { j.Computers = append(j.Computers, j.Computers[0]) },
-		"no computers":         func(j *verify.Job) { j.Computers = nil },
-		"a short id":           func(j *verify.Job) { j.ID = "abcd" },
-		"no limit":             func(j *verify.Job) { j.Limit = 0 },
+		"a secret twice":       func(j *verify.Job) { j.Secrets = []string{"x", "x"} },
+		"expires at its start": func(j *verify.Job) {
+			j.Expires = j.StartAfter.Add(0)
+			j.StartAfter = now.Add(time.Hour)
+			j.Expires = j.StartAfter
+		},
+		"no computers": func(j *verify.Job) { j.Computers = nil },
+		"a short id":   func(j *verify.Job) { j.ID = "abcd" },
+		"no limit":     func(j *verify.Job) { j.Limit = 0 },
 	} {
 		t.Run("job/"+name, func(t *testing.T) {
 			j := job()
@@ -308,8 +424,35 @@ func TestJobStopSession(t *testing.T) {
 			}
 		})
 	}
+	// Of another company, signed by a key that may sign: refused (check 2).
+	other := newCompany(t)
+	j := job()
+	j.Company = other.id()
+	if _, err := ch.VerifyJob(sign(t, c.anna, marshal(t, j)), ch.AdminKeys()); !errors.Is(err, verify.ErrStatement) {
+		t.Fatalf("a job of another company: %v", err)
+	}
+	st := stop
+	st.Company = other.id()
+	if _, err := ch.VerifyStop(sign(t, c.anna, marshal(t, st)), ch.AdminKeys()); !errors.Is(err, verify.ErrStatement) {
+		t.Fatalf("a stop of another company: %v", err)
+	}
+	se := session()
+	se.Company = other.id()
+	if _, err := ch.VerifySession(sign(t, c.anna, marshal(t, se)), ch.AdminKeys()); !errors.Is(err, verify.ErrStatement) {
+		t.Fatalf("a session of another company: %v", err)
+	}
+	// A session naming someone other than its signer.
+	se = session()
+	se.Person = "Bob"
+	if _, err := ch.VerifySession(sign(t, c.anna, marshal(t, se)), ch.AdminKeys()); err == nil || !strings.Contains(err.Error(), "signed it") {
+		t.Fatalf("a session naming another person: %v", err)
+	}
+	// A stop given where a job is expected.
+	if _, err := ch.VerifyJob(sign(t, c.anna, marshal(t, stop)), ch.AdminKeys()); !errors.Is(err, verify.ErrStatement) {
+		t.Fatalf("a stop as a job: %v", err)
+	}
 	// A job signed by a key the caller doesn't allow (e.g. a person without the right).
-	if _, err := ch.VerifyJob(sign(t, c.anna, marshal(t, job())), map[string]verify.PublicKey{}); !errors.Is(err, verify.ErrSignature) {
+	if _, err := ch.VerifyJob(sign(t, c.anna, marshal(t, job())), map[string]verify.Signer{}); !errors.Is(err, verify.ErrSignature) {
 		t.Fatalf("a job by a key not allowed: %v", err)
 	}
 }

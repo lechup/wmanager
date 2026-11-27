@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -103,9 +104,61 @@ type header struct {
 	SignedAt time.Time `json:"signed_at"`
 }
 
-// decode reads a statement of a type strictly (check 1): known format and type, and exactly the members of that
-// type, each once and in its exact case.
+// MaxSize is the largest statement of each type, checked before anything is read.
+var MaxSize = map[string]int{TypeAdmins: 256 << 10, TypeState: 8 << 20, TypeJob: 1 << 20, TypeStop: 1 << 20,
+	TypeSession: 16 << 10}
+
+// MaxSerial is the largest serial and sequence: far beyond any real use, and far from where a number would wrap,
+// so a server reporting a huge serial can't make wmanager-sign sign the last one there is.
+const MaxSerial = 1 << 53
+
+// members are the members of each type: all required, unless optional.
+var members = map[string]struct{ required, optional []string }{
+	TypeAdmins:  {[]string{"format", "type", "signed_at", "sequence", "administrators"}, []string{"company", "nonce", "previous"}},
+	TypeState:   {[]string{"format", "type", "signed_at", "company", "serial", "server", "release", "computers", "files", "version", "secrets"}, nil},
+	TypeJob:     {[]string{"format", "type", "signed_at", "company", "id", "computers", "script", "run_as", "secrets", "start_after", "expires", "limit"}, nil},
+	TypeStop:    {[]string{"format", "type", "signed_at", "company", "job", "computers"}, nil},
+	TypeSession: {[]string{"format", "type", "signed_at", "company", "id", "computer", "person", "viewer_key", "may", "open_by", "max_length"}, nil},
+}
+
+// checkMembers checks that the top-level object has every required member, only known ones, and no null.
+func checkMembers(raw []byte, typ string) error {
+	var obj map[string]jsontext.Value
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return bad("not a JSON object: %v", err)
+	}
+	m := members[typ]
+	known := map[string]bool{}
+	for _, k := range m.required {
+		known[k] = true
+		v, ok := obj[k]
+		if !ok {
+			return bad("%s: no %s", typ, k)
+		}
+		if v.Kind() == 'n' {
+			return bad("%s: %s is null", typ, k)
+		}
+	}
+	for _, k := range m.optional {
+		known[k] = true
+		if v, ok := obj[k]; ok && v.Kind() == 'n' {
+			return bad("%s: %s is null", typ, k)
+		}
+	}
+	for k := range obj {
+		if !known[k] {
+			return bad("%s: unknown member %q", typ, k)
+		}
+	}
+	return nil
+}
+
+// decode reads a statement of a type strictly (check 1): its size, known format and type, and exactly the members
+// of that type, each once, in its exact case, none null.
 func decode(raw []byte, typ string, v any) error {
+	if len(raw) > MaxSize[typ] {
+		return bad("%s of %d bytes, more than %d", typ, len(raw), MaxSize[typ])
+	}
 	var h header
 	if err := json.Unmarshal(raw, &h); err != nil {
 		return bad("not JSON: %v", err)
@@ -115,6 +168,9 @@ func decode(raw []byte, typ string, v any) error {
 	}
 	if h.Type != typ {
 		return bad("a %q statement where %q was expected", h.Type, typ)
+	}
+	if err := checkMembers(raw, typ); err != nil {
+		return err
 	}
 	if err := json.Unmarshal(raw, v, json.RejectUnknownMembers(true)); err != nil {
 		return bad("%s: %v", typ, err)
@@ -152,12 +208,16 @@ func checkName(what, s string) error {
 		return bad("%s: 1 to %d characters, no space around", what, maxName)
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return bad("%s: a control or formatting character %U", what, r)
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Co, unicode.Cs) ||
+			invisible[r] {
+			return bad("%s: a control, formatting or invisible character %U", what, r)
 		}
 	}
 	return nil
 }
+
+// invisible are letters that show nothing (Hangul fillers and the like), which a name could hide behind.
+var invisible = map[rune]bool{0x115F: true, 0x1160: true, 0x3164: true, 0xFFA0: true, 0x180E: true, 0x2800: true}
 
 // checkPath allows the file paths of the design: letters, digits, - _ . and /, relative, no part "." or "..".
 func checkPath(p string) error {
@@ -220,7 +280,7 @@ func ParseAdmins(raw []byte) (*Admins, error) {
 	}
 	first := a.Sequence == 1
 	switch {
-	case a.Sequence < 1:
+	case a.Sequence < 1 || a.Sequence > MaxSerial:
 		return nil, bad("admins: sequence %d", a.Sequence)
 	case first && (a.Company != "" || a.Previous != "" || !hex32.MatchString(a.Nonce)):
 		return nil, bad("admins: the first version has a nonce and no company or previous")
@@ -246,13 +306,13 @@ func ParseAdmins(raw []byte) (*Admins, error) {
 	return &a, nil
 }
 
-// keys is the admin list's keys by id.
-func (a *Admins) keys() map[string]PublicKey {
-	out := map[string]PublicKey{}
+// keys is the admin list's keys by id, with their administrators' names.
+func (a *Admins) keys() map[string]Signer {
+	out := map[string]Signer{}
 	for _, ad := range a.Administrators {
 		for _, k := range ad.Keys {
 			if pk, err := k.PublicKey(); err == nil {
-				out[k.ID] = pk
+				out[k.ID] = Signer{Key: pk, Name: ad.Name}
 			}
 		}
 	}
@@ -302,16 +362,17 @@ func ParseState(raw []byte) (*State, error) {
 	if err := checkHash("state: company", s.Company); err != nil {
 		return nil, err
 	}
-	if s.Serial < 1 {
+	if s.Serial < 1 || s.Serial > MaxSerial {
 		return nil, bad("state: serial %d", s.Serial)
 	}
-	if u, err := url.Parse(s.Server); err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") {
-		return nil, bad("state: server %q is not https://host", s.Server)
+	if err := checkServer(s.Server); err != nil {
+		return nil, err
 	}
 	if err := checkHash("state: release", s.Release); err != nil {
 		return nil, err
 	}
-	if len(s.Computers) > maxItems || len(s.Files) > maxItems || len(s.Secrets) > maxItems {
+	if len(s.Computers) > maxItems || len(s.Files) > maxItems || len(s.Secrets) > maxItems ||
+		len(s.Version.Files) > maxItems {
 		return nil, bad("state: too many items")
 	}
 	ids, names := map[string]bool{}, map[string]bool{}
@@ -326,10 +387,8 @@ func ParseState(raw []byte) (*State, error) {
 			return nil, bad("state: computer %s twice", c.Name)
 		}
 		ids[c.ID], names[strings.ToLower(c.Name)] = true, true
-		for _, g := range c.Groups {
-			if !groupName.MatchString(g) {
-				return nil, bad("state: group %q of %s", g, c.Name)
-			}
+		if err := checkNames("state: groups of "+c.Name, c.Groups, 100); err != nil {
+			return nil, err
 		}
 	}
 	for p, h := range s.Files {
@@ -411,13 +470,11 @@ func ParseJob(raw []byte) (*Job, error) {
 	if j.RunAs != "system" && j.RunAs != "user" {
 		return nil, bad("job: run_as %q", j.RunAs)
 	}
-	for _, n := range j.Secrets {
-		if !groupName.MatchString(n) {
-			return nil, bad("job: secret name %q", n)
-		}
+	if err := checkNames("job: secrets", j.Secrets, 100); err != nil {
+		return nil, err
 	}
 	switch {
-	case j.Expires.Before(j.StartAfter) || !j.Expires.After(j.SignedAt):
+	case !j.Expires.After(j.StartAfter) || !j.Expires.After(j.SignedAt):
 		return nil, bad("job: it expires before it may start, or before it was signed")
 	case j.Expires.Sub(j.SignedAt) > MaxJobLife:
 		return nil, bad("job: valid for more than %v after signing", MaxJobLife)
@@ -449,10 +506,15 @@ func ParseStop(raw []byte) (*Stop, error) {
 	if !hex32.MatchString(s.Job) || len(s.Computers) == 0 || len(s.Computers) > maxItems {
 		return nil, bad("stop: a job's id and 1 to %d computers", maxItems)
 	}
+	seen := map[string]bool{}
 	for _, c := range s.Computers {
 		if err := checkHash("stop: a computer", c); err != nil {
 			return nil, err
 		}
+		if seen[c] {
+			return nil, bad("stop: a computer twice")
+		}
+		seen[c] = true
 	}
 	return &s, nil
 }
@@ -465,7 +527,7 @@ type Session struct {
 	Company   string    `json:"company"`
 	ID        string    `json:"id"`
 	Computer  string    `json:"computer"`
-	Person    string    `json:"person"`     // the name the admin list or the state gives the key that signs
+	Person    string    `json:"person"`     // the name the admin list (or the state) gives the key that signs it
 	ViewerKey []byte    `json:"viewer_key"` // the public key the viewer made for this session
 	May       []string  `json:"may"`        // "screen", "keyboard", "files", "privacy"
 	OpenBy    time.Time `json:"open_by"`
@@ -513,4 +575,35 @@ func ParseSession(raw []byte) (*Session, error) {
 // Marshal writes a statement's bytes, as wmanager-sign does before it signs them.
 func Marshal(v any) ([]byte, error) {
 	return json.Marshal(v, json.Deterministic(true), jsontext.EscapeForHTML(false))
+}
+
+// checkNames checks a list of group or secret names: each well formed, each once, at most max.
+func checkNames(what string, names []string, max int) error {
+	if len(names) > max {
+		return bad("%s: more than %d", what, max)
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if !groupName.MatchString(n) || seen[n] {
+			return bad("%s: %q bad or twice", what, n)
+		}
+		seen[n] = true
+	}
+	return nil
+}
+
+// checkServer allows https://host[:port] and nothing else: no user, path, query or fragment.
+func checkServer(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || !strings.HasPrefix(raw, "https://") || u.Host == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(u.Host, ":") {
+		return bad("state: server %q is not https://host[:port]", raw)
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return bad("state: server %q has a bad port", raw)
+		}
+	}
+	return nil
 }

@@ -15,8 +15,11 @@ The key signs its authenticator data followed by the SHA-256 of the client data,
 statement's bytes as its challenge (relying party `wmanager-sign.invalid`, origin `wmanager-sign:v1`). Nothing is put
 into a canonical form: the hash is of the bytes as they are.
 
-Every statement is a JSON object with exactly the members of its type, each once and in its exact case; an unknown
-member, a member twice, another case or data after the object refuse it. Every one has:
+Every statement is a JSON object with exactly the members of its type, each once, in its exact case and none null
+(the members marked so below may be left out); an unknown member, a missing one, a member twice, another case or
+data after the object refuse it. Its size is checked before anything is read: an admin list up to 256 KiB, a state
+up to 8 MiB, a job or a stop up to 1 MiB, a session up to 16 KiB. Except for the first admin list, which is checked
+against the fingerprint first, the signature is checked before the statement is read. Every one has:
 
 | Member | What it is |
 | --- | --- |
@@ -39,11 +42,14 @@ and no space around them. Paths have letters, digits, `-`, `_`, `.` and `/`, are
  "administrators": [{"name": "Anna", "keys": [{"id": "<key id>", "cose": "<COSE key, base64>"}]}]}
 ```
 
-- The first version (`sequence` 1) has a `nonce` and no `company` or `previous`; it is signed by one of its own keys.
-  Its hash is the company's id, and the first 128 bits of that, as `7F3A-91C2-...`, are the company's fingerprint.
+- The first version (`sequence` 1) has a `nonce` and no `company` or `previous` (the three may each be left out); it
+  is signed by one of its own keys. Its hash is the company's id, and the first 128 bits of that, as
+  `7F3A-91C2-...`, are the company's fingerprint.
 - Each later version has the next `sequence`, the `company`, `previous` (the hash of the version before) and no
   `nonce`, and is signed by a key of the version before.
-- A key appears once in the whole list; 1 to 100 administrators, 1 to 20 keys each.
+- A key appears once in the whole list; 1 to 100 administrators, 1 to 20 keys each; `sequence` at most 2^53.
+- **A chain received later must start with the one held**, byte for byte: a computer, or `wmanager-sign`, refuses
+  an older chain or one that leaves its own at any list, since either could bring back a key removed since.
 
 ## state
 
@@ -56,8 +62,11 @@ and no space around them. Paths have letters, digits, `-`, `_`, `.` and `/`, are
  "secrets": {"wifi-office": "<salted hash of the value>"}}
 ```
 
-- Signed by a key of the newest admin list; its `serial` must be higher than the last state the computer has.
-- `server` is `https://host[:port]` with no path: a server can't move the computers.
+- Signed by a key of the newest admin list; its `serial` must be higher than the last state the computer has, and at
+  most 2^53 (so a server reporting a huge serial can't make `wmanager-sign` sign the last one there is).
+- `server` is `https://host[:port]`, written in lower case, with no user, path, query or fragment: a server can't
+  move the computers.
+- A computer has at most 100 groups, each once.
 - Groups and secret names: a letter or digit, then up to 62 of letters, digits, `.`, `_` and `-`.
 
 The people who are not administrators, with their keys, units and rights, join the state in stage 4.
@@ -71,7 +80,7 @@ The people who are not administrators, with their keys, units and rights, join t
 ```
 
 `run_as` is `system` or `user`; `expires` is after `start_after` and `signed_at`, and at most 7 days after
-`signed_at`; `limit` is 1 second to a day. When a job may run (the time floor, ids seen before) is stage 5.
+`signed_at`; `limit` is 1 second to a day; computers and secrets each once. When a job may run (the time floor, ids seen before) is stage 5.
 
 ## stop
 
@@ -87,4 +96,5 @@ The people who are not administrators, with their keys, units and rights, join t
  "may": ["screen", "keyboard", "files", "privacy"], "open_by": "...", "max_length": 3600}
 ```
 
+`person` is the name the admin list gives the key that signed it (the black screen of privacy mode shows it);
 `open_by` is within 15 minutes of `signed_at`; `max_length` is a minute to 12 hours. Remote support comes in v2.
