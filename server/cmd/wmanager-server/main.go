@@ -78,6 +78,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if err := store.Migrate(ctx, cfg.MigrateDatabaseURL); err != nil {
 			return err
 		}
+		// And the server's own role is one it may run as (not the owner, in wmanager_runtime only).
+		s, err := store.Open(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return err
+		}
+		s.Close()
 		fmt.Fprintln(stdout, "the database is up to date")
 		return nil
 	}
@@ -223,12 +229,15 @@ func healthcheck(getenv func(string) string) error {
 	if listen == "" {
 		listen = "127.0.0.1:8080"
 	}
-	_, port, err := net.SplitHostPort(listen)
+	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return err
 	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
 	if err != nil {
 		return err
 	}

@@ -45,8 +45,15 @@ domain() { sed -n 's/^LOKI_DOMAIN=//p' .env; }
 
 # The database's passwords and connection strings, as Docker secrets: a folder only you can open, with files the
 # containers' own users can read. Kept when they are there.
+secret_files=(postgres-password owner-password server-password database-url migrate-database-url)
 write_secrets() {
-    [[ -f secrets/server-password ]] && return
+    local f have=0
+    for f in "${secret_files[@]}"; do [[ -f secrets/$f ]] && have=$((have + 1)); done
+    if (( have == ${#secret_files[@]} )); then
+        chmod 444 secrets/*   # Docker gives the files to the containers with these rights
+        return
+    fi
+    (( have == 0 )) || die "secrets/ is incomplete (${have} of ${#secret_files[@]} files): restore it, or start anew without it and without the volume postgres-data"
     (umask 077; mkdir -p secrets)
     chmod 700 secrets
     local pg owner server
@@ -56,6 +63,9 @@ write_secrets() {
     printf '%s' "$server" > secrets/server-password
     printf 'postgres://wmanager:%s@postgres:5432/wmanager?sslmode=disable' "$server" > secrets/database-url
     printf 'postgres://wmanager_owner:%s@postgres:5432/wmanager?sslmode=disable' "$owner" > secrets/migrate-database-url
+    # Without swarm, Docker gives these files to the containers as they are: their users (not you) must read them.
+    # The folder keeps everyone else out.
+    chmod 444 secrets/*
     echo "Written secrets/ (the database's passwords; only you can open the folder)."
 }
 
@@ -260,21 +270,36 @@ cmd_backup() {
     (umask 077; mkdir -p backups)
     local file
     file=backups/wmanager-$(date -u +%Y%m%dT%H%M%SZ).dump
-    (umask 077; docker compose exec -T postgres pg_dump --username postgres --format custom wmanager > "$file")
-    [[ -s $file ]] || { rm -f "$file"; die "the dump is empty"; }
+    # Written aside first: a dump that fails half-way never looks like a backup
+    if ! (umask 077; docker compose exec -T postgres pg_dump --username postgres --format custom wmanager > "$file.partial"); then
+        rm -f "$file.partial"
+        die "pg_dump failed"
+    fi
+    [[ -s $file.partial ]] || { rm -f "$file.partial"; die "the dump is empty"; }
+    mv "$file.partial" "$file"
     echo "Written $file. Keep a copy off this server (it holds the secrets' values the server keeps)."
 }
 
+sql() { docker compose exec -T postgres psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres -q "$@"; }
+
+# Into a database of its own first, as the owner of the tables and in one transaction: a dump that doesn't restore
+# leaves the database in use as it was. Then the two change places; the one before stays as wmanager_old.
 cmd_restore() {
     local file=$1
     [[ -s $file ]] || die "no dump $file"
+    sql -c "DROP DATABASE IF EXISTS wmanager_new WITH (FORCE)" -c "CREATE DATABASE wmanager_new OWNER wmanager_owner" \
+        -c "REVOKE ALL ON DATABASE wmanager_new FROM PUBLIC" -c "GRANT CONNECT ON DATABASE wmanager_new TO wmanager"
+    if ! docker compose exec -T postgres pg_restore --username postgres --role wmanager_owner --single-transaction \
+            --exit-on-error --dbname wmanager_new < "$file"; then
+        sql -c "DROP DATABASE IF EXISTS wmanager_new WITH (FORCE)"
+        die "$file didn't restore; the database in use is as it was"
+    fi
     docker compose stop wmanager
-    docker compose exec -T postgres psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres -q -c \
-        "DROP DATABASE IF EXISTS wmanager WITH (FORCE)" -c "CREATE DATABASE wmanager OWNER wmanager_owner" \
-        -c "REVOKE ALL ON DATABASE wmanager FROM PUBLIC" -c "GRANT CONNECT ON DATABASE wmanager TO wmanager"
-    docker compose exec -T postgres pg_restore --username postgres --dbname wmanager --exit-on-error < "$file"
-    docker compose start wmanager
-    echo "Restored $file; wmanager-server started again."
+    sql -c "DROP DATABASE IF EXISTS wmanager_old WITH (FORCE)" -c "ALTER DATABASE wmanager RENAME TO wmanager_old" \
+        -c "ALTER DATABASE wmanager_new RENAME TO wmanager"
+    docker compose up -d wmanager
+    echo "Restored $file; wmanager-server started again. The database before it is kept as wmanager_old until the next restore."
+    echo "The audit heads in Loki newer than the dump no longer match: an older dump ends before them."
 }
 
 cmd_list() {

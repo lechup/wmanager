@@ -16,9 +16,14 @@ On a server with Docker, three names pointing to it (logs, Grafana, the panel) a
 ```bash
 cd examples/selfhosted
 ./selfhosted.sh init                         # the names, an e-mail for the certificates; .env and secrets/
-docker compose up -d
+docker compose up -d --build
 ./selfhosted.sh create-owner you@example.com # the owner of the server; asks for the password
 ```
+
+After updating the kit (`git pull`), run `./selfhosted.sh init` again before `docker compose up -d --build`: it adds
+what a newer kit needs to `.env` and `secrets/` and keeps the rest. Without the panel's name in `.env`, compose stops
+before changing anything. With Caddy on other ports than 443 (`CADDY_HTTPS_PORT`), set `PANEL_PORT_SUFFIX` (e.g.
+`:8443`) so the links the panel gives out carry the port.
 
 Then open `https://<the panel's name>`, sign in, and set up the second factor: scan the QR code with an
 authenticator app and keep the ten recovery codes it shows once.
@@ -33,19 +38,28 @@ authenticator app and keep the ten recovery codes it shows once.
 
 | Container | What it is |
 | --- | --- |
-| `caddy` | HTTPS for all three names. The only one with ports; at a fixed address in the network `wm` |
-| `wmanager` | `wmanager-server serve`, as an unprivileged user in a distroless image, reached through Caddy only |
+| `caddy` | HTTPS for all three names. The only one with ports; at a fixed address in the network `front` |
+| `migrate` | the migrations, as the owner of the tables, once at each start; then it ends |
+| `wmanager` | `wmanager-server serve`, as an unprivileged user in a distroless image, without capabilities, read-only |
 | `postgres` | PostgreSQL 17, with the server's database `wmanager` |
-| `loki`, `grafana` | as for today's version; Loki also gets the heads of the server's audit log |
+| `loki`, `grafana` | as for today's version; Loki also gets the heads of the server's audit log, and takes no deletions |
+
+Networks keep them apart: only Caddy reaches the server (`front`), only the server and the migrations reach
+PostgreSQL (`data`), the server reaches Loki for the heads (`heads`), and Caddy, Loki and Grafana share `logs`.
+The last two have no way out. Caddy replaces any `X-Forwarded-For` a browser sends, and the server believes it from
+Caddy's address only. Clients that reach Docker over IPv6 come in through Docker's proxy, all from one address, and
+share the limits per address: use an A record only, or give Docker's networks IPv6.
 
 The database has two roles, made at PostgreSQL's first start (`postgres/init.sh`):
 
-- `wmanager_owner` owns the tables; the server's migrations run as it, at each start.
+- `wmanager_owner` owns the tables; the migrations run as it, in their own container. The server's container never
+  gets its password.
 - `wmanager`, in the group `wmanager_runtime`, is the server's own: it may only read and add audit entries, and it
-  can't turn row-level security off. The server refuses to run as a role that could.
+  can't turn row-level security off. The server, and the migrations after they run, refuse a role that could.
 
-Their passwords are in `secrets/`, a folder only you can open, given to the containers as Docker secrets; nothing
-secret is on a command line or in the environment.
+Their passwords are in `secrets/`, a folder only you can open, given to the containers as Docker secrets (files
+readable by the containers' own users, which the folder keeps everyone else from); nothing secret is on a command
+line or in the environment.
 
 ## Settings
 
@@ -77,10 +91,16 @@ the SIEM export later, and `wmanager-sign`, which will remember the heads it saw
 
 ```bash
 ./selfhosted.sh backup               # backups/wmanager-<time>.dump, readable by you only
-./selfhosted.sh restore <file>       # stops the server, replaces its database, starts it again
+./selfhosted.sh restore <file>       # restores it aside, then swaps it in
 ```
 
-The dump holds the values of the secrets the server keeps: store a copy off the server, safely.
+`restore` restores the dump into a database of its own, as the owner of the tables and in one transaction. Only when
+that works does it stop the server, swap the two databases, and start it again; the one before stays as
+`wmanager_old` until the next restore. A dump that doesn't restore leaves everything as it was.
+
+The dump holds the values of the secrets the server keeps: store a copy off the server, safely. An older dump ends
+before the newest audit heads in Loki, so a check against those heads then says the chain doesn't lead to them:
+that is the restore, not a tampering, and the heads from before the dump's time still match.
 
 ## Other commands
 

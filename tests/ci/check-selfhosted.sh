@@ -15,8 +15,10 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 project=wmself$$
 export COMPOSE_PROJECT_NAME=$project   # selfhosted.sh's own docker compose commands reach the same project
+export WMANAGER_IMAGE=wmanager-server:ci-$project   # built for this run, removed after it
 cleanup() {
     (cd "$work/examples/selfhosted" 2>/dev/null && docker compose -p "$project" down -v >/dev/null 2>&1) || true
+    docker image rm "$WMANAGER_IMAGE" >/dev/null 2>&1 || true
     rm -rf "$work"
 }
 trap cleanup EXIT
@@ -37,7 +39,10 @@ export PANEL_PORT_SUFFIX=":$https_port" WMANAGER_LOKI_HEAD_EVERY=3s
 LOKI_DOMAIN=loki.localhost GRAFANA_DOMAIN=grafana.localhost PANEL_DOMAIN=panel.localhost ACME_EMAIL=ci@example.test \
     ./selfhosted.sh init
 [[ $(stat -c %a secrets) == 700 ]] || { echo "ERROR: secrets/ can be opened by others" >&2; exit 1; }
-grep -q "$(cat secrets/server-password)" .env && { echo "ERROR: a database password in .env" >&2; exit 1; }
+for f in postgres-password owner-password server-password database-url migrate-database-url; do
+    [[ -s secrets/$f && $(stat -c %a "secrets/$f") == 444 ]] || { echo "ERROR: secrets/$f missing or not 444" >&2; exit 1; }
+    grep -qF "$(cat "secrets/$f")" .env && { echo "ERROR: secrets/$f is in .env" >&2; exit 1; }
+done
 ./selfhosted.sh add-company acme > acme.txt
 ./selfhosted.sh add-company globex > globex.txt
 ./selfhosted.sh list
@@ -60,7 +65,7 @@ printf '@{ Serial = 7 }\r\n' > sources/acme/manifest.psd1
 mkdir -p sources/acme/groups/all && printf 'Write-Output 1\r\n' > sources/acme/groups/all/job.ps1
 printf '@{ Serial = 3 }\r\n' > sources/globex/manifest.psd1
 
-docker compose -p "$project" up -d
+docker compose -p "$project" up -d --build
 loki() { curl -sk --resolve "loki.localhost:$https_port:127.0.0.1" "$@"; }
 grafana() { curl -sk --resolve "grafana.localhost:$https_port:127.0.0.1" "$@"; }
 for _ in $(seq 1 120); do
@@ -157,6 +162,16 @@ echo "$hdrs" | grep -qi "^content-security-policy: default-src 'none'" && echo "
     ok "the panel's headers (CSP, HSTS)" || fail "headers: $hdrs"
 [[ $(panel -o /dev/null -w '%{http_code}' -H 'Sec-Fetch-Site: cross-site' --data email=x "$purl/signin") == 403 ]] &&
     ok 'a form from another site is refused' || fail 'a cross-site form'
+panel -o /dev/null -H 'X-Forwarded-For: 203.0.113.77' --data email=nobody@example.test --data password=x "$purl/signin"
+sleep 1
+docker compose -p "$project" logs wmanager 2>&1 | grep -q '203\.0\.113\.77' &&
+    fail "a browser's own X-Forwarded-For was believed" || ok "a browser's own X-Forwarded-For is not believed"
+server_secrets=$(docker inspect "$(docker compose -p "$project" ps -q wmanager)" --format '{{range .Mounts}}{{.Destination}} {{end}}')
+[[ $server_secrets == *database-url* && $server_secrets != *migrate-database-url* ]] &&
+    ok "the server's container doesn't get the owner's password" || fail "the server's mounts: $server_secrets"
+[[ $(docker compose -p "$project" exec -T grafana wget -qO- --header 'X-Scope-OrgID: wmanager-server' \
+        --post-data '' 'http://loki:3100/loki/api/v1/delete?query=%7Bjob%3D%22audit-head%22%7D&start=1' 2>/dev/null; echo "rc=$?") != rc=0 ]] &&
+    ok "Loki takes no deletion of the audit heads" || fail 'Loki deletes over its API'
 heads=''
 for _ in $(seq 1 30); do
     heads=$(docker compose -p "$project" exec -T grafana wget -qO- --header 'X-Scope-OrgID: wmanager-server' \
@@ -168,6 +183,13 @@ done
 ./selfhosted.sh backup > backup.txt
 dump=$(sed -n 's/^Written \(backups\/[^ ]*\.dump\)\..*/\1/p' backup.txt)
 [[ -s $dump && $(stat -c %a "$dump") == 600 ]] && ok 'a backup, readable by its owner only' || fail "backup: $(cat backup.txt)"
+head -c 2000 "$dump" > backups/broken.dump
+if ./selfhosted.sh restore backups/broken.dump > broken.txt 2>&1; then
+    fail 'a broken dump restored'
+else
+    [[ $(signin "$owner_pw") == "303 $purl/signin/totp" ]] && ok 'a broken dump leaves the server as it was' ||
+        fail "after a broken dump: $(cat broken.txt)"
+fi
 if ./selfhosted.sh restore "$dump" > restore.txt 2>&1; then
     for _ in $(seq 1 60); do [[ $(panel -o /dev/null -w '%{http_code}' "$purl/healthz") == 200 ]] && break; sleep 1; done
     [[ $(signin "$owner_pw") == "303 $purl/signin/totp" ]] && ok 'after a restore the owner still signs in' || fail 'sign-in after the restore'

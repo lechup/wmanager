@@ -29,7 +29,7 @@ type Pusher struct {
 	Log    *slog.Logger
 	Client *http.Client
 
-	sent map[string]int64 // chain -> seq last pushed
+	sent map[string]head // chain -> the head last pushed
 }
 
 type head struct {
@@ -57,7 +57,7 @@ func (p *Pusher) Run(ctx context.Context) {
 // Push sends the heads that changed since the last successful push.
 func (p *Pusher) Push(ctx context.Context) error {
 	if p.sent == nil {
-		p.sent = map[string]int64{}
+		p.sent = map[string]head{}
 	}
 	var heads []head
 	err := p.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
@@ -73,7 +73,8 @@ func (p *Pusher) Push(ctx context.Context) error {
 				return err
 			}
 			h.Hash = hex.EncodeToString(hash)
-			if p.sent[h.Chain] != h.Seq {
+			// A head that changed at the same number (a chain rewritten) is sent again too.
+			if p.sent[h.Chain] != h {
 				heads = append(heads, h)
 			}
 		}
@@ -119,7 +120,7 @@ func (p *Pusher) Push(ctx context.Context) error {
 		return fmt.Errorf("Loki answered %s", resp.Status)
 	}
 	for _, h := range heads {
-		p.sent[h.Chain] = h.Seq
+		p.sent[h.Chain] = h
 	}
 	return nil
 }

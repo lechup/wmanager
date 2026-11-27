@@ -46,8 +46,8 @@
 	reverse_proxy grafana:3000
 }
 
-# wmanager-server's panel (docs/server.md). Caddy adds the browser's address to X-Forwarded-For, which the server
-# believes from Caddy's fixed address only.
+# wmanager-server's panel (docs/server.md). Caddy replaces any X-Forwarded-For the browser sends with the browser's
+# address, which the server believes from Caddy's fixed address only.
 {$PANEL_DOMAIN} {
 	reverse_proxy wmanager:8080
 }
