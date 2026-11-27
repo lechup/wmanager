@@ -599,7 +599,10 @@ To design:
   small static file. A strict Content Security Policy (no inline scripts), CSRF tokens, and sessions kept in the
   database.
 - **Data:** PostgreSQL, with the files kept by their SHA-256. `selfhosted.sh` gets backup and restore of the
-  database.
+  database. The migrations run as the role that owns the tables, and the server as another role that may only
+  read and add audit entries. Row-level security is a second barrier against a query that forgets its company, not
+  against SQL injection or a hacked server: any SQL can set the settings it goes by. So other readers, such as
+  Grafana's role, get only views of their own (the computers' last contact), never the tables.
 
 ## The agent inside
 
