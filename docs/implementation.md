@@ -98,7 +98,10 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - sign-in with argon2id, a mandatory TOTP code (each code works once) and recovery codes;
   - sessions kept as hashes of their tokens, and a new token after the second factor;
   - limits on guessing: per address; wrong passwords slow down only that address, so no one can lock another
-    person out; wrong codes, which need the right password, lock the account, each time twice as long;
+    person out, and past a cap per account only addresses that signed in before may try; wrong codes, which need
+    the right password, lock the account, each time twice as long, while a recovery code still works
+    (`wmanager-server unlock` ends a lockout too). Failed passwords go to the server's log, not the audit log,
+    which a flood of guesses mustn't fill;
   - the audit log, each entry holding the hash of the one before, checked against a head seen elsewhere, and its
     export as CSV and JSON (requirement 25);
   - row-level security in PostgreSQL as a second barrier against a query that forgets its company: a company's

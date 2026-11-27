@@ -3,16 +3,22 @@
 //
 // Signing in to the panel never signs a statement: that needs a key in wmanager-sign (docs/architecture.md).
 //
-// Guessing is limited in three ways:
+// Guessing is limited in four ways:
 //   - per address: PerAddress attempts a minute (an IPv6 address counts by its /64);
 //   - wrong passwords slow down further attempts at that account from that address only, so nobody can lock
-//     another person out by typing wrong passwords for them;
+//     another person out by typing wrong passwords for them. An attempt counts before its hash, so attempts sent
+//     side by side don't pass the slowdown;
+//   - across addresses: after AccountCap wrong passwords for one account in an hour, only addresses that signed
+//     in to it before may try (a device cookie replaces the address in stage 1b);
 //   - wrong second-factor codes, which need the right password first, lock the account, each lockout twice as
-//     long as the one before (from LockFor up to MaxLock), until the account signs in.
+//     long as the one before (from LockFor up to MaxLock), until the account signs in. A recovery code still
+//     works while it is locked (80 bits can't be guessed), so a person who knows the password can't keep the
+//     account locked for its owner.
 //
 // Every answer to a password attempt that isn't right, for an unknown address, a wrong password or one slowed
 // down, is the same ErrSignIn after the same work, so the answers don't tell which e-mail addresses have
-// accounts.
+// accounts. Failed password attempts go to the server's log, not the audit log, which keeps sign-ins, lockouts
+// and changes: the audit log can't be cleaned, and a flood of guesses mustn't fill it.
 package auth
 
 import (
@@ -21,6 +27,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -37,6 +44,9 @@ const (
 	PerAddress       = 20 // attempts per address (IPv6: per /64) per minute
 	FreePasswords    = 5  // wrong passwords for one account from one address before slowing down
 	MaxPasswordDelay = 15 * time.Minute
+	AccountCap       = 50 // wrong passwords for one account in an hour, from all addresses, before new ones wait
+	accountWindow    = time.Hour
+	knownFor         = 30 * 24 * time.Hour
 	MaxFailures      = 5 // wrong second-factor codes in a row before a lockout
 	LockFor          = 15 * time.Minute
 	MaxLock          = 24 * time.Hour
@@ -53,7 +63,7 @@ const (
 var (
 	ErrSignIn       = errors.New("auth: wrong e-mail address or password")
 	ErrCode         = errors.New("auth: wrong code")
-	ErrLocked       = errors.New("auth: too many wrong codes, the account is locked for a while")
+	ErrLocked       = errors.New("auth: too many wrong codes, the account is locked for a while; a recovery code still works")
 	ErrTooMany      = errors.New("auth: too many attempts from this address, try again in a minute")
 	ErrNoSession    = errors.New("auth: no session, or it has ended")
 	ErrNeedsTOTP    = errors.New("auth: the account has no second factor yet")
@@ -67,9 +77,14 @@ type Service struct {
 	Store *store.Store
 	Now   func() time.Time
 
+	// Log gets the failed password attempts (and, through Loki, the SIEM export).
+	Log *slog.Logger
+
 	mu        sync.Mutex
 	addresses map[string]*window   // attempts per address in the current minute
-	passwords map[string]*slowdown // wrong passwords per account and address
+	passwords map[string]*slowdown // attempts per account and address that weren't (yet) right
+	accounts  map[string]*window   // wrong passwords per account in the current hour
+	known     map[string]time.Time // account and address that signed in, until when it counts as known
 	swept     time.Time
 }
 
@@ -86,7 +101,8 @@ type slowdown struct {
 
 // New returns the service.
 func New(s *store.Store) *Service {
-	return &Service{Store: s, Now: time.Now, addresses: map[string]*window{}, passwords: map[string]*slowdown{}}
+	return &Service{Store: s, Now: time.Now, Log: slog.Default(), addresses: map[string]*window{},
+		passwords: map[string]*slowdown{}, accounts: map[string]*window{}, known: map[string]time.Time{}}
 }
 
 // addressKey is what the limit per address counts: an IPv4 address, or the /64 of an IPv6 one, which one
@@ -99,7 +115,7 @@ func addressKey(addr string) string {
 	ip := net.ParseIP(host)
 	switch {
 	case ip == nil:
-		return host
+		return "unparseable" // one key for all of them, so variants of a bad value don't each get a limit
 	case ip.To4() != nil:
 		return ip.To4().String()
 	}
@@ -122,6 +138,16 @@ func (s *Service) allow(addr string) error {
 				delete(s.passwords, k)
 			}
 		}
+		for k, w := range s.accounts {
+			if now.Sub(w.start) > accountWindow {
+				delete(s.accounts, k)
+			}
+		}
+		for k, until := range s.known {
+			if now.After(until) {
+				delete(s.known, k)
+			}
+		}
 		s.swept = now
 	}
 	key := addressKey(addr)
@@ -139,35 +165,53 @@ func (s *Service) allow(addr string) error {
 
 func passwordKey(email, addr string) string { return email + "\x00" + addressKey(addr) }
 
-// slowed tells whether password attempts at this account from this address are on hold.
-func (s *Service) slowed(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d := s.passwords[key]
-	return d != nil && s.Now().Before(d.until)
-}
-
-// wrongPassword counts a wrong password; after FreePasswords each one doubles the wait, up to MaxPasswordDelay.
-func (s *Service) wrongPassword(key string) {
+// reserve counts a password attempt before it is checked, and tells whether it may be checked at all. It is
+// counted as wrong until rightPassword says otherwise, so attempts sent side by side all count.
+func (s *Service) reserve(email, addr string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.Now()
+	key := passwordKey(email, addr)
 	d := s.passwords[key]
 	if d == nil {
 		d = &slowdown{}
 		s.passwords[key] = d
+	}
+	if now.Before(d.until) {
+		return false
+	}
+	if w := s.accounts[email]; w != nil && now.Sub(w.start) <= accountWindow && w.n >= AccountCap &&
+		now.After(s.known[key]) {
+		return false
 	}
 	d.failures++
 	d.last = now
 	if over := d.failures - FreePasswords; over > 0 {
 		d.until = now.Add(min(time.Second<<min(over-1, 20), MaxPasswordDelay))
 	}
+	return true
 }
 
-func (s *Service) rightPassword(key string) {
+// wrongPassword counts a wrong password for the account, across addresses.
+func (s *Service) wrongPassword(email string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.Now()
+	w := s.accounts[email]
+	if w == nil || now.Sub(w.start) > accountWindow {
+		w = &window{start: now}
+		s.accounts[email] = w
+	}
+	w.n++
+}
+
+// rightPassword forgets the attempts of that address and remembers it as known to the account.
+func (s *Service) rightPassword(email, addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := passwordKey(email, addr)
 	delete(s.passwords, key)
+	s.known[key] = s.Now().Add(knownFor)
 }
 
 // Session is a signed-in browser.
@@ -249,40 +293,30 @@ func (s *Service) SignIn(ctx context.Context, addr, email, password string) (str
 	if err != nil {
 		return "", err
 	}
-	key := passwordKey(email, addr)
-	// Every attempt that fails does the same work: one hash and one audit entry.
-	failed := func(actor string, details map[string]any) (string, error) {
-		details["step"], details["address"] = "password", addressKey(addr)
-		err := s.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
-			_, err := audit.Append(ctx, tx, audit.ServerChain, "", actor, "signin.failed", details)
-			return err
-		})
-		if err != nil {
-			return "", err
-		}
+	// Every attempt that fails does the same work, one hash, and gets the same answer.
+	failed := func(why string, attrs ...any) (string, error) {
+		s.Log.Warn("sign-in failed", append([]any{"why", why, "address", addressKey(addr)}, attrs...)...)
 		return "", ErrSignIn
 	}
 	if a == nil {
 		checkPassword(ctx, dummyHash, password)
 		// Not the address typed: people type passwords into the wrong field.
-		return failed("system", map[string]any{"account": "unknown"})
+		return failed("no such account")
 	}
-	if s.slowed(key) {
+	if !s.reserve(email, addr) {
 		checkPassword(ctx, dummyHash, password)
-		return failed("account:"+a.id, map[string]any{"email": a.email, "slowed": true})
+		return failed("slowed down", "account", a.id)
 	}
 	ok, err := checkPassword(ctx, a.hash, password)
 	if err != nil {
 		return "", err
 	}
 	if !ok || a.disabled {
-		s.wrongPassword(key)
-		return failed("account:"+a.id, map[string]any{"email": a.email})
+		s.wrongPassword(email)
+		return failed("wrong password", "account", a.id)
 	}
-	s.rightPassword(key)
-	if s.locked(a) {
-		return "", ErrLocked // only with the right password, so it tells nothing to a guesser
-	}
+	s.rightPassword(email, addr)
+	// A locked account still gets the password step: a recovery code works there.
 	token, hash := newToken()
 	err = s.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO sessions (token_hash, account_id, stage, expires_at)
@@ -352,8 +386,8 @@ func (s *Service) codeFailure(ctx context.Context, tx pgx.Tx, a *accountRow, ste
 }
 
 // atPasswordStep loads a session at the password step and its account, locked for update. answer is set when
-// the attempt ends there.
-func (s *Service) atPasswordStep(ctx context.Context, tx pgx.Tx, token string) (r *sessionRow, a *accountRow, answer, err error) {
+// the attempt ends there; a locked account ends there unless recoveryCode is set.
+func (s *Service) atPasswordStep(ctx context.Context, tx pgx.Tx, token string, recoveryCode bool) (r *sessionRow, a *accountRow, answer, err error) {
 	r, err = s.loadSession(ctx, tx, token)
 	if errors.Is(err, ErrNoSession) {
 		return nil, nil, err, nil
@@ -371,7 +405,7 @@ func (s *Service) atPasswordStep(ctx context.Context, tx pgx.Tx, token string) (
 	if a == nil || a.disabled {
 		return nil, nil, ErrNoSession, nil
 	}
-	if s.locked(a) {
+	if s.locked(a) && !recoveryCode {
 		return nil, nil, ErrLocked, nil
 	}
 	return r, a, nil, nil
@@ -387,7 +421,8 @@ func (s *Service) SecondFactor(ctx context.Context, addr, token, code string) (s
 	var full string
 	var answer error
 	err := s.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
-		_, a, ans, err := s.atPasswordStep(ctx, tx, token)
+		recovery := looksLikeRecoveryCode(code)
+		_, a, ans, err := s.atPasswordStep(ctx, tx, token, recovery)
 		if err != nil || ans != nil {
 			answer = ans
 			return err
@@ -397,11 +432,22 @@ func (s *Service) SecondFactor(ctx context.Context, addr, token, code string) (s
 			return nil
 		}
 		how := "totp"
-		if step, ok := checkTOTP(a.totp, code, s.Now(), a.lastStep); ok {
+		if recovery && s.locked(a) {
+			tag, err := tx.Exec(ctx, `UPDATE recovery_codes SET used_at = now()
+			                          WHERE account_id = $1 AND code_hash = $2 AND used_at IS NULL`, a.id, recoveryHash(code))
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				answer = ErrLocked // not counted: the account is locked already, and a code can't be guessed
+				return nil
+			}
+			how = "recovery code while locked"
+		} else if step, ok := checkTOTP(a.totp, code, s.Now(), a.lastStep); ok {
 			if _, err := tx.Exec(ctx, `UPDATE accounts SET totp_last_step = $2 WHERE id = $1`, a.id, step); err != nil {
 				return err
 			}
-		} else if looksLikeRecoveryCode(code) {
+		} else if recovery {
 			tag, err := tx.Exec(ctx, `UPDATE recovery_codes SET used_at = now()
 			                          WHERE account_id = $1 AND code_hash = $2 AND used_at IS NULL`, a.id, recoveryHash(code))
 			if err != nil {
@@ -458,7 +504,7 @@ func (s *Service) BeginTOTP(ctx context.Context, token string) (string, error) {
 	var url string
 	var answer error
 	err := s.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
-		_, a, ans, err := s.atPasswordStep(ctx, tx, token)
+		_, a, ans, err := s.atPasswordStep(ctx, tx, token, false)
 		if err != nil || ans != nil {
 			answer = ans
 			return err
@@ -495,7 +541,7 @@ func (s *Service) ConfirmTOTP(ctx context.Context, addr, token, code string) (st
 	var codes []string
 	var answer error
 	err := s.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
-		r, a, ans, err := s.atPasswordStep(ctx, tx, token)
+		r, a, ans, err := s.atPasswordStep(ctx, tx, token, false)
 		if err != nil || ans != nil {
 			answer = ans
 			return err

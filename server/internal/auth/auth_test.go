@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"sync"
@@ -37,6 +38,7 @@ func setup(t *testing.T) (*auth.Service, *clock, *store.Store, string) {
 	c := &clock{t: time.Now()}
 	svc := auth.New(s)
 	svc.Now = c.now
+	svc.Log = slog.New(slog.DiscardHandler)
 	return svc, c, s, id
 }
 
@@ -195,8 +197,12 @@ func TestWrongCodesLockTheAccountLongerEachTime(t *testing.T) {
 		if _, err := svc.SecondFactor(ctx, "198.51.100.1", tok, code(secret, c.now())); !errors.Is(err, auth.ErrLocked) {
 			t.Fatalf("the right code while locked: %v", err)
 		}
-		if _, err := svc.SignIn(ctx, "198.51.100.1", "anna@example.com", pw); !errors.Is(err, auth.ErrLocked) {
+		tok2, err := svc.SignIn(ctx, "198.51.100.1", "anna@example.com", pw)
+		if err != nil {
 			t.Fatalf("the right password while locked: %v", err)
+		}
+		if _, err := svc.SecondFactor(ctx, "198.51.100.1", tok2, code(secret, c.now())); !errors.Is(err, auth.ErrLocked) {
+			t.Fatalf("a code at a new session while locked: %v", err)
 		}
 	}
 	signsIn := func() error {
@@ -219,7 +225,7 @@ func TestWrongCodesLockTheAccountLongerEachTime(t *testing.T) {
 	}
 	// The second lockout in a row lasts 30 minutes.
 	c.add(auth.LockFor + time.Minute)
-	if _, err := svc.SignIn(ctx, "198.51.100.1", "anna@example.com", pw); !errors.Is(err, auth.ErrLocked) {
+	if err := signsIn(); !errors.Is(err, auth.ErrLocked) {
 		t.Fatalf("16 minutes into the second lockout: %v", err)
 	}
 	c.add(auth.LockFor)
@@ -376,5 +382,68 @@ func TestSessionEnds(t *testing.T) {
 	}
 	if _, err := svc.Lookup(ctx, full); !errors.Is(err, auth.ErrNoSession) {
 		t.Fatalf("after sign-out: %v", err)
+	}
+}
+
+func TestRecoveryCodeWorksWhileLocked(t *testing.T) {
+	svc, c, s, _ := setup(t)
+	ctx := context.Background()
+	_, _, codes := enroll(t, svc, c)
+	c.add(time.Minute)
+	tok, _ := svc.SignIn(ctx, "198.51.100.1", "anna@example.com", pw)
+	for range auth.MaxFailures {
+		svc.SecondFactor(ctx, "198.51.100.1", tok, "000000")
+	}
+	if _, err := svc.SecondFactor(ctx, "198.51.100.1", tok, "AAAA-BBBB-CCCC-DDDD"); !errors.Is(err, auth.ErrLocked) {
+		t.Fatalf("a wrong recovery code while locked: %v", err)
+	}
+	full, err := svc.SecondFactor(ctx, "198.51.100.1", tok, codes[0])
+	if err != nil {
+		t.Fatalf("a recovery code while locked: %v", err)
+	}
+	if ses, err := svc.Lookup(ctx, full); err != nil || !ses.Full {
+		t.Fatalf("%+v %v", ses, err)
+	}
+	var lockouts int
+	s.Pool.QueryRow(ctx, `SELECT lockouts FROM accounts WHERE email = 'anna@example.com'`).Scan(&lockouts)
+	if lockouts != 0 {
+		t.Fatalf("lockouts %d after signing in", lockouts)
+	}
+}
+
+func TestParallelPasswordsCountBeforeTheHash(t *testing.T) {
+	svc, _, _, _ := setup(t)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for range auth.PerAddress - 1 {
+		wg.Add(1)
+		go func() { defer wg.Done(); svc.SignIn(ctx, "203.0.113.20", "anna@example.com", "wrong password here") }()
+	}
+	wg.Wait()
+	// Only FreePasswords of them could be checked; the right password now waits too.
+	if _, err := svc.SignIn(ctx, "203.0.113.20", "anna@example.com", pw); !errors.Is(err, auth.ErrSignIn) {
+		t.Fatalf("the right password after %d at once: %v", auth.PerAddress-1, err)
+	}
+}
+
+func TestCapAcrossAddressesSparesKnownOnes(t *testing.T) {
+	svc, c, _, _ := setup(t)
+	ctx := context.Background()
+	enroll(t, svc, c) // 198.51.100.1 is known now
+	for i := range auth.AccountCap {
+		addr := fmt.Sprintf("2001:db8:%x::1", i) // a different /64 each time
+		if _, err := svc.SignIn(ctx, addr, "anna@example.com", "wrong password here"); !errors.Is(err, auth.ErrSignIn) {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	if _, err := svc.SignIn(ctx, "203.0.113.30", "anna@example.com", pw); !errors.Is(err, auth.ErrSignIn) {
+		t.Fatalf("the right password from a new address over the cap: %v", err)
+	}
+	if _, err := svc.SignIn(ctx, "198.51.100.1", "anna@example.com", pw); err != nil {
+		t.Fatalf("the right password from a known address over the cap: %v", err)
+	}
+	c.add(time.Hour + time.Minute)
+	if _, err := svc.SignIn(ctx, "203.0.113.30", "anna@example.com", pw); err != nil {
+		t.Fatalf("a new address after the hour: %v", err)
 	}
 }

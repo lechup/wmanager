@@ -86,14 +86,25 @@ func (s *Store) check(ctx context.Context) error {
 	if !member {
 		return errors.New("store: the server's database role is not in " + RuntimeGroup)
 	}
-	var owns bool
-	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = current_schema()
-	                                AND tablename = 'audit_log' AND tableowner = current_user)`).Scan(&owns); err != nil {
+	// Owning the tables, or being in the role that owns them, would let the server's role turn row-level security
+	// and the append-only triggers off.
+	var exists, owns, tooMuch bool
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) > 0,
+	                                       coalesce(bool_or(pg_has_role(current_user, tableowner, 'MEMBER')), false),
+	                                       coalesce(bool_or(has_table_privilege(current_user, 'audit_log', 'UPDATE') OR
+	                                                        has_table_privilege(current_user, 'audit_log', 'DELETE') OR
+	                                                        has_table_privilege(current_user, 'audit_log', 'TRUNCATE')), false)
+	                                FROM pg_tables WHERE schemaname = current_schema() AND tablename = 'audit_log'`).
+		Scan(&exists, &owns, &tooMuch); err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
-	if owns {
-		return errors.New("store: the server's database role owns the tables; run the migrations as another " +
-			"role (WMANAGER_MIGRATE_DATABASE_URL) and the server as a role in " + RuntimeGroup)
+	if !exists {
+		return errors.New("store: the database is not migrated (wmanager-server migrate)")
+	}
+	if owns || tooMuch {
+		return errors.New("store: the server's database role owns the tables, is in the role that does, or may " +
+			"change the audit log; run the migrations as another role (WMANAGER_MIGRATE_DATABASE_URL) and the " +
+			"server as a role in " + RuntimeGroup + " only")
 	}
 	db := stdlib.OpenDBFromPool(s.Pool)
 	defer db.Close()
@@ -126,15 +137,26 @@ var System = Who{System: true}
 // Tx runs fn in a transaction that row-level security sees as who. It commits when fn returns nil. The settings
 // are local to the transaction, so a pooled connection doesn't carry them to the next one.
 func (s *Store) Tx(ctx context.Context, who Who, fn func(pgx.Tx) error) error {
-	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		system := ""
-		if who.System {
-			system = "on"
-		}
-		if _, err := tx.Exec(ctx, `SELECT set_config('wmanager.system', $1, true),
-		                                  set_config('wmanager.account', $2, true)`, system, who.Account); err != nil {
+	return s.TxWith(ctx, pgx.TxOptions{}, who, fn)
+}
+
+// TxWith is Tx with transaction options, e.g. a snapshot (pgx.RepeatableRead) for reads that must agree.
+func (s *Store) TxWith(ctx context.Context, opts pgx.TxOptions, who Who, fn func(pgx.Tx) error) error {
+	return pgx.BeginTxFunc(ctx, s.Pool, opts, func(tx pgx.Tx) error {
+		if err := SetWho(ctx, tx, who); err != nil {
 			return err
 		}
 		return fn(tx)
 	})
+}
+
+// SetWho changes, within a transaction, who row-level security sees.
+func SetWho(ctx context.Context, tx pgx.Tx, who Who) error {
+	system := ""
+	if who.System {
+		system = "on"
+	}
+	_, err := tx.Exec(ctx, `SELECT set_config('wmanager.system', $1, true), set_config('wmanager.account', $2, true)`,
+		system, who.Account)
+	return err
 }

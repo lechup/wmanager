@@ -206,3 +206,26 @@ func CompaniesOf(ctx context.Context, s *store.Store, accountID string) ([]Compa
 	}
 	return out, nil
 }
+
+// Unlock ends an account's lockout after wrong second-factor codes, and its doubling. Only the owner of the
+// server, or the server's own command line, does it; a recovery code does it too.
+func Unlock(ctx context.Context, s *store.Store, by Actor, email string) error {
+	email = auth.NormalizeEmail(email)
+	return s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		if err := isOwner(ctx, tx, by); err != nil {
+			return err
+		}
+		var id string
+		err := tx.QueryRow(ctx, `UPDATE accounts SET failed_codes = 0, lockouts = 0, locked_until = NULL
+		                         WHERE email = $1 RETURNING id`, email).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoAccount
+		}
+		if err != nil {
+			return err
+		}
+		_, err = audit.Append(ctx, tx, audit.ServerChain, "", by.String(), "account.unlock",
+			map[string]any{"account": id, "email": email})
+		return err
+	})
+}

@@ -50,3 +50,21 @@ func TestRuntimeRoleLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestRefusesRoleInOwnerGroup(t *testing.T) {
+	db := storetest.NewDB(t)
+	ctx := context.Background()
+	admin := storetest.Superuser(t, db.Store)
+	var server, owner string
+	if err := db.Store.Pool.QueryRow(ctx, `SELECT current_user, (SELECT tableowner FROM pg_tables WHERE tablename = 'audit_log')`).
+		Scan(&server, &owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `GRANT `+owner+` TO `+server); err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Exec(ctx, `REVOKE `+owner+` FROM `+server)
+	if _, err := store.Open(ctx, db.URL); err == nil || !strings.Contains(err.Error(), "is in the role that does") {
+		t.Fatalf("a server role in the owner's role: %v", err)
+	}
+}

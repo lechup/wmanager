@@ -243,3 +243,43 @@ func TestExports(t *testing.T) {
 		t.Fatalf("a value that a spreadsheet would read as a formula: %q", a)
 	}
 }
+
+func TestVerifyWhileEntriesAreAdded(t *testing.T) {
+	s := storetest.New(t)
+	ctx := context.Background()
+	appendN(t, s, audit.ServerChain, "", 1)
+	done := make(chan struct{})
+	errs := make(chan error, 1)
+	go func() {
+		defer close(done)
+		if _, err := add(s, audit.ServerChain, "", 100); err != nil {
+			errs <- err
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			select {
+			case err := <-errs:
+				t.Fatal(err)
+			default:
+			}
+			return
+		default:
+		}
+		if _, err := audit.Verify(ctx, s, store.System, audit.ServerChain, nil); err != nil {
+			t.Fatalf("verify while appending: %v", err)
+		}
+	}
+}
+
+func TestVerifyByOutsiderSaysNothing(t *testing.T) {
+	s := storetest.New(t)
+	ctx := context.Background()
+	owner, _ := accounts.CreateAccount(ctx, s, accounts.SystemActor, "owner@example.com", "", "a long enough password", true)
+	outsider, _ := accounts.CreateAccount(ctx, s, accounts.Actor{AccountID: owner}, "o@example.com", "", "a long enough password", false)
+	acme, _ := accounts.CreateCompany(ctx, s, accounts.Actor{AccountID: owner}, "Acme")
+	if _, err := audit.Verify(ctx, s, store.Who{Account: outsider}, audit.CompanyChain(acme), nil); !errors.Is(err, audit.ErrNoChain) {
+		t.Fatalf("an outsider verifying a company's chain: %v", err)
+	}
+}

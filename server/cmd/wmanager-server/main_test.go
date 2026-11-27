@@ -56,6 +56,12 @@ func TestCommands(t *testing.T) {
 	if out, err := cmd("", "audit", "export", "server", "csv"); err != nil || !strings.HasPrefix(out, "seq,at,actor,action,details,hash") {
 		t.Fatalf("audit export csv: %q %v", out, err)
 	}
+	if out, err := cmd("", "unlock", "owner@example.com"); err != nil || !strings.Contains(out, "unlocked") {
+		t.Fatalf("unlock: %q %v", out, err)
+	}
+	if _, err := cmd("", "unlock", "nobody@example.com"); err == nil {
+		t.Fatal("unlocking an unknown account")
+	}
 	for _, args := range [][]string{{}, {"nope"}, {"audit", "export", "server", "xml"}, {"create-owner"}} {
 		if _, err := cmd("", args...); err == nil {
 			t.Errorf("%q accepted", args)

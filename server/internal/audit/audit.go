@@ -110,61 +110,78 @@ type Record struct {
 func Read(ctx context.Context, s *store.Store, who store.Who, chain string) ([]Record, error) {
 	var out []Record
 	err := s.Tx(ctx, who, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT seq, entry, hash FROM audit_log WHERE chain = $1 ORDER BY seq`, chain)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		prev := make([]byte, 32)
-		for rows.Next() {
-			var seq int64
-			var raw, stored []byte
-			if err := rows.Scan(&seq, &raw, &stored); err != nil {
-				return err
-			}
-			var e Entry
-			if err := json.Unmarshal(raw, &e, json.RejectUnknownMembers(true)); err != nil {
-				return fmt.Errorf("%w: entry %d: %v", ErrBroken, seq, err)
-			}
-			h := link(prev, raw)
-			want := int64(len(out) + 1)
-			if e.Seq != seq || seq != want || e.Chain != chain || !bytes.Equal(h[:], stored) {
-				return fmt.Errorf("%w at entry %d", ErrBroken, want)
-			}
-			out = append(out, Record{Entry: e, Raw: raw, Hash: h})
-			prev = h[:]
-		}
-		return rows.Err()
+		var err error
+		out, err = readTx(ctx, tx, chain, -1)
+		return err
 	})
 	return out, err
 }
 
-// ErrNoChain means there is no such chain.
+// readTx reads a chain up to entry upTo (all of it when upTo < 0).
+func readTx(ctx context.Context, tx pgx.Tx, chain string, upTo int64) ([]Record, error) {
+	rows, err := tx.Query(ctx, `SELECT seq, entry, hash FROM audit_log WHERE chain = $1 AND ($2 < 0 OR seq <= $2)
+	                            ORDER BY seq`, chain, upTo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Record
+	prev := make([]byte, 32)
+	for rows.Next() {
+		var seq int64
+		var raw, stored []byte
+		if err := rows.Scan(&seq, &raw, &stored); err != nil {
+			return nil, err
+		}
+		var e Entry
+		if err := json.Unmarshal(raw, &e, json.RejectUnknownMembers(true)); err != nil {
+			return nil, fmt.Errorf("%w: entry %d: %v", ErrBroken, seq, err)
+		}
+		h := link(prev, raw)
+		want := int64(len(out) + 1)
+		if e.Seq != seq || seq != want || e.Chain != chain || !bytes.Equal(h[:], stored) {
+			return nil, fmt.Errorf("%w at entry %d", ErrBroken, want)
+		}
+		out = append(out, Record{Entry: e, Raw: raw, Hash: h})
+		prev = h[:]
+	}
+	return out, rows.Err()
+}
+
+// ErrNoChain means there is no such chain, or none who may read.
 var ErrNoChain = errors.New("audit: no such chain")
 
 // Verify checks a whole chain: each link, that it ends at the head the server keeps for it, and, when a head
 // seen elsewhere is given (e.g. the one wmanager-sign remembers), that the chain still leads to it. Only the last
 // check catches someone with the database itself, who can rewrite the entries and the head together.
+//
+// The head and the entries are read in one snapshot, so entries added meanwhile don't look like a break.
 func Verify(ctx context.Context, s *store.Store, who store.Who, chain string, seen *Head) (Head, error) {
-	recs, err := Read(ctx, s, who, chain)
-	if err != nil {
-		return Head{}, err
-	}
 	var kept Head
+	var recs []Record
 	found := false
-	err = s.Tx(ctx, store.System, func(tx pgx.Tx) error {
-		var hash []byte
-		err := tx.QueryRow(ctx, `SELECT seq, hash FROM audit_heads WHERE chain = $1`, chain).Scan(&kept.Seq, &hash)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err == nil {
-			found = true
-			kept.Chain = chain
-			copy(kept.Hash[:], hash)
-		}
-		return err
-	})
+	err := s.TxWith(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, store.System,
+		func(tx pgx.Tx) error {
+			var hash []byte
+			err := tx.QueryRow(ctx, `SELECT seq, hash FROM audit_heads WHERE chain = $1`, chain).Scan(&kept.Seq, &hash)
+			switch {
+			case errors.Is(err, pgx.ErrNoRows):
+			case err != nil:
+				return err
+			default:
+				found, kept.Chain = true, chain
+				copy(kept.Hash[:], hash)
+			}
+			if err := store.SetWho(ctx, tx, who); err != nil {
+				return err
+			}
+			upTo := kept.Seq
+			if !found {
+				upTo = -1
+			}
+			recs, err = readTx(ctx, tx, chain, upTo)
+			return err
+		})
 	if err != nil {
 		return Head{}, err
 	}
@@ -173,6 +190,9 @@ func Verify(ctx context.Context, s *store.Store, who store.Who, chain string, se
 			return Head{}, fmt.Errorf("%w: entries without a head", ErrBroken)
 		}
 		return Head{}, ErrNoChain
+	}
+	if len(recs) == 0 && !who.System {
+		return Head{}, ErrNoChain // not readable by who: say nothing about it
 	}
 	head := Head{Chain: chain}
 	if len(recs) > 0 {

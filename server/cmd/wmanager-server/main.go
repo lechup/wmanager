@@ -4,6 +4,7 @@
 //	                                            WMANAGER_MIGRATE_DATABASE_URL is set
 //	wmanager-server migrate                     migrate the database, as the role that owns the tables
 //	wmanager-server create-owner <e-mail>       make the owner of the server; asks for the password
+//	wmanager-server unlock <e-mail>             end an account's lockout after wrong second-factor codes
 //	wmanager-server audit verify <chain> [<seq>:<hash>]
 //	                                            check a chain of the audit log, and that it leads to a head seen
 //	wmanager-server audit export <chain> json|csv
@@ -50,6 +51,7 @@ func main() {
 const usage = `usage:
   wmanager-server serve | migrate
   wmanager-server create-owner <e-mail>
+  wmanager-server unlock <e-mail>
   wmanager-server audit verify <chain> [<seq>:<hash>]
   wmanager-server audit export <chain> json|csv`
 
@@ -94,6 +96,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return err
 		}
 		fmt.Fprintf(stdout, "owner %s made (%s); the second factor is set up at the first sign-in\n", args[1], id)
+		return nil
+	case args[0] == "unlock" && len(args) == 2:
+		if err := accounts.Unlock(ctx, s, accounts.SystemActor, args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s unlocked\n", args[1])
 		return nil
 	case args[0] == "audit" && len(args) >= 3 && args[1] == "verify" && len(args) <= 4:
 		var seen *audit.Head
