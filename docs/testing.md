@@ -32,6 +32,9 @@ The integration tests (`tests\Managed.Integration.Tests.ps1`) change the compute
 4. Linux, PowerShell 7: the tests of the configuration wizard (`init.ps1` also runs there), the languages,
    `tools/groups.ps1` and `tools/wm.ps1` (a new company signed with osslsigncode, when the runner's version can sign
    PowerShell files).
+5. Linux, Go: the Go code of v1 ([Implementation plan](implementation.md)): `gofmt`, `go vet` (also for Windows),
+   `go test -race`, the Windows build, `govulncheck`, and `go-licenses`, which fails on a dependency whose license
+   doesn't fit GPL v3.
 
 CI runs on Windows Server, not Windows 11 Home/Pro, so it doesn't replace the checks below.
 

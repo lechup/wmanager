@@ -41,6 +41,8 @@ One Go module (Go 1.27) at the top of the repository:
 | `server/` | `wmanager-server`: the panel, the API, the database, the installers |
 | `agent/` | `wmanager-agent`: the installer and the service |
 | `sign/` | `wmanager-sign` |
+| `internal/` | code shared by them that isn't a statement: the installer's tag (`certtag`), the computer's key in the TPM (`tpmkey`) |
+| `trials/` | the trials of stage 0, until the stages take their code over |
 | as today | the payload: `Provision.ps1`, `lib\`, `lang\`, `Invoke-*.ps1`, `library/` |
 
 The libraries, all with licenses that fit GPL v3 (requirement 9):
