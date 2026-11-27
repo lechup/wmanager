@@ -89,7 +89,7 @@ func (s *Service) CompleteSetup(ctx context.Context, addr, token, password strin
 			return err
 		}
 		_, err = audit.Append(ctx, tx, audit.ServerChain, "", "account:"+id, "account.setup",
-			map[string]any{"email": email})
+			map[string]any{"email": email, "address": addressKey(addr)})
 		return err
 	})
 	if err != nil {

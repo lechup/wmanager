@@ -24,8 +24,10 @@ type Config struct {
 	// PublicURL is the panel's address as people reach it, for the links it gives out (WMANAGER_PUBLIC_URL,
 	// e.g. https://wm.example.com). Without it, the links use the request's host over https.
 	PublicURL string
-	// TrustedProxies are the addresses (CIDR) whose X-Forwarded-For is believed: Caddy's
-	// (WMANAGER_TRUSTED_PROXIES, comma-separated). Without them, the client's address is the connection's.
+	// TrustedProxies are the addresses (CIDR) whose X-Forwarded-For is believed (WMANAGER_TRUSTED_PROXIES,
+	// comma-separated). Name Caddy's exact address, not a whole network: with Docker's network, a connection from
+	// outside that Docker forwards may come from the network's gateway. Without them, the client's address is the
+	// connection's.
 	TrustedProxies []netip.Prefix
 }
 
@@ -64,7 +66,7 @@ func Load(getenv func(string) string) (Config, error) {
 			}
 			prefix = netip.PrefixFrom(addr, addr.BitLen())
 		}
-		c.TrustedProxies = append(c.TrustedProxies, prefix.Masked())
+		c.TrustedProxies = append(c.TrustedProxies, netip.PrefixFrom(prefix.Addr().Unmap(), unmappedBits(prefix)).Masked())
 	}
 	return c, nil
 }
@@ -83,4 +85,12 @@ func secret(getenv func(string) string, name string) (string, error) {
 		return strings.TrimSpace(string(b)), nil
 	}
 	return v, nil
+}
+
+// unmappedBits is a prefix's length once an IPv4-mapped IPv6 address becomes IPv4.
+func unmappedBits(p netip.Prefix) int {
+	if p.Addr().Is4In6() {
+		return max(p.Bits()-96, 0)
+	}
+	return p.Bits()
 }

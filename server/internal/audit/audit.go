@@ -111,14 +111,26 @@ func Read(ctx context.Context, s *store.Store, who store.Who, chain string) ([]R
 	var out []Record
 	err := s.Tx(ctx, who, func(tx pgx.Tx) error {
 		var err error
-		out, err = readTx(ctx, tx, chain, -1)
+		out, err = readTx(ctx, tx, chain, -1, true)
 		return err
 	})
 	return out, err
 }
 
-// readTx reads a chain up to entry upTo (all of it when upTo < 0).
-func readTx(ctx context.Context, tx pgx.Tx, chain string, upTo int64) ([]Record, error) {
+// ReadUnchecked returns a chain's entries as stored, with their stored hashes, without checking the links: for
+// the export of a chain that may be broken, which is when someone needs it most.
+func ReadUnchecked(ctx context.Context, s *store.Store, who store.Who, chain string) ([]Record, error) {
+	var out []Record
+	err := s.Tx(ctx, who, func(tx pgx.Tx) error {
+		var err error
+		out, err = readTx(ctx, tx, chain, -1, false)
+		return err
+	})
+	return out, err
+}
+
+// readTx reads a chain up to entry upTo (all of it when upTo < 0), checking each link when check is set.
+func readTx(ctx context.Context, tx pgx.Tx, chain string, upTo int64, check bool) ([]Record, error) {
 	rows, err := tx.Query(ctx, `SELECT seq, entry, hash FROM audit_log WHERE chain = $1 AND ($2 < 0 OR seq <= $2)
 	                            ORDER BY seq`, chain, upTo)
 	if err != nil {
@@ -134,6 +146,13 @@ func readTx(ctx context.Context, tx pgx.Tx, chain string, upTo int64) ([]Record,
 			return nil, err
 		}
 		var e Entry
+		if !check {
+			json.Unmarshal(raw, &e) // best effort: the raw entry and its stored hash are what count
+			var h [32]byte
+			copy(h[:], stored)
+			out = append(out, Record{Entry: e, Raw: raw, Hash: h})
+			continue
+		}
 		if err := json.Unmarshal(raw, &e, json.RejectUnknownMembers(true)); err != nil {
 			return nil, fmt.Errorf("%w: entry %d: %v", ErrBroken, seq, err)
 		}
@@ -157,6 +176,20 @@ var ErrNoChain = errors.New("audit: no such chain")
 //
 // The head and the entries are read in one snapshot, so entries added meanwhile don't look like a break.
 func Verify(ctx context.Context, s *store.Store, who store.Who, chain string, seen *Head) (Head, error) {
+	h, _, err := Check(ctx, s, who, chain, seen)
+	return h, err
+}
+
+// Check is Verify that also returns the entries it checked, from the same snapshot.
+func Check(ctx context.Context, s *store.Store, who store.Who, chain string, seen *Head) (Head, []Record, error) {
+	head, recs, err := check(ctx, s, who, chain, seen)
+	if err != nil {
+		return head, nil, err
+	}
+	return head, recs, nil
+}
+
+func check(ctx context.Context, s *store.Store, who store.Who, chain string, seen *Head) (Head, []Record, error) {
 	var kept Head
 	var recs []Record
 	found := false
@@ -179,34 +212,34 @@ func Verify(ctx context.Context, s *store.Store, who store.Who, chain string, se
 			if !found {
 				upTo = -1
 			}
-			recs, err = readTx(ctx, tx, chain, upTo)
+			recs, err = readTx(ctx, tx, chain, upTo, true)
 			return err
 		})
 	if err != nil {
-		return Head{}, err
+		return Head{}, nil, err
 	}
 	if !found {
 		if len(recs) > 0 {
-			return Head{}, fmt.Errorf("%w: entries without a head", ErrBroken)
+			return Head{}, nil, fmt.Errorf("%w: entries without a head", ErrBroken)
 		}
-		return Head{}, ErrNoChain
+		return Head{}, nil, ErrNoChain
 	}
 	if len(recs) == 0 && !who.System {
-		return Head{}, ErrNoChain // not readable by who: say nothing about it
+		return Head{}, nil, ErrNoChain // not readable by who: say nothing about it
 	}
 	head := Head{Chain: chain}
 	if len(recs) > 0 {
 		head.Seq, head.Hash = recs[len(recs)-1].Entry.Seq, recs[len(recs)-1].Hash
 	}
 	if head != kept {
-		return head, fmt.Errorf("%w: it ends at #%d, the head kept is #%d", ErrBroken, head.Seq, kept.Seq)
+		return head, nil, fmt.Errorf("%w: it ends at #%d, the head kept is #%d", ErrBroken, head.Seq, kept.Seq)
 	}
 	if seen != nil {
 		if seen.Chain != chain || seen.Seq < 1 || seen.Seq > int64(len(recs)) || recs[seen.Seq-1].Hash != seen.Hash {
-			return head, fmt.Errorf("%w: it no longer leads to the head seen (%s)", ErrBroken, seen)
+			return head, nil, fmt.Errorf("%w: it no longer leads to the head seen (%s)", ErrBroken, seen)
 		}
 	}
-	return head, nil
+	return head, recs, nil
 }
 
 // ExportJSON writes a chain as JSON lines: each entry exactly as hashed, with its hash, so anyone can check it.

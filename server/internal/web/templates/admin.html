@@ -17,10 +17,13 @@
   <thead><tr><th>{{t "admin.email"}}</th><th>{{t "admin.name"}}</th><th></th><th></th></tr></thead>
   <tbody>{{range .Accounts}}<tr>
     <td>{{.Email}}</td><td>{{.Name}}</td>
-    <td>{{if .Owner}}{{t "admin.owner"}} {{end}}{{if .Pending}}{{t "admin.pending"}} {{end}}{{if .LockedUntil}}{{t "admin.locked"}}{{end}}</td>
-    <td>{{if .LockedUntil}}<form method="post" action="/admin/unlock" class="inline">
+    <td>{{if .Owner}}{{t "admin.owner"}} {{end}}{{if .Pending}}{{t "admin.pending"}}{{with .LinkExpires}} ({{t "admin.expires" (time .)}}){{end}} {{end}}{{if .Locked}}{{t "admin.locked"}}{{end}}</td>
+    <td>{{if .Locked}}<form method="post" action="/admin/unlock" class="inline">
       <input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="email" value="{{.Email}}">
-      <button type="submit">{{t "admin.unlock"}}</button></form>{{end}}</td>
+      <button type="submit">{{t "admin.unlock"}}</button></form>{{end}}
+      {{if .Pending}}<form method="post" action="/admin/link" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="account" value="{{.ID}}">
+      <button type="submit">{{t "admin.newlink"}}</button></form>{{end}}</td>
   </tr>{{end}}</tbody>
 </table>
 <form method="post" action="/admin/invite" class="row">

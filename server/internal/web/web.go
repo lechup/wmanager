@@ -77,8 +77,10 @@ var funcs = template.FuncMap{
 // Handler is the panel's routes, with its protections around them.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	static, _ := fs.Sub(files, "static")
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	mux.HandleFunc("GET /static/style.css", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		http.ServeFileFS(w, r, files, "static/style.css")
+	})
 	mux.HandleFunc("GET /healthz", s.healthz)
 
 	mux.HandleFunc("GET /signin", s.signinPage)
@@ -99,6 +101,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin", s.owner(s.admin))
 	mux.HandleFunc("POST /admin/company", s.owner(s.newCompany))
 	mux.HandleFunc("POST /admin/invite", s.owner(s.invite))
+	mux.HandleFunc("POST /admin/link", s.owner(s.newLink))
 	mux.HandleFunc("POST /admin/member", s.owner(s.member))
 	mux.HandleFunc("POST /admin/unlock", s.owner(s.unlock))
 
@@ -127,6 +130,8 @@ func headers(next http.Handler) http.Handler {
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), interest-cohort=()")
 		h.Set("Cache-Control", "no-store")
+		// The panel is https only (its cookie is Secure): no first visit over plain http to strip.
+		h.Set("Strict-Transport-Security", "max-age=31536000")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -151,35 +156,59 @@ func (s *Server) logged(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		path := r.URL.Path
-		if strings.HasPrefix(path, "/setup/") {
-			path = "/setup/…"
-		}
-		s.Log.Info("request", "method", r.Method, "path", path, "status", sw.status,
+		s.Log.Info("request", "method", r.Method, "path", redact(r.URL.Path), "status", sw.status,
 			"ms", time.Since(start).Milliseconds(), "address", s.clientAddr(r))
 	})
 }
 
-// clientAddr is the address of the browser: the connection's, or, behind a trusted proxy, the last address in
-// X-Forwarded-For (the one the proxy added).
+// redact hides the token of a setup link in a path, wherever it is in it.
+func redact(path string) string {
+	if i := strings.Index(path, "/setup/"); i >= 0 {
+		return path[:i] + "/setup/…"
+	}
+	return path
+}
+
+func (s *Server) trusted(a netip.Addr) bool {
+	for _, p := range s.TrustedProxies {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientAddr is the address of the browser. It is the connection's, unless that is a trusted proxy: then
+// X-Forwarded-For (all its lines) is read from the right, past every trusted proxy, to the first address that
+// isn't one. An entry that isn't an address ends the walk at the proxy that wrote it.
 func (s *Server) clientAddr(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	addr, err := netip.ParseAddr(host)
+	peer, err := netip.ParseAddr(host)
 	if err != nil {
 		return host
 	}
-	for _, p := range s.TrustedProxies {
-		if p.Contains(addr.Unmap()) {
-			parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
-			if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
-				return last
-			}
+	addr := peer.Unmap()
+	if !s.trusted(addr) {
+		return addr.String()
+	}
+	var hops []string
+	for _, line := range r.Header.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(line, ",")...)
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			break
+		}
+		addr = hop.Unmap()
+		if !s.trusted(addr) {
+			break
 		}
 	}
-	return addr.Unmap().String()
+	return addr.String()
 }
 
 // --- sessions
@@ -272,10 +301,10 @@ type Page struct {
 	Lang    string
 	Langs   []string
 	Path    string
+	NoLang  bool // no links to change the language: the page is an answer to a form, or shows a secret once
 	CSRF    string
 	Session *auth.Session
 	Error   string
-	Notice  string
 	Data    any
 }
 
@@ -287,6 +316,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 	}
 	lang := s.language(w, r)
 	p.Lang, p.Langs, p.Path, p.Session = lang, languages, r.URL.Path, ses
+	if r.Method != http.MethodGet {
+		p.NoLang = true
+	}
 	if tok := token(r); tok != "" {
 		p.CSRF = csrf(tok)
 	}
@@ -313,7 +345,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, key st
 }
 
 func (s *Server) internal(w http.ResponseWriter, r *http.Request, err error) {
-	s.Log.Error("internal error", "path", r.URL.Path, "err", err)
+	s.Log.Error("internal error", "path", redact(r.URL.Path), "err", err)
 	s.fail(w, r, http.StatusInternalServerError, "error.internal")
 }
 
@@ -378,6 +410,10 @@ func (s *Server) codePage(w http.ResponseWriter, r *http.Request, ses auth.Sessi
 
 func (s *Server) code(w http.ResponseWriter, r *http.Request, ses auth.Session) {
 	full, err := s.Auth.SecondFactor(r.Context(), s.clientAddr(r), token(r), r.PostFormValue("code"))
+	if errors.Is(err, auth.ErrNeedsTOTP) {
+		http.Redirect(w, r, "/signin/totp", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		status, key := authError(err)
 		if key == "" {
@@ -402,14 +438,26 @@ func (s *Server) totpPage(w http.ResponseWriter, r *http.Request, ses auth.Sessi
 		http.Redirect(w, r, "/signin/code", http.StatusSeeOther)
 		return
 	}
+	s.showTOTP(w, r, http.StatusOK, "")
+}
+
+// showTOTP shows the secret this session is offered (the same one again after a wrong code).
+func (s *Server) showTOTP(w http.ResponseWriter, r *http.Request, status int, errKey string) {
 	otpauth, err := s.Auth.BeginTOTP(r.Context(), token(r))
-	if err != nil {
-		status, key := authError(err)
+	switch {
+	case errors.Is(err, auth.ErrHasTOTP):
+		http.Redirect(w, r, "/signin/code", http.StatusSeeOther)
+		return
+	case errors.Is(err, auth.ErrLocked):
+		s.fail(w, r, http.StatusForbidden, "error.lockedsetup")
+		return
+	case err != nil:
+		st, key := authError(err)
 		if key == "" {
 			s.internal(w, r, err)
 			return
 		}
-		s.fail(w, r, status, key)
+		s.fail(w, r, st, key)
 		return
 	}
 	qr, secret, err := totpQR(otpauth)
@@ -417,19 +465,33 @@ func (s *Server) totpPage(w http.ResponseWriter, r *http.Request, ses auth.Sessi
 		s.internal(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "totp", nil, Page{Data: TOTPPage{QR: qr, Secret: secret}})
+	// The secret is on the page: no links that would load it again.
+	s.render(w, r, status, "totp", nil, Page{Error: errKey, NoLang: true, Data: TOTPPage{QR: qr, Secret: secret}})
 }
 
 func (s *Server) totp(w http.ResponseWriter, r *http.Request, ses auth.Session) {
 	full, codes, err := s.Auth.ConfirmTOTP(r.Context(), s.clientAddr(r), token(r), r.PostFormValue("code"))
-	if err != nil {
+	switch {
+	case errors.Is(err, auth.ErrHasTOTP):
+		http.Redirect(w, r, "/signin/code", http.StatusSeeOther)
+		return
+	case errors.Is(err, auth.ErrNoSuchSecret):
+		http.Redirect(w, r, "/signin/totp", http.StatusSeeOther)
+		return
+	case errors.Is(err, auth.ErrCode):
+		s.showTOTP(w, r, http.StatusUnauthorized, "error.code")
+		return
+	case errors.Is(err, auth.ErrLocked):
+		// No recovery codes exist yet while the second factor is set up.
+		s.fail(w, r, http.StatusForbidden, "error.lockedsetup")
+		return
+	case err != nil:
 		status, key := authError(err)
 		if key == "" {
 			s.internal(w, r, err)
 			return
 		}
-		// A new secret is offered on the next visit; this one stays pending until then.
-		s.render(w, r, status, "error", nil, Page{Error: key, Notice: "totp.again"})
+		s.fail(w, r, status, key)
 		return
 	}
 	s.setCookie(w, full, auth.SessionMax)
@@ -541,20 +603,20 @@ func (s *Server) company(w http.ResponseWriter, r *http.Request, ses auth.Sessio
 	}
 	who := store.Who{Account: ses.AccountID}
 	p := CompanyPage{Company: c, Members: members}
-	head, err := audit.Verify(r.Context(), s.Store, who, audit.CompanyChain(c.ID), nil)
+	head, recs, err := audit.Check(r.Context(), s.Store, who, audit.CompanyChain(c.ID), nil)
 	switch {
 	case errors.Is(err, audit.ErrBroken):
 		p.Broken = err.Error()
+		// Show what is stored, unchecked, so the break can be seen.
+		if recs, err = audit.ReadUnchecked(r.Context(), s.Store, who, audit.CompanyChain(c.ID)); err != nil {
+			s.internal(w, r, err)
+			return
+		}
 	case err != nil:
 		s.internal(w, r, err)
 		return
 	default:
 		p.Head = fmt.Sprintf("%d:%x", head.Seq, head.Hash)
-	}
-	recs, err := audit.Read(r.Context(), s.Store, who, audit.CompanyChain(c.ID))
-	if err != nil && !errors.Is(err, audit.ErrBroken) {
-		s.internal(w, r, err)
-		return
 	}
 	p.Total = len(recs)
 	for i := len(recs) - 1; i >= 0 && len(p.Entries) < 100; i-- {
@@ -573,7 +635,8 @@ func (s *Server) auditExport(w http.ResponseWriter, r *http.Request, ses auth.Se
 		s.fail(w, r, http.StatusNotFound, "error.notfound")
 		return
 	}
-	recs, err := audit.Read(r.Context(), s.Store, store.Who{Account: ses.AccountID}, audit.CompanyChain(c.ID))
+	// The entries as stored, with their stored hashes: a broken chain is exported too, which is when it is needed.
+	recs, err := audit.ReadUnchecked(r.Context(), s.Store, store.Who{Account: ses.AccountID}, audit.CompanyChain(c.ID))
 	if err != nil {
 		s.internal(w, r, err)
 		return
@@ -616,7 +679,7 @@ func (s *Server) adminPage(w http.ResponseWriter, r *http.Request, ses auth.Sess
 	}
 	var recs []audit.Record
 	if err == nil {
-		recs, err = audit.Read(r.Context(), s.Store, store.Who{Account: ses.AccountID}, audit.ServerChain)
+		recs, err = audit.ReadUnchecked(r.Context(), s.Store, store.Who{Account: ses.AccountID}, audit.ServerChain)
 	}
 	if err != nil {
 		s.internal(w, r, err)
@@ -644,6 +707,8 @@ func accountsError(err error) (int, string) {
 		return http.StatusBadRequest, "error.badinput"
 	case errors.Is(err, accounts.ErrNotOwner):
 		return http.StatusForbidden, "error.forbidden"
+	case errors.Is(err, accounts.ErrNotPending):
+		return http.StatusConflict, "error.notpending"
 	}
 	return http.StatusInternalServerError, ""
 }
@@ -670,18 +735,32 @@ func (s *Server) newCompany(w http.ResponseWriter, r *http.Request, ses auth.Ses
 func (s *Server) invite(w http.ResponseWriter, r *http.Request, ses auth.Session) {
 	email := r.PostFormValue("email")
 	_, tok, err := accounts.Invite(r.Context(), s.Store, accounts.Actor{AccountID: ses.AccountID}, email,
-		strings.TrimSpace(r.PostFormValue("name")))
+		strings.TrimSpace(r.PostFormValue("name")), s.Auth.Now())
 	if err != nil {
 		s.afterAdmin(w, r, ses, err)
 		return
 	}
+	s.showLink(w, r, ses, auth.NormalizeEmail(email), tok)
+}
+
+// showLink shows a setup link once, in this response; only the token's hash is kept. A lost one is replaced
+// with "New link".
+func (s *Server) showLink(w http.ResponseWriter, r *http.Request, ses auth.Session, email, tok string) {
 	base := s.PublicURL
 	if base == "" {
 		base = "https://" + r.Host
 	}
-	// Shown once, in this response; only the token's hash is kept.
-	s.adminPage(w, r, ses, http.StatusOK, Page{Data: AdminPage{Link: base + "/setup/" + tok,
-		LinkFor: auth.NormalizeEmail(email)}})
+	s.adminPage(w, r, ses, http.StatusOK, Page{Data: AdminPage{Link: base + "/setup/" + tok, LinkFor: email}})
+}
+
+func (s *Server) newLink(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	email, tok, err := accounts.NewLink(r.Context(), s.Store, accounts.Actor{AccountID: ses.AccountID},
+		r.PostFormValue("account"), s.Auth.Now())
+	if err != nil {
+		s.afterAdmin(w, r, ses, err)
+		return
+	}
+	s.showLink(w, r, ses, email, tok)
 }
 
 func (s *Server) member(w http.ResponseWriter, r *http.Request, ses auth.Session) {

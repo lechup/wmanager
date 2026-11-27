@@ -42,7 +42,20 @@ type env struct {
 	clock *clock
 	owner string
 	panel *Server
+	logs  *safeBuffer
 }
+
+type safeBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+func (b *safeBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.b.String() }
 
 func (b *browser) cookie() string {
 	u, _ := url.Parse(b.e.srv.URL)
@@ -65,13 +78,19 @@ func setup(t *testing.T) *env {
 	a := auth.New(s)
 	a.Now = c.now
 	a.Log = slog.New(slog.DiscardHandler)
-	panel, err := New(s, a, slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelError})))
+	logs := &safeBuffer{}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	})
+	panel, err := New(s, a, slog.New(slog.NewTextHandler(logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewTLSServer(panel.Handler())
 	t.Cleanup(srv.Close)
-	return &env{t: t, srv: srv, clock: c, owner: owner, panel: panel}
+	return &env{t: t, srv: srv, clock: c, owner: owner, panel: panel, logs: logs}
 }
 
 // browser is one person's browser: its own cookies.
@@ -194,11 +213,12 @@ func TestHeadersAndSignIn(t *testing.T) {
 	}
 	resp.Body.Close()
 	for h, want := range map[string]string{
-		"Content-Security-Policy": "default-src 'none'",
-		"X-Frame-Options":         "DENY",
-		"X-Content-Type-Options":  "nosniff",
-		"Referrer-Policy":         "no-referrer",
-		"Cache-Control":           "no-store",
+		"Content-Security-Policy":   "default-src 'none'",
+		"X-Frame-Options":           "DENY",
+		"X-Content-Type-Options":    "nosniff",
+		"Referrer-Policy":           "no-referrer",
+		"Cache-Control":             "no-store",
+		"Strict-Transport-Security": "max-age=31536000",
 	} {
 		if got := resp.Header.Get(h); !strings.Contains(got, want) {
 			t.Errorf("%s: %q", h, got)
@@ -208,24 +228,68 @@ func TestHeadersAndSignIn(t *testing.T) {
 		!strings.Contains(body, "Wrong e-mail address or password.") {
 		t.Fatalf("a wrong password: %d", code)
 	}
-	b.enroll("owner@example.com")
-	u, _ := url.Parse(e.srv.URL)
-	for _, c := range b.c.Jar.Cookies(u) {
-		if c.Name == CookieName {
-			goto found
+	// The session cookie's attributes, as sent.
+	noFollow := &http.Client{Transport: b.c.Transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	form := url.Values{"email": {"owner@example.com"}, "password": {pw}}
+	resp, err = noFollow.PostForm(e.srv.URL+"/signin", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	sc := resp.Header.Get("Set-Cookie")
+	for _, want := range []string{CookieName + "=", "Path=/", "HttpOnly", "Secure", "SameSite=Strict"} {
+		if !strings.Contains(sc, want) {
+			t.Errorf("Set-Cookie %q lacks %s", sc, want)
 		}
 	}
-	t.Fatal("no session cookie")
-found:
+	if strings.Contains(sc, "Domain=") {
+		t.Errorf("Set-Cookie %q has a Domain", sc)
+	}
+
+	secret := b.enroll("owner@example.com")
 	if code, body := b.get("/"); code != http.StatusOK || !strings.Contains(body, "belong to any company yet.") {
 		t.Fatalf("home: %d", code)
 	}
-	// A second sign-in, later, with a code from the app.
 	if code, _ := b.post("/signout", nil); code != http.StatusOK {
 		t.Fatalf("sign out: %d", code)
 	}
 	if code, _ := b.get("/"); code != http.StatusOK || !strings.Contains(b.last, `action="/signin"`) {
 		t.Fatal("not sent to the sign-in after signing out")
+	}
+	// A second sign-in, later, with a code from the app.
+	e.clock.add(time.Minute)
+	if code, body := b.post("/signin", url.Values{"email": {"owner@example.com"}, "password": {pw}}); code != http.StatusOK ||
+		!strings.Contains(body, `action="/signin/code"`) {
+		t.Fatalf("the password at a second sign-in: %d", code)
+	}
+	if code, _ := b.post("/signin/code", url.Values{"code": {"000000"}}); code != http.StatusUnauthorized {
+		t.Fatalf("a wrong code: %d", code)
+	}
+	b.get("/signin/code")
+	if code, body := b.post("/signin/code", url.Values{"code": {totpNow(t, secret, e.clock.now())}}); code != http.StatusOK ||
+		!strings.Contains(body, "belong to any company yet.") {
+		t.Fatalf("the code at a second sign-in: %d", code)
+	}
+}
+
+func TestWrongFirstCodeKeepsTheSecret(t *testing.T) {
+	e := setup(t)
+	b := e.browser()
+	b.post("/signin", url.Values{"email": {"owner@example.com"}, "password": {pw}})
+	first := secretRe.FindStringSubmatch(b.last)[1]
+	b.get("/signin/totp") // a reload
+	if again := secretRe.FindStringSubmatch(b.last)[1]; again != first {
+		t.Fatal("a reload offered another secret")
+	}
+	if code, body := b.post("/signin/totp", url.Values{"code": {"000000"}}); code != http.StatusUnauthorized ||
+		secretRe.FindStringSubmatch(body)[1] != first || strings.Contains(body, "<footer>") {
+		t.Fatalf("a wrong first code: %d, or another secret, or language links on the page", code)
+	}
+	b.confirmTOTP()
+	if strings.Contains(b.last, "<footer>") {
+		t.Fatal("language links on the page of the recovery codes")
 	}
 }
 
@@ -250,6 +314,14 @@ func TestInviteAndCompanies(t *testing.T) {
 	}
 	link := invite("anna@example.com")
 	outsiderLink := invite("bob@example.com")
+	if code, body := owner.post("/admin/invite", url.Values{"email": {"eve@example.com"}, "name": {"<script>alert(1)</script>"}}); code != http.StatusOK ||
+		strings.Contains(body, "<script>alert") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("a name with markup: %d, not escaped", code)
+	}
+	// Before using the link, the account has no password: signing in fails like a wrong one.
+	if code, _ := e.browser().post("/signin", url.Values{"email": {"anna@example.com"}, "password": {pw}}); code != http.StatusUnauthorized {
+		t.Fatalf("signing in before the setup: %d", code)
+	}
 	owner.get("/admin")
 	acme, anna := owner.idOf("Acme"), owner.idOf("anna@example.com")
 	if code, _ := owner.post("/admin/member", url.Values{"company": {acme}, "account": {anna}, "role": {"admin"}}); code != http.StatusOK {
@@ -276,7 +348,13 @@ func TestInviteAndCompanies(t *testing.T) {
 	}
 	a.confirmTOTP()
 	if code, _ := e.browser().get("/setup/" + link); code != http.StatusNotFound {
+		t.Fatalf("the link opened a second time: %d", code)
+	}
+	if code, _ := e.browser().post("/setup/"+link, url.Values{"password": {pw}, "again": {pw}}); code != http.StatusNotFound {
 		t.Fatalf("the link used a second time: %d", code)
+	}
+	if strings.Contains(e.logs.String(), link) {
+		t.Fatal("a setup token in the server's log")
 	}
 	if code, body := a.get("/"); code != http.StatusOK || !strings.Contains(body, "/c/"+acme) {
 		t.Fatalf("Anna's home: %d\n%s", code, body)
@@ -326,6 +404,7 @@ func TestFormsNeedTheirToken(t *testing.T) {
 		"from another site": {url.Values{"name": {"X"}}, []string{"Sec-Fetch-Site", "cross-site"}},
 		"another origin":    {url.Values{"name": {"X"}}, []string{"Origin", "https://evil.example"}},
 	} {
+		b.get("/admin") // a page with the token, so a case without one leaves it out on purpose
 		if code, _ := b.post("/admin/company", c.form, c.header...); code != http.StatusForbidden {
 			t.Errorf("%s: %d", name, code)
 		}
@@ -409,24 +488,10 @@ func TestCatalogs(t *testing.T) {
 	}
 	for _, k := range []string{"role.admin", "role.person", "error.signin", "error.code", "error.locked", "error.toomany",
 		"error.setup", "error.weak", "error.session", "error.notfound", "error.forbidden", "error.internal",
-		"error.exists", "error.badinput", "password.mismatch", "totp.again"} {
+		"error.exists", "error.badinput", "error.lockedsetup", "error.notpending", "password.mismatch"} {
 		if _, ok := en[k]; !ok {
 			t.Errorf("%s, used by the code, has no message", k)
 		}
-	}
-}
-
-func TestClientAddr(t *testing.T) {
-	s := &Server{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.RemoteAddr = "10.1.2.3:4444"
-	r.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.7")
-	if got := s.clientAddr(r); got != "198.51.100.7" {
-		t.Errorf("behind a trusted proxy: %s", got)
-	}
-	r.RemoteAddr = "192.0.2.1:4444"
-	if got := s.clientAddr(r); got != "192.0.2.1" {
-		t.Errorf("an untrusted peer's X-Forwarded-For was believed: %s", got)
 	}
 }
 
@@ -436,4 +501,69 @@ type testWriter struct{ t *testing.T }
 func (w testWriter) Write(p []byte) (int, error) {
 	w.t.Log(strings.TrimSpace(string(p)))
 	return len(p), nil
+}
+
+func TestExpiredLinkAndNewLink(t *testing.T) {
+	e := setup(t)
+	owner := e.browser()
+	secret := owner.enroll("owner@example.com")
+	owner.get("/admin") // the page of the recovery codes has no form, so no token
+	_, body := owner.post("/admin/invite", url.Values{"email": {"carl@example.com"}})
+	old := linkRe.FindStringSubmatch(body)[1]
+	if !strings.Contains(body, "link works until") {
+		t.Fatal("the link's expiry isn't shown")
+	}
+	e.clock.add(auth.SetupLinkValid + time.Hour)
+	if code, _ := e.browser().get("/setup/" + old); code != http.StatusNotFound {
+		t.Fatalf("an expired link: %d", code)
+	}
+	// The owner's session ended meanwhile (idle): sign in again, with a code from the app.
+	owner.post("/signin", url.Values{"email": {"owner@example.com"}, "password": {pw}})
+	if code, _ := owner.post("/signin/code", url.Values{"code": {totpNow(t, secret, e.clock.now())}}); code != http.StatusOK {
+		t.Fatalf("signing in again: %d", code)
+	}
+	owner.get("/admin")
+	code, body := owner.post("/admin/link", url.Values{"account": {owner.idOf("carl@example.com")}})
+	m := linkRe.FindStringSubmatch(body)
+	if code != http.StatusOK || m == nil || m[1] == old {
+		t.Fatalf("a new link: %d", code)
+	}
+	if code, _ := e.browser().get("/setup/" + m[1]); code != http.StatusOK {
+		t.Fatalf("the new link: %d", code)
+	}
+	owner.get("/admin")
+	if code, _ := owner.post("/admin/link", url.Values{"account": {owner.idOf("owner@example.com")}}); code != http.StatusConflict {
+		t.Fatalf("a new link for an account set up already: %d", code)
+	}
+}
+
+func TestClientAddrWalksProxies(t *testing.T) {
+	s := &Server{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("2001:db8::1/128")}}
+	cases := []struct {
+		peer string
+		xff  []string
+		want string
+	}{
+		{"10.1.2.3:1", []string{"203.0.113.9, 198.51.100.7"}, "198.51.100.7"},
+		{"10.1.2.3:1", []string{"6.6.6.6", "198.51.100.7"}, "198.51.100.7"}, // a second header line is read too
+		{"10.1.2.3:1", []string{"198.51.100.7, 10.9.9.9"}, "198.51.100.7"},  // past a second trusted proxy
+		{"10.1.2.3:1", []string{"198.51.100.7, not-an-ip"}, "10.1.2.3"},     // a bad entry stops at the proxy
+		{"10.1.2.3:1", nil, "10.1.2.3"},
+		{"192.0.2.1:1", []string{"198.51.100.7"}, "192.0.2.1"}, // not a trusted peer: its header is ignored
+		{"[2001:db8::1]:1", []string{"2001:db8:5::9"}, "2001:db8:5::9"},
+		{"[::ffff:10.1.2.3]:1", []string{"198.51.100.7"}, "198.51.100.7"},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = c.peer
+		for _, v := range c.xff {
+			r.Header.Add("X-Forwarded-For", v)
+		}
+		if got := s.clientAddr(r); got != c.want {
+			t.Errorf("%s %q: %s, want %s", c.peer, c.xff, got, c.want)
+		}
+	}
+	if redact("//setup/secret-token") != "//setup/…" || redact("/setup/x") != "/setup/…" {
+		t.Error("redact")
+	}
 }

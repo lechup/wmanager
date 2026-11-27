@@ -239,8 +239,8 @@ func Unlock(ctx context.Context, s *store.Store, by Actor, email string) error {
 
 // Invite makes an account without a password and returns a one-time link token for it, valid for
 // auth.SetupLinkValid: its person sets the password and second factor, and the owner never knows them. Only the
-// owner of the server invites.
-func Invite(ctx context.Context, s *store.Store, by Actor, email, name string) (id, token string, err error) {
+// owner of the server invites. now is the clock that the sign-in checks the link with.
+func Invite(ctx context.Context, s *store.Store, by Actor, email, name string, now time.Time) (id, token string, err error) {
 	email = auth.NormalizeEmail(email)
 	if err := checkEmail(email); err != nil {
 		return "", "", err
@@ -259,7 +259,7 @@ func Invite(ctx context.Context, s *store.Store, by Actor, email, name string) (
 		if err != nil {
 			return err
 		}
-		if token, err = auth.CreateSetupLink(ctx, tx, id, time.Now()); err != nil {
+		if token, err = auth.CreateSetupLink(ctx, tx, id, now); err != nil {
 			return err
 		}
 		_, err = audit.Append(ctx, tx, audit.ServerChain, "", by.String(), "account.invite",
@@ -273,8 +273,9 @@ func Invite(ctx context.Context, s *store.Store, by Actor, email, name string) (
 type AccountInfo struct {
 	ID, Email, Name          string
 	Owner, Disabled, HasTOTP bool
-	Pending                  bool // the setup link hasn't been used yet
-	LockedUntil              *time.Time
+	Pending                  bool       // no password yet: the setup link hasn't been used
+	LinkExpires              *time.Time // when its setup link stops working, if it has one
+	Locked                   bool       // locked now after wrong codes
 }
 
 // List returns every account, for the owner of the server.
@@ -285,14 +286,17 @@ func List(ctx context.Context, s *store.Store, by Actor) ([]AccountInfo, error) 
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT id, email, name, is_owner, disabled, totp_secret IS NOT NULL,
-		                                   password_hash IS NULL, locked_until
-		                            FROM accounts ORDER BY email`)
+		                                   password_hash IS NULL,
+		                                   (SELECT max(expires_at) FROM setup_links l WHERE l.account_id = a.id),
+		                                   coalesce(locked_until > now(), false)
+		                            FROM accounts a ORDER BY email`)
 		if err != nil {
 			return err
 		}
 		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (AccountInfo, error) {
 			var a AccountInfo
-			return a, r.Scan(&a.ID, &a.Email, &a.Name, &a.Owner, &a.Disabled, &a.HasTOTP, &a.Pending, &a.LockedUntil)
+			return a, r.Scan(&a.ID, &a.Email, &a.Name, &a.Owner, &a.Disabled, &a.HasTOTP, &a.Pending, &a.LinkExpires,
+				&a.Locked)
 		})
 		return err
 	})
@@ -366,4 +370,39 @@ func isUUID(s string) bool {
 		}
 	}
 	return true
+}
+
+// ErrNotPending means the account has set its password already, so a setup link would do nothing.
+var ErrNotPending = errors.New("accounts: the account is set up already")
+
+// NewLink makes a new one-time setup link for an account that hasn't used its link yet (lost or expired),
+// replacing the old one. Only the owner of the server does it.
+func NewLink(ctx context.Context, s *store.Store, by Actor, accountID string, now time.Time) (email, token string, err error) {
+	if !isUUID(accountID) {
+		return "", "", ErrNoAccount
+	}
+	err = s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		if err := isOwner(ctx, tx, by); err != nil {
+			return err
+		}
+		var pending bool
+		err := tx.QueryRow(ctx, `SELECT email, password_hash IS NULL FROM accounts WHERE id = $1 FOR UPDATE`, accountID).
+			Scan(&email, &pending)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoAccount
+		}
+		if err != nil {
+			return err
+		}
+		if !pending {
+			return ErrNotPending
+		}
+		if token, err = auth.CreateSetupLink(ctx, tx, accountID, now); err != nil {
+			return err
+		}
+		_, err = audit.Append(ctx, tx, audit.ServerChain, "", by.String(), "account.newlink",
+			map[string]any{"account": accountID, "email": email})
+		return err
+	})
+	return email, token, err
 }

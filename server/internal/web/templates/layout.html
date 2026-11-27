@@ -26,9 +26,9 @@
 {{if .Error}}<p class="error" role="alert">{{t .Error}}</p>{{end}}
 {{block "content" .}}{{end}}
 </main>
-<footer>
+{{if not .NoLang}}<footer>
   {{t "lang.choose"}}:
   {{range .Langs}}<a href="{{$.Path}}?lang={{.}}"{{if eq . $.Lang}} aria-current="true"{{end}}>{{.}}</a> {{end}}
-</footer>
+</footer>{{end}}
 </body>
 </html>

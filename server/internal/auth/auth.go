@@ -498,8 +498,8 @@ func (s *Service) makeFull(ctx context.Context, tx pgx.Tx, token string, a *acco
 	return full, err
 }
 
-// BeginTOTP offers a new TOTP secret to an account that has none, at the password step. It returns the
-// otpauth:// address for the QR code.
+// BeginTOTP offers a TOTP secret to an account that has none, at the password step: a new one, or the one this
+// session was offered already. It returns the otpauth:// address for the QR code.
 //
 // Until an account sets up its second factor, its password alone gets this far: give a new account's password
 // only to its person, who signs in at once (one-time links to set up an account come with the panel, stage 1b).
@@ -507,7 +507,7 @@ func (s *Service) BeginTOTP(ctx context.Context, token string) (string, error) {
 	var url string
 	var answer error
 	err := s.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
-		_, a, ans, err := s.atPasswordStep(ctx, tx, token, false)
+		r, a, ans, err := s.atPasswordStep(ctx, tx, token, false)
 		if err != nil || ans != nil {
 			answer = ans
 			return err
@@ -516,10 +516,15 @@ func (s *Service) BeginTOTP(ctx context.Context, token string) (string, error) {
 			answer = ErrHasTOTP
 			return nil
 		}
-		secret := newTOTPSecret()
-		if _, err := tx.Exec(ctx, `UPDATE sessions SET pending_totp = $2 WHERE token_hash = $1`,
-			tokenHash(token), secret); err != nil {
-			return err
+		// The secret offered already stays, so reloading the page or a wrong first code doesn't make the entry
+		// scanned into the app useless.
+		secret := r.pending
+		if secret == nil {
+			secret = newTOTPSecret()
+			if _, err := tx.Exec(ctx, `UPDATE sessions SET pending_totp = $2 WHERE token_hash = $1`,
+				tokenHash(token), secret); err != nil {
+				return err
+			}
 		}
 		url = TOTPURL(secret, a.email)
 		return nil
