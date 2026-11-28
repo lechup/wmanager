@@ -178,8 +178,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - enrollment with a token, the fingerprint typed at the computer, and the first 8 characters of the id shown;
   - long polling and the time of last contact, with Grafana's panel of computers that are off and its alert, read
     from PostgreSQL.
-- **3b, the installer:** first, trial 2 again on Windows with the tag's 2.25 OID (Windows' CryptoAPI and a
-  128-bit arc); then the installer from the panel, tagged with the company's whole admin chain,
+- **3b, the installer:** the installer from the panel, tagged with the company's whole admin chain (the tag's 2.25
+  OID checked on Windows, trial 2),
   `wmanager-sign check-installer`, and the list of computers.
 
 ### Stage 4: the company's state
