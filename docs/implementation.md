@@ -15,7 +15,7 @@ designed when its turn comes, so its details are decided with what the releases 
 | v1.2 | 14, 27, 29, 30 | security: the compliance report, BitLocker with key escrow, security events, a lost laptop |
 | v1.3 | 20, 21, 22, 26, 31, 35, 36 | larger companies: SSO, the SIEM export, the API and webhooks, retention, joining and leaving, hardware records, reports for billing |
 | v1.4 | 16, 17, 33, 38 | the network: discovery, Wake-on-LAN, drivers and BIOS, network devices |
-| v2 | 23, 42 | remote support (our fork of RustDesk) and computers with Linux |
+| v2 | 23, 42, 43 | remote support (our fork of RustDesk), remote work of employees on the same parts, and computers with Linux |
 
 Remote support waits for v2 because it is the largest part: a fork in Rust and Flutter, kept up with RustDesk's
 releases for good.
