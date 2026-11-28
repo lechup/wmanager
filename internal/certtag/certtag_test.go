@@ -30,11 +30,16 @@ func cert(t testing.TB, cn string, serial int64) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// As a real chain's certificates are: with critical extensions (Go marks key usage and basic constraints so).
 	tmpl := x509.Certificate{
-		SerialNumber: big.NewInt(serial),
-		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
+		SerialNumber:          big.NewInt(serial),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+		BasicConstraintsValid: true,
+		IsCA:                  cn == "root",
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -333,5 +338,13 @@ func TestTagCertificate(t *testing.T) {
 	}
 	if _, _, err := tagExtension(der[:len(der)-1]); err == nil {
 		t.Fatal("a cut certificate")
+	}
+	// The tag extension marked critical is refused as such.
+	crit, err := buildTagCertificate([]byte("the chain"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tagExtension(crit); err == nil || !strings.Contains(err.Error(), "critical") {
+		t.Fatalf("a critical tag: %v", err)
 	}
 }

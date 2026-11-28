@@ -175,10 +175,10 @@ func tagExtension(der []byte) ([]byte, bool, error) {
 	found := false
 	for !list.Empty() {
 		var ext, oid, val cryptobyte.String
-		var critical bool
+		critical := false // DEFAULT FALSE: a plain BOOLEAN, when there is one
 		if !list.ReadASN1(&ext, cbasn1.SEQUENCE) || !ext.ReadASN1(&oid, cbasn1.OBJECT_IDENTIFIER) ||
-			!ext.ReadOptionalASN1Boolean(&critical, cbasn1.BOOLEAN, false) || !ext.ReadASN1(&val, cbasn1.OCTET_STRING) ||
-			!ext.Empty() {
+			(ext.PeekASN1Tag(cbasn1.BOOLEAN) && !ext.ReadASN1Boolean(&critical)) ||
+			!ext.ReadASN1(&val, cbasn1.OCTET_STRING) || !ext.Empty() {
 			return nil, false, errCert
 		}
 		if !bytes.Equal(oid, oidDER) {
@@ -220,7 +220,10 @@ func addSHA256RSA(b *cryptobyte.Builder) {
 
 // tagCertificate makes the extra certificate, written by hand for its OID. It is expired and its issuer doesn't
 // exist, so it can't be used for anything; Windows doesn't look at it when it checks the signature.
-func tagCertificate(tag []byte) ([]byte, error) {
+func tagCertificate(tag []byte) ([]byte, error) { return buildTagCertificate(tag, false) }
+
+// buildTagCertificate is tagCertificate, with the extension marked critical for a test of its refusal.
+func buildTagCertificate(tag []byte, critical bool) ([]byte, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
@@ -245,6 +248,9 @@ func tagCertificate(tag []byte) ([]byte, error) {
 			b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
 				b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
 					b.AddASN1(cbasn1.OBJECT_IDENTIFIER, func(b *cryptobyte.Builder) { b.AddBytes(oidDER) })
+					if critical {
+						b.AddASN1Boolean(true)
+					}
 					b.AddASN1OctetString(tag)
 				})
 			})
