@@ -315,8 +315,8 @@ Requirement 24. A company's administrators can do everything in it. Anyone else 
 | single jobs | scripts, signed with the person's own key, with only the secrets the state grants that person; that is as much as full control of those computers, including the secrets kept on them | the computer |
 
 - **Only an administrator gives rights**, and a person can't pass them on. Rights that the computer checks are part
-  of the signed state: each person with the public keys of their signing keys, their units, their rights and the
-  secrets their jobs may use, given in `wmanager-sign` like any change of the state. Rights that only the server
+  of the signed state: each person with the public keys of their signing keys (and, for remote work, of their remote
+  work keys or viewers), their units, their rights and the secrets their jobs may use, given in `wmanager-sign` like any change of the state. Rights that only the server
   checks are set in the panel.
 - **The agent's check:** a `job` or `session` signed by a person's key is accepted only when the person has that right
   and every computer it targets is in their units, with the groups taken from the verified state. A person's job
@@ -350,7 +350,7 @@ It **can't**, on an enrolled computer:
 - run a single job twice, after its expiry, or on a computer it doesn't target;
 - stop a job that is running, or make a computer go back to an older agent or state;
 - open a [remote session](#remote-support) or a [remote work](#remote-work) session, or see or take part in one,
-  while the viewer is sound (see below);
+  while the viewer, and for remote work the device it runs on, are sound (see below);
 - move the computers to another server (the address is part of the signed state).
 
 What remains:
@@ -561,8 +561,9 @@ an administrator works from elsewhere on a computer given to them, as if sitting
   id. Not the browser: the panel's pages and scripts come from the server, so a hacked server could watch a session
   in a browser, type into it as the person and take the Windows password typed there.
 - **The viewer is set up once** on the device the person works from:
-  - it makes a key of its own there (in the device's TPM where there is one), and an administrator adds the key to
-    the state with the right, after typing its fingerprint, as with signing keys;
+  - for a TOTP code, it makes a key of its own there (in the device's TPM where there is one), and an administrator
+    adds the key to the state with the right, after typing its fingerprint, as with signing keys. With a remote work
+    key the person's key is enough;
   - the person types the company's fingerprint into it, all 32 characters, read off the computer's screen when
     remote work is set up there, or given by an administrator in person or by phone; never from a link, the panel or
     the server. The viewer then keeps the chain and the newest state it verified, like `wmanager-sign`.
@@ -572,12 +573,13 @@ an administrator works from elsewhere on a computer given to them, as if sitting
     the state with the right, after an administrator typed its fingerprint; a key is a signing key or a remote work
     key, never both. The viewer shows "Connect to OFFICE-03 as anna?", and the key signs the computer's challenge
     for this connection together with the key the viewer made for the session;
-  - **a TOTP code set up at that computer, together with the viewer's key:** the viewer signs the computer's
-    challenge with its own key and sends the code end to end encrypted. So a code counts only from the viewer the
+  - **a TOTP code set up at that computer, together with the viewer's key:** the viewer's key signs the computer's
+    challenge for this connection together with the key the viewer made for the session, and the viewer sends the
+    code end to end encrypted to that key, so a relay can't put a key of its own in between. So a code counts only from the viewer the
     state names: a hacked server that gets a code from a fake page still can't connect with it. The person sets the
     code up at the computer itself, signed in to their own account at the console, with no remote support, remote
-    work or Remote Desktop session open, and only while the state allows a setup (an administrator allows one, or a
-    reset, for a day). They open "Set up remote work" and scan the QR code shown there with an authenticator app.
+    work or Remote Desktop session open, and only while the state allows a setup: an administrator allows one setup,
+    or one reset, until a time the state names. They open "Set up remote work" and scan the QR code shown there with an authenticator app.
     The secret is then in that app and on that computer, sealed by its TPM and readable by the agent only; the server
     never has it. The computer takes each code once, and after 5 wrong codes it blocks that person's remote work,
     for longer each time.
@@ -588,17 +590,25 @@ an administrator works from elsewhere on a computer given to them, as if sitting
   computer's key against the computer's id in its verified state. So a code, a password or a touch reaches only that
   computer.
 - **Only the person's own account, without administrator rights:**
-  - the computer joins only a session of the account the state names, and refuses while another account is signed
-    in at the computer. Before the sign-in, the session shows only Windows' own sign-in screen, where the person types
+  - the computer joins only a session of the account the state names, and refuses while any other account is
+    signed in at the computer (the named account's own session, signed in or locked, is to design). Before the sign-in, the session shows only Windows' own sign-in screen, where the person types
     that account's password; it is kept nowhere and the server never sees it;
   - it checks the token of that session and of every new sign-in in it: the account must not be in the local
     Administrators group, directly or through another group. Adding it to the group during the session ends the
     session;
-  - a sign-in of any other account inside the session ends it and locks Windows: "Other user" or "Switch user", and
-    explicit credentials such as "Run as" (events 4624 and 4648);
-  - during remote work the elevation requests of standard users are refused without a prompt (UAC's
-    `ConsentPromptBehaviorUser` 0, with `EnableLUA` and `PromptOnSecureDesktop` on), and the Secondary Logon service
-    ("Run as different user") is stopped. A UAC prompt is never sent.
+  - a sign-in of any other account inside the session ends it, signs that account out and locks Windows: "Other
+    user" or "Switch user", or a program started with another account's credentials. These events (4624, 4648) come
+    after the sign-in, so the rules below keep such programs from starting at all; the agent turns on the audit
+    policy that records them, and counts only those of the session, not e.g. a network drive the person maps with
+    other credentials;
+  - during remote work the Secondary Logon service ("Run as different user") is disabled, not only stopped, since
+    "Run as" would start it again, and set back afterwards. While it is, a job of that computer that uses other
+    credentials fails;
+  - elevation requests of standard users are refused without a prompt (UAC's `ConsentPromptBehaviorUser` 0, with
+    `PromptOnSecureDesktop` on). `EnableLUA` takes effect only after a restart, so remote work is refused while it is
+    off. The agent sets the other two before a connection, also after a restart, watches all three, and ends the
+    session if one changes (e.g. at a refresh of Group Policy): otherwise a prompt could appear on the computer's own
+    screen. A UAC prompt is never sent.
 - **A black screen at the computer** for the whole session, with "Remote work: Anna, since 9:00", and its keyboard
   and mouse blocked. Ctrl+Alt+Del at the computer, which Windows always lets through, is the way out: it ends the
   remote work and locks the Windows session, so nobody at the computer types blind into it.
@@ -613,7 +623,9 @@ the viewer and the device it runs on are sound (see
 To design:
 
 - the computer's challenge and what each key signs;
-- an account already signed in at the computer, and the Windows Hello PIN on the sign-in screen;
+- the named account's own session, already signed in or locked at the computer, and the Windows Hello PIN on the
+  sign-in screen;
+- the black screen while Windows' sign-in screen is showing, which RustDesk's privacy mode may not cover;
 - replacing a lost key, viewer or TOTP;
 - a computer that sleeps (Wake-on-LAN is requirement 17);
 - sound and several screens.
