@@ -126,6 +126,15 @@ func (a *App) status(ctx context.Context) error {
 				}
 			}
 			a.say("status.state", serial, waiting)
+			head, n, err := a.checkAudit(ctx, s, c, held, ch)
+			switch {
+			case errors.Is(err, ErrAuditBroken):
+				alarm = cmp.Or(alarm, err)
+			case err != nil:
+				a.say("status.error", show.Visible(held.Name), err.Error())
+			case head.Seq > 0:
+				a.say("status.audit", headString(head), n)
+			}
 		case c.Fingerprint == "":
 			a.say("status.nochain", name, role)
 		default:

@@ -363,3 +363,10 @@ func SecretHashes(ctx context.Context, s *store.Store, accountID, companyID stri
 	})
 	return out, err
 }
+
+// Member checks that the account is one of the company's members.
+func Member(ctx context.Context, s *store.Store, accountID, companyID string) error {
+	return s.Tx(ctx, store.Who{Account: accountID}, func(tx pgx.Tx) error {
+		return member(ctx, tx, accountID, companyID, false)
+	})
+}

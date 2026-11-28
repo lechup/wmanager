@@ -331,3 +331,38 @@ func (c *Client) SecretHashes(ctx context.Context, company string) ([]SecretHash
 	err := c.do(ctx, http.MethodGet, companyPath(company, "secrets"), nil, &r)
 	return r.Secrets, err
 }
+
+// SubmitJob gives the server a signed job, with the draft it was signed from (or "").
+func (c *Client) SubmitJob(ctx context.Context, company string, signed verify.Signed, draft string) error {
+	return c.do(ctx, http.MethodPost, companyPath(company, "jobs"), map[string]any{"signed": signed, "draft": draft}, nil)
+}
+
+// SubmitStop gives the server a signed stop, with the draft it was signed from (or "").
+func (c *Client) SubmitStop(ctx context.Context, company string, signed verify.Signed, draft string) error {
+	return c.do(ctx, http.MethodPost, companyPath(company, "stops"), map[string]any{"signed": signed, "draft": draft}, nil)
+}
+
+// Jobs is the company's newest signed jobs, as the server has them.
+func (c *Client) Jobs(ctx context.Context, company string) ([]verify.Signed, error) {
+	var js struct {
+		Jobs []verify.Signed `json:"jobs"`
+	}
+	err := c.do(ctx, http.MethodGet, companyPath(company, "jobs"), nil, &js)
+	return js.Jobs, err
+}
+
+// AuditAfter is the company's audit entries after seq, as the server stores them: wmanager-sign links them itself.
+func (c *Client) AuditAfter(ctx context.Context, company string, seq int64) ([][]byte, error) {
+	var a struct {
+		Entries [][]byte `json:"entries"`
+	}
+	err := c.do(ctx, http.MethodGet, companyPath(company, "audit")+"?after="+strconv.FormatInt(seq, 10), nil, &a)
+	return a.Entries, err
+}
+
+// Job is a signed job of the company by its id, as the server has it: its signature is checked before it is used.
+func (c *Client) Job(ctx context.Context, company, id string) (verify.Signed, error) {
+	var j verify.Signed
+	err := c.do(ctx, http.MethodGet, companyPath(company, "jobs/"+url.PathEscape(id)), nil, &j)
+	return j, err
+}

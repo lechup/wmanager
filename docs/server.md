@@ -46,6 +46,9 @@ party id no web page can claim.
   on behalf of a member. An administrator's `wmanager-sign` may ask which values the server has (their names and
   hashes, not the values or salts), to have a lacking one typed again. It needs `WMANAGER_PUBLIC_URL`: a state
   names the server, and one naming another is refused.
+- **Jobs and stops** are signed the same way. The server keeps a job only with its script, under an id not used
+  before, and a stop only for a job it has, on computers the job names; `wmanager-sign` fetches a job by its id to
+  show it, whole, before stopping it. Computers fetch them from stage 5.
 - **Signing keys** are registered from `wmanager-sign`, each with a proof signed by the key that its holder
   registers it for this account on this server (at most 20 an account; it needs `WMANAGER_PUBLIC_URL`). A key counts only once an administrator adds it to a
   signed admin list, after typing its fingerprint.
@@ -101,7 +104,8 @@ docker compose exec wmanager /usr/local/bin/wmanager-server audit verify company
 
 A head in the kit's Loki is on the same host, so it counts against a database changed by mistake or by someone
 who reached only the database; against a hack of the whole host, only a copy elsewhere counts (a Loki of its own,
-the SIEM export later, and `wmanager-sign`, which will remember the heads it saw).
+the SIEM export later, and [`wmanager-sign`](sign.md#the-audit-log), which remembers the newest entry it saw of
+each company's log and checks that the history still leads to it).
 
 ## Backup and restore
 

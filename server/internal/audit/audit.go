@@ -291,3 +291,23 @@ func cell(v string) string {
 	}
 	return v
 }
+
+// MaxAfter is how many entries After returns at most.
+const MaxAfter = 1000
+
+// After returns a chain's entries after seq, in order, as stored and unchecked, at most MaxAfter: for
+// wmanager-sign, which links them itself from the head it saw last. who decides, through row-level security,
+// which chains can be read.
+func After(ctx context.Context, s *store.Store, who store.Who, chain string, seq int64) ([][]byte, error) {
+	var out [][]byte
+	err := s.Tx(ctx, who, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT entry FROM audit_log WHERE chain = $1 AND seq > $2 ORDER BY seq LIMIT $3`,
+			chain, seq, MaxAfter)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, pgx.RowTo[[]byte])
+		return err
+	})
+	return out, err
+}

@@ -4,6 +4,7 @@
 package signapi
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
@@ -12,10 +13,12 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lechup/wmanager/server/internal/accounts"
+	"github.com/lechup/wmanager/server/internal/audit"
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/chains"
 	"github.com/lechup/wmanager/server/internal/statements"
@@ -31,6 +34,7 @@ const Prefix = "/api/sign/v1/"
 const (
 	MaxBody      = 512 << 10
 	MaxStateBody = 16 << 20
+	MaxJobBody   = 2 << 20 // a job or a stop: 1 MiB at most, in base64
 )
 
 // API is the sign API.
@@ -46,7 +50,11 @@ type API struct {
 
 var errNoPublicURL = errors.New("registering keys and taking states needs WMANAGER_PUBLIC_URL")
 
-const statesRoute = "POST " + Prefix + "companies/{company}/states"
+const (
+	statesRoute = "POST " + Prefix + "companies/{company}/states"
+	jobsRoute   = "POST " + Prefix + "companies/{company}/jobs"
+	stopsRoute  = "POST " + Prefix + "companies/{company}/stops"
+)
 
 // Handler is the API's routes, every answer JSON.
 func (a *API) Handler() http.Handler {
@@ -64,6 +72,11 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/state", a.authed(a.company(a.state)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/secrets", a.authed(a.company(a.secretHashes)))
 	mux.HandleFunc(statesRoute, a.authed(a.company(a.submitState)))
+	mux.HandleFunc(jobsRoute, a.authed(a.company(a.submitJob)))
+	mux.HandleFunc(stopsRoute, a.authed(a.company(a.submitStop)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/jobs", a.authed(a.company(a.jobs)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/jobs/{job}", a.authed(a.company(a.job)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/audit", a.authed(a.company(a.auditAfter)))
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusForbidden, "cross-origin request")
@@ -76,8 +89,11 @@ func (a *API) Handler() http.Handler {
 			return
 		}
 		limit := int64(MaxBody)
-		if pattern == statesRoute {
+		switch pattern {
+		case statesRoute:
 			limit = MaxStateBody
+		case jobsRoute, stopsRoute:
+			limit = MaxJobBody
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		mux.ServeHTTP(w, r)
@@ -119,12 +135,13 @@ func (a *API) failErr(w http.ResponseWriter, r *http.Request, err error) {
 		fail(w, http.StatusConflict, err.Error())
 	case errors.Is(err, statements.ErrBadDraft), errors.Is(err, statements.ErrBadSecret):
 		fail(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, statements.ErrNoFile), errors.Is(err, statements.ErrNoDraft):
+	case errors.Is(err, statements.ErrNoFile), errors.Is(err, statements.ErrNoDraft), errors.Is(err, statements.ErrNoJob):
 		fail(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, statements.ErrTooLarge):
 		fail(w, http.StatusRequestEntityTooLarge, err.Error())
 	case errors.Is(err, statements.ErrNoChain), errors.Is(err, statements.ErrMissing), errors.Is(err, statements.ErrNewer),
-		errors.Is(err, statements.ErrWrongPlace), errors.Is(err, statements.ErrTooMany):
+		errors.Is(err, statements.ErrWrongPlace), errors.Is(err, statements.ErrTooMany), errors.Is(err, statements.ErrJobTaken),
+		errors.Is(err, statements.ErrSame):
 		fail(w, http.StatusConflict, err.Error())
 	case errors.Is(err, chains.ErrBroken):
 		a.Log.Error("sign api: a stored chain doesn't check", "path", r.URL.Path, "err", err)
@@ -412,6 +429,53 @@ func (a *API) submitState(w http.ResponseWriter, r *http.Request, account string
 	}{serial})
 }
 
+// signedIn is what POST jobs and stops take: the statement, and the draft it was signed from.
+type signedIn struct {
+	Signed verify.Signed `json:"signed"`
+	Draft  string        `json:"draft"`
+}
+
+func (a *API) submitOne(w http.ResponseWriter, r *http.Request, account string,
+	submit func(ctx context.Context, s *store.Store, accountID, companyID string, signed verify.Signed, draftID string) error) {
+	var in signedIn
+	if err := readJSON(r, &in); err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if in.Draft != "" && !uuidRe.MatchString(in.Draft) {
+		a.failErr(w, r, statements.ErrNoDraft)
+		return
+	}
+	if err := submit(r.Context(), a.Store, account, r.PathValue("company"), in.Signed, in.Draft); err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, struct{}{})
+}
+
+func (a *API) submitJob(w http.ResponseWriter, r *http.Request, account string) {
+	a.submitOne(w, r, account, statements.SubmitJob)
+}
+
+func (a *API) submitStop(w http.ResponseWriter, r *http.Request, account string) {
+	a.submitOne(w, r, account, statements.SubmitStop)
+}
+
+// jobs is the company's newest signed jobs.
+func (a *API) jobs(w http.ResponseWriter, r *http.Request, account string) {
+	js, err := statements.Jobs(r.Context(), a.Store, account, r.PathValue("company"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if js == nil {
+		js = []verify.Signed{}
+	}
+	out(w, http.StatusOK, struct {
+		Jobs []verify.Signed `json:"jobs"`
+	}{js})
+}
+
 // secretHashes is which secrets' values the server has: their names and hashes, never the values.
 func (a *API) secretHashes(w http.ResponseWriter, r *http.Request, account string) {
 	hs, err := statements.SecretHashes(r.Context(), a.Store, account, r.PathValue("company"))
@@ -425,4 +489,46 @@ func (a *API) secretHashes(w http.ResponseWriter, r *http.Request, account strin
 	out(w, http.StatusOK, struct {
 		Secrets []statements.SecretHash `json:"secrets"`
 	}{hs})
+}
+
+// auditAfter is the company's audit entries after ?after=, as stored, for wmanager-sign to link from the head it
+// saw last: it checks them, not the server.
+func (a *API) auditAfter(w http.ResponseWriter, r *http.Request, account string) {
+	after, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if err != nil || after < 0 {
+		fail(w, http.StatusBadRequest, "after is the number of an entry")
+		return
+	}
+	company := r.PathValue("company")
+	if err := statements.Member(r.Context(), a.Store, account, company); err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	entries, err := audit.After(r.Context(), a.Store, store.Who{Account: account}, audit.CompanyChain(company), after)
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if entries == nil {
+		entries = [][]byte{}
+	}
+	out(w, http.StatusOK, struct {
+		Entries [][]byte `json:"entries"`
+	}{entries})
+}
+
+var jobIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// job is one signed job by its id: wmanager-sign checks its signature before it shows it.
+func (a *API) job(w http.ResponseWriter, r *http.Request, account string) {
+	if !jobIDRe.MatchString(r.PathValue("job")) {
+		a.failErr(w, r, statements.ErrNoJob)
+		return
+	}
+	j, err := statements.Job(r.Context(), a.Store, account, r.PathValue("company"), r.PathValue("job"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, j)
 }

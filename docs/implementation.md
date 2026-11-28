@@ -154,8 +154,12 @@ Short trials of what could overturn the design, each on a branch of its own. The
     checked and shown as they arrive. The difference is from the newer of the state verified and the one signed
     here, and a computer's report of a newer state stops signing (the review found that a server hiding a newer
     state could otherwise have it undone unseen); a file that isn't text comes only with `add-file`;
-  - jobs and stops, `add-file`, and changing a secret's value;
-  - the head of the audit log it saw last;
+  - then (done) jobs and stops: the server keeps each with its script, a job's id once, a stop only for a job it
+    has; `wmanager-sign` turns a job's groups into their computers from the state it verified, shows the job with
+    its script whole, and makes its id and expiry; and `wmanager-sign secret set` for a secret's new value;
+  - (done) the head of each company's audit log it saw last, per server: the whole history linked again each time,
+    and `audit accept` after a move or restore;
+  - `add-file`;
   - its messages in the ten languages;
   - a test by hand with a real security key, once there is one.
   - How each person's rights change moves to 4a, with the people in the state.

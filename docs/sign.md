@@ -2,8 +2,9 @@
 
 > The signer of wmanager v1 ([Architecture of v1](architecture.md#wmanager-sign)). It is being built
 > ([Implementation plan](implementation.md)): today it connects to the server, makes and registers signing keys,
-> keeps and signs each company's chain of admin lists, and signs its states. Jobs, `add-file` and changing a
-> secret come next; Windows Hello in stage 2c.
+> keeps and signs each company's chain of admin lists, and signs its states, single jobs and stops, and new values
+> of its secrets; it checks the companies' audit logs from the newest entry it saw. `add-file` comes next; Windows
+> Hello in stage 2c.
 
 `wmanager-sign` runs on the administrator's own computer, never on the server. A server, even a hacked one, can't
 make it sign anything it didn't show, and can't make it take an admin list that doesn't follow the one it holds.
@@ -128,6 +129,47 @@ Files:
 - States signed by others are shown, in short, as they arrive, checked against the newest admin list. One signed
   by a key removed since is kept apart: the next state is shown against it too, and has a higher serial.
 
+## Jobs and secrets
+
+A single job's draft (from the panel, stage 4a; when a computer runs it is stage 5) is signed the same way, with
+`wmanager-sign sign Acme`:
+
+```
+Job 85f0c63c8e4ecdf41b0650b01b7926de of Acme (7F3A-91C2-04BD-E85F-2C6B-90AE-5D17-3B48):
+Computers (1): OFFICE-07
+  from the groups finance, as the state verified here has them
+Runs as SYSTEM: everything on these computers.
+Secrets it may use: wifi
+From 2026-11-28 13:22 until 2026-11-29 13:22, for at most 10m0s each time.
+The script (2 lines):
+       1 | Restart-Service Spooler
+       2 | Write-Output 'done'
+```
+
+- Its groups become their computers when it is signed, from the state verified here; a computer or a secret that
+  state doesn't have is refused. Its id is made here, and it expires at most 7 days after signing.
+- A **stop** names a signed job and some of its computers: it stops the job where it runs, and refuses it where it
+  comes later. `wmanager-sign` fetches the job by its id, checks its signature against the company's chain (an
+  administrator removed since may have signed it), and shows it whole before signing the stop.
+- **A secret's new value** is typed here and goes into the next state, with nothing else changed:
+
+  ```bash
+  wmanager-sign secret set Acme wifi-office
+  ```
+
+## The audit log
+
+Each time `wmanager-sign` lists your companies, it reads each company's whole audit log from the server, links it
+itself from the first entry (each entry's hash is the SHA-256 of the hash before and the entry's bytes), and checks
+that it leads to the newest entry it saw from that server. It shows that entry as `<number>:<hash>`, which can be
+compared with the heads in Loki (`wmanager-server audit verify company:<id> <number>:<hash>`). When the history no
+longer leads there (changed, or restored from an older backup), it says so, keeps the entry it saw, and the run
+ends with an error. Once you know why (a server moved or restored), take the log as it is now:
+
+```bash
+wmanager-sign audit accept Acme
+```
+
 ## What it refuses
 
 - **A chain that doesn't start with the one it holds**, whatever id the server lists the company under. A server
@@ -150,7 +192,7 @@ In a folder only you can open: `$WMANAGER_SIGN_HOME`, or `~/.config/wmanager-sig
 | `server` | the server connected last |
 | `servers/<host>[_<port>]/token.json` | the connection's token, until it ends |
 | `servers/<host>[_<port>]/keys.json` | the signing keys made here: their public keys and credential ids |
-| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, and one signed by an administrator removed since |
+| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, one signed by an administrator removed since, and the newest audit entry it saw from each server |
 
 A company is kept under its own id (the hash of its first admin list), not under the id a server gives it: a
 server that lists it again under a new id meets the chain held. Commands find a company by the name it had when it

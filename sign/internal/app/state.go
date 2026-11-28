@@ -447,6 +447,10 @@ func (a *App) signDraft(ctx context.Context, which string) error {
 	switch d.Type {
 	case verify.TypeState:
 		return a.signState(ctx, s, c, h, ch, b, d)
+	case verify.TypeJob:
+		return a.signJob(ctx, s, c, h, ch, b, d)
+	case verify.TypeStop:
+		return a.signStop(ctx, s, c, h, ch, b, d)
 	}
 	return a.fail("err.drafttype", show.Visible(d.Type))
 }
@@ -562,20 +566,7 @@ func (a *App) signState(ctx context.Context, s *session, c api.Company, h *home.
 		}
 		return err
 	}
-	d2, pin, err := a.device()
-	if err != nil {
-		return err
-	}
-	defer d2.Close()
-	allowed := map[string]verify.PublicKey{}
-	for id, k := range ch.AdminKeys() {
-		allowed[id] = k.Key
-	}
-	mine, err := a.myKeys(s)
-	if err != nil {
-		return err
-	}
-	signed, err := a.signWith(d2, pin, raw, allowed, mine)
+	signed, err := a.signAsAdmin(s, ch, raw)
 	if err != nil {
 		return err
 	}
