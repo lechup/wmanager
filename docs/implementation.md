@@ -138,8 +138,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
     origin, an old serial, a wrong algorithm.
 - **2b, the server's side** (done first): a short code made in the panel, typed into `wmanager-sign`, becomes a
   token of the sign API for 12 hours; the API hands out each company's chain and takes the next admin list, checked
-  with `verify` (the computers check it again themselves); people register their signing keys there; the panel
-  shows a company's fingerprint and administrators.
+  with `verify` (the computers check it again themselves); people register their signing keys there, each with a
+  proof signed by the key (`verify.KeyProof`); the panel shows a company's fingerprint and administrators.
 - **2b, `wmanager-sign` on Linux:**
   - the first admin list and the company's fingerprint, then the changes of the list;
   - showing what is signed, with control characters made visible and the difference from the last verified state;

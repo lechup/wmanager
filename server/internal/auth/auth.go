@@ -85,6 +85,7 @@ type Service struct {
 	passwords map[string]*slowdown // attempts per account and address that weren't (yet) right
 	accounts  map[string]*window   // wrong passwords per account in the current hour
 	known     map[string]time.Time // account and address that signed in, until when it counts as known
+	signFails window               // wrong codes of wmanager-sign, from anywhere, in the current minute
 	swept     time.Time
 }
 

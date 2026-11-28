@@ -133,7 +133,7 @@ func (s *Server) Handler() http.Handler {
 	top := http.NewServeMux()
 	top.Handle("/", cop.Handler(limitBody(mux)))
 	api := &signapi.API{Store: s.Store, Auth: s.Auth, Log: s.Log, ClientAddr: s.clientAddr}
-	top.Handle(signapi.Prefix, cop.Handler(api.Handler()))
+	top.Handle(signapi.Prefix, api.Handler())
 	return s.logged(headers(top))
 }
 
@@ -938,6 +938,7 @@ type AccountPage struct {
 	CanAdd      bool   // the panel knows its own address (WMANAGER_PUBLIC_URL), which passkeys need
 	SignCode    string // a code for wmanager-sign, shown once
 	SignExpires time.Time
+	SignStale   bool // a code needs the second factor given within auth.FreshFor
 }
 
 func (s *Server) account(w http.ResponseWriter, r *http.Request, ses auth.Session) {
@@ -958,6 +959,10 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, ses auth.Se
 // signCode shows a code for wmanager-sign once, in this response.
 func (s *Server) signCode(w http.ResponseWriter, r *http.Request, ses auth.Session) {
 	code, expires, err := s.Auth.CreateSignCode(r.Context(), token(r))
+	if errors.Is(err, auth.ErrStale) {
+		s.accountPage(w, r, ses, AccountPage{SignStale: true})
+		return
+	}
 	if err != nil {
 		s.internal(w, r, err)
 		return

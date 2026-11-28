@@ -14,11 +14,16 @@ import (
 )
 
 // wmanager-sign signs in with a short code made in the panel (the user's choice of the plan's options): the panel
-// shows it to a signed-in person, who types it into wmanager-sign, which gets a token of the sign API for
-// SignTokenLife. The token reaches only the sign API, never the panel; signing itself always needs the key.
+// shows it to a person who gave their second factor within FreshFor, who types it into wmanager-sign, which gets a
+// token of the sign API for SignTokenLife. The token reaches only the sign API, never the panel; signing itself
+// always needs the key.
 const (
 	SignCodeLife  = 5 * time.Minute
 	SignTokenLife = 12 * time.Hour
+	// SignCodeFailures is how many wrong codes the server takes a minute from all addresses together: a code
+	// guessed from many addresses at once would hit whichever account has one waiting. Above it, connecting waits
+	// for the next minute, for everyone.
+	SignCodeFailures = 30
 )
 
 // ErrSignCode means the code is unknown, used or expired; ErrSignToken that the token is.
@@ -30,10 +35,10 @@ var (
 // signCodeAlphabet has no letters that look alike (no 0, O, 1, I, L).
 const signCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
-// CreateSignCode makes a code for wmanager-sign, for a full session, replacing the account's earlier code. It has
-// 8 characters of 31 (about 40 bits): enough for 5 minutes behind the limit per address.
+// CreateSignCode makes a code for wmanager-sign, for a fresh session, replacing the account's earlier code. It has
+// 10 characters of 31 (about 50 bits), kept as a hash: a code from a leaked database expires before it is found.
 func (s *Service) CreateSignCode(ctx context.Context, sessionToken string) (string, time.Time, error) {
-	b := make([]byte, 8)
+	b := make([]byte, 10)
 	for i := range b {
 		var r [1]byte
 		for {
@@ -44,10 +49,10 @@ func (s *Service) CreateSignCode(ctx context.Context, sessionToken string) (stri
 		}
 		b[i] = signCodeAlphabet[int(r[0])%len(signCodeAlphabet)]
 	}
-	code := string(b[:4]) + "-" + string(b[4:])
+	code := string(b[:5]) + "-" + string(b[5:])
 	expires := s.Now().Add(SignCodeLife)
 	err := s.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
-		r, err := s.fullSession(ctx, tx, sessionToken)
+		r, err := s.freshSession(ctx, tx, sessionToken)
 		if err != nil {
 			return err
 		}
@@ -70,10 +75,29 @@ func signCodeHash(code string) []byte {
 	return tokenHash("wmanager-sign code\x00" + norm)
 }
 
+// signCodeOpen tells whether codes may be tried now, under SignCodeFailures; failed counts a wrong one.
+func (s *Service) signCodeOpen() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Now().Sub(s.signFails.start) > time.Minute {
+		s.signFails = window{start: s.Now()}
+	}
+	return s.signFails.n < SignCodeFailures
+}
+
+func (s *Service) signCodeFailed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signFails.n++
+}
+
 // ExchangeSignCode turns a code into a token of the sign API. The code works once.
 func (s *Service) ExchangeSignCode(ctx context.Context, addr, code string) (token, accountID string, expires time.Time, err error) {
 	if err := s.allow(addr); err != nil {
 		return "", "", time.Time{}, err
+	}
+	if !s.signCodeOpen() {
+		return "", "", time.Time{}, ErrTooMany
 	}
 	ctx = context.WithoutCancel(ctx)
 	var answer error
@@ -105,6 +129,8 @@ func (s *Service) ExchangeSignCode(ctx context.Context, addr, code string) (toke
 		return "", "", time.Time{}, err
 	}
 	if answer != nil {
+		s.signCodeFailed()
+		s.Log.Warn("a wrong code of wmanager-sign", "address", addressKey(addr))
 		return "", "", time.Time{}, answer
 	}
 	return token, accountID, expires, nil
@@ -125,15 +151,17 @@ func (s *Service) LookupSignToken(ctx context.Context, token string) (string, er
 	return accountID, err
 }
 
-// RevokeSignTokens ends every token of wmanager-sign of the signed-in account.
+// RevokeSignTokens ends every token of wmanager-sign of the signed-in account, and a code still waiting.
 func (s *Service) RevokeSignTokens(ctx context.Context, sessionToken string) error {
 	return s.Store.Tx(ctx, store.System, func(tx pgx.Tx) error {
 		r, err := s.fullSession(ctx, tx, sessionToken)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM sign_tokens WHERE account_id = $1`, r.accountID)
-		if err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM sign_codes WHERE account_id = $1`, r.accountID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM sign_tokens WHERE account_id = $1`, r.accountID); err != nil {
 			return err
 		}
 		_, err = audit.Append(ctx, tx, audit.ServerChain, "", "account:"+r.accountID, "sign.revoked", nil)

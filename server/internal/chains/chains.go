@@ -1,6 +1,6 @@
 // Package chains keeps each company's chain of admin lists and the signing keys people register. It checks every
 // list it takes, the way a computer will (verify.Chain), so a broken list never reaches one; but what makes a list
-// count is the computers' own check of the whole chain, not the server.
+// count is the computers' own check of the whole chain, against the fingerprint they keep, not the server.
 package chains
 
 import (
@@ -8,20 +8,27 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/lechup/wmanager/server/internal/audit"
 	"github.com/lechup/wmanager/server/internal/store"
 	"github.com/lechup/wmanager/verify"
 )
 
+// MaxKeys is how many signing keys one account may register.
+const MaxKeys = 20
+
 // Errors.
 var (
-	ErrNotAdmin = errors.New("chains: only an administrator of the company may do that")
-	ErrBroken   = errors.New("chains: the stored chain doesn't check")
-	ErrKeyTaken = errors.New("chains: the key is registered by another account")
-	ErrBadKey   = errors.New("chains: not a signing key a security key makes")
+	ErrNotAdmin    = errors.New("chains: only an administrator of the company may do that")
+	ErrNotMember   = errors.New("chains: only a member of the company may see that")
+	ErrBroken      = errors.New("chains: the stored chain doesn't check")
+	ErrTaken       = errors.New("chains: that admin list is another company's")
+	ErrKeyTaken    = errors.New("chains: the key is registered by another account")
+	ErrTooManyKeys = errors.New("chains: too many signing keys on this account")
 )
 
 // role is the account's role in the company, or "".
@@ -34,8 +41,8 @@ func role(ctx context.Context, tx pgx.Tx, accountID, companyID string) (string, 
 	return r, err
 }
 
-func load(ctx context.Context, tx pgx.Tx, companyID string) ([]verify.Signed, error) {
-	rows, err := tx.Query(ctx, `SELECT signed FROM admin_lists WHERE company_id = $1 ORDER BY sequence`, companyID)
+func load(ctx context.Context, tx pgx.Tx, companyID string, limit int) ([]verify.Signed, error) {
+	rows, err := tx.Query(ctx, `SELECT signed FROM admin_lists WHERE company_id = $1 ORDER BY sequence LIMIT $2`, companyID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +62,8 @@ func load(ctx context.Context, tx pgx.Tx, companyID string) ([]verify.Signed, er
 	return out, rows.Err()
 }
 
+const all = 1 << 30
+
 // Load returns a company's chain, for one of its members.
 func Load(ctx context.Context, s *store.Store, accountID, companyID string) ([]verify.Signed, error) {
 	var out []verify.Signed
@@ -64,17 +73,37 @@ func Load(ctx context.Context, s *store.Store, accountID, companyID string) ([]v
 			return err
 		}
 		if r == "" {
-			return ErrNotAdmin
+			return ErrNotMember
 		}
-		out, err = load(ctx, tx, companyID)
+		out, err = load(ctx, tx, companyID, all)
 		return err
 	})
 	return out, err
 }
 
-// held checks a stored chain again (it was checked when stored; a database changed by hand is caught here).
+// Fingerprint is the company's fingerprint as its stored first list gives it, unchecked ("" before the first list):
+// a hint for wmanager-sign, which checks the whole chain itself against the fingerprint it keeps.
+func Fingerprint(ctx context.Context, s *store.Store, accountID, companyID string) (string, error) {
+	var fp string
+	err := s.Tx(ctx, store.Who{Account: accountID}, func(tx pgx.Tx) error {
+		first, err := load(ctx, tx, companyID, 1)
+		if err == nil && len(first) == 1 {
+			fp = verify.Fingerprint(first[0].Hash())
+		}
+		return err
+	})
+	return fp, err
+}
+
+// held checks a stored chain again. It catches a list changed, removed or reordered by hand; a whole chain replaced
+// by hand checks against its own first list, and only the computers and wmanager-sign, which keep the fingerprint,
+// see that.
 func held(stored []verify.Signed) (*verify.Chain, error) {
-	return verify.VerifyChain(verify.Fingerprint(stored[0].Hash()), stored)
+	c, err := verify.VerifyChain(verify.Fingerprint(stored[0].Hash()), stored)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBroken, err)
+	}
+	return c, nil
 }
 
 // Append takes the company's next admin list from one of its administrators: the first one (signed by a key of its
@@ -82,8 +111,9 @@ func held(stored []verify.Signed) (*verify.Chain, error) {
 func Append(ctx context.Context, s *store.Store, accountID, companyID string, next verify.Signed) (*verify.Chain, error) {
 	var chain *verify.Chain
 	err := s.Tx(ctx, store.System, func(tx pgx.Tx) error {
-		// One list at a time per company.
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM companies WHERE id = $1 FOR UPDATE`, companyID); err != nil {
+		// One list at a time per company. NO KEY UPDATE: the audit entry's reference to the company takes a KEY
+		// SHARE lock, which an UPDATE lock would wait for.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM companies WHERE id = $1 FOR NO KEY UPDATE`, companyID); err != nil {
 			return err
 		}
 		r, err := role(ctx, tx, accountID, companyID)
@@ -93,15 +123,13 @@ func Append(ctx context.Context, s *store.Store, accountID, companyID string, ne
 		if r != "admin" {
 			return ErrNotAdmin
 		}
-		stored, err := load(ctx, tx, companyID)
+		stored, err := load(ctx, tx, companyID, all)
 		if err != nil {
 			return err
 		}
 		if len(stored) == 0 {
 			chain, err = verify.VerifyChain(verify.Fingerprint(next.Hash()), []verify.Signed{next})
-		} else if chain, err = held(stored); err != nil {
-			return fmt.Errorf("%w: %w", ErrBroken, err)
-		} else {
+		} else if chain, err = held(stored); err == nil {
 			err = chain.Update(append(stored, next))
 		}
 		if err != nil {
@@ -112,8 +140,13 @@ func Append(ctx context.Context, s *store.Store, accountID, companyID string, ne
 			return err
 		}
 		cur := chain.Current()
-		if _, err := tx.Exec(ctx, `INSERT INTO admin_lists (company_id, sequence, signed) VALUES ($1, $2, $3)`,
-			companyID, cur.Sequence, raw); err != nil {
+		h := next.Hash()
+		if _, err := tx.Exec(ctx, `INSERT INTO admin_lists (company_id, sequence, list_hash, signed) VALUES ($1, $2, $3, $4)`,
+			companyID, cur.Sequence, h[:], raw); err != nil {
+			var pg *pgconn.PgError
+			if errors.As(err, &pg) && pg.Code == "23505" {
+				return ErrTaken
+			}
 			return err
 		}
 		var names []string
@@ -143,7 +176,7 @@ func Summarize(ctx context.Context, s *store.Store, accountID, companyID string)
 	}
 	c, err := held(stored)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrBroken, err)
+		return nil, err
 	}
 	return &Summary{Fingerprint: verify.Fingerprint(c.Company), Sequence: c.Current().Sequence,
 		Administrators: c.Current().Administrators}, nil
@@ -156,28 +189,42 @@ type Key struct {
 	COSE  []byte `json:"cose"`
 }
 
-// RegisterKey keeps a signing key a person made in wmanager-sign, so an administrator can add it to a list. It
-// changes nothing by itself: a key counts only once a signed list names it, after its fingerprint was typed.
-func RegisterKey(ctx context.Context, s *store.Store, accountID string, cose []byte) (string, error) {
-	pk, err := verify.ParseCOSEKey(cose)
+// RegisterKey keeps a signing key a person made in wmanager-sign, with the key's proof that its holder registers it
+// for this account, so an administrator can add it to a list. It changes nothing by itself: a key counts only once
+// a signed list names it, after its fingerprint was typed.
+func RegisterKey(ctx context.Context, s *store.Store, accountID string, cose []byte, proof verify.Signed, now time.Time) (string, error) {
+	id, err := verify.CheckKeyProof(proof, cose, accountID, now)
 	if err != nil {
-		return "", ErrBadKey
+		return "", err
 	}
-	if err := verify.CheckKey(pk); err != nil {
-		return "", ErrBadKey
-	}
-	id := verify.KeyID(cose)
 	err = s.Tx(ctx, store.System, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO signing_keys (id, account_id, cose) VALUES ($1, $2, $3)
-		                           ON CONFLICT (id) DO NOTHING`, id, accountID, cose); err != nil {
+		// The account's keys one at a time, so the cap holds.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM accounts WHERE id = $1 FOR NO KEY UPDATE`, accountID); err != nil {
 			return err
 		}
 		var owner string
-		if err := tx.QueryRow(ctx, `SELECT account_id FROM signing_keys WHERE id = $1`, id).Scan(&owner); err != nil {
+		err := tx.QueryRow(ctx, `SELECT account_id FROM signing_keys WHERE id = $1`, id).Scan(&owner)
+		switch {
+		case err == nil && owner == accountID:
+			return nil // registered already
+		case err == nil:
+			return ErrKeyTaken
+		case !errors.Is(err, pgx.ErrNoRows):
 			return err
 		}
-		if owner != accountID {
-			return ErrKeyTaken
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM signing_keys WHERE account_id = $1`, accountID).Scan(&n); err != nil {
+			return err
+		}
+		if n >= MaxKeys {
+			return ErrTooManyKeys
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO signing_keys (id, account_id, cose) VALUES ($1, $2, $3)`, id, accountID, cose); err != nil {
+			var pg *pgconn.PgError
+			if errors.As(err, &pg) && pg.Code == "23505" {
+				return ErrKeyTaken // registered by another account in the meantime
+			}
+			return err
 		}
 		_, err = audit.Append(ctx, tx, audit.ServerChain, "", "account:"+accountID, "signing-key.registered",
 			map[string]any{"key": id})

@@ -26,8 +26,10 @@
 
 <h2>wmanager-sign</h2>
 <p>{{t "account.signtext"}}</p>
+{{if .Data.SignStale}}<p class="error" role="alert">{{t "account.signstale"}}</p>{{end}}
 {{if .Data.SignCode}}<div class="notice" role="status"><p>{{t "account.signshow" (time .Data.SignExpires)}}</p>
-<p><code class="secret">{{.Data.SignCode}}</code></p></div>{{end}}
+<p><code class="secret">{{.Data.SignCode}}</code></p>
+<p><strong>{{t "account.signwarn"}}</strong></p></div>{{end}}
 <div class="row">
   <form method="post" action="/account/sign-code" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit">{{t "account.signcode"}}</button></form>

@@ -27,6 +27,7 @@ import (
 	"github.com/lechup/wmanager/server/internal/accounts"
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/auth/authtest"
+	"github.com/lechup/wmanager/server/internal/chains"
 	"github.com/lechup/wmanager/server/internal/store/storetest"
 	"github.com/lechup/wmanager/verify"
 	"github.com/lechup/wmanager/verify/softkey"
@@ -725,6 +726,96 @@ func (e *env) api(method, path, tok string, body any) (int, []byte) {
 	return resp.StatusCode, out
 }
 
+var signCodeRe = regexp.MustCompile(`<code class="secret">([A-Z2-9]{5}-[A-Z2-9]{5})</code>`)
+
+// signIn connects wmanager-sign for a browser that is signed in: a code from the account page, exchanged.
+func (b *browser) signIn() (tok, account string) {
+	t := b.e.t
+	t.Helper()
+	b.get("/account")
+	_, body := b.post("/account/sign-code", nil)
+	m := signCodeRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("no code on the account page: %s", body)
+	}
+	code, out := b.e.api("POST", "login", "", map[string]string{"code": strings.ToLower(m[1])})
+	var login struct {
+		Token   string `json:"token"`
+		Account string `json:"account"`
+	}
+	if code != http.StatusOK || jsonv2.Unmarshal(out, &login) != nil || login.Token == "" {
+		t.Fatalf("login: %d %s", code, out)
+	}
+	return login.Token, login.Account
+}
+
+// registerKey registers a software key for the account, with its proof.
+func (e *env) registerKey(tok, account string, k *softkey.Key) (int, []byte) {
+	e.t.Helper()
+	proof, err := k.SignStatement(verify.MakeKeyProof(account, e.clock.now()), softkey.Options{})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return e.api("POST", "keys", tok, map[string]any{"cose": k.COSEKey(), "proof": proof})
+}
+
+// person makes an account, signs it in in a browser of its own, and puts it into the company with the role.
+func (e *env) person(owner *browser, email, company, role string) *browser {
+	e.t.Helper()
+	id, err := accounts.CreateAccount(context.Background(), e.panel.Store, accounts.SystemActor, email, "Person", pw, false)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if company != "" {
+		owner.get("/admin")
+		if code, _ := owner.post("/admin/member", url.Values{"company": {company}, "account": {id}, "role": {role}}); code != http.StatusOK {
+			e.t.Fatalf("add %s: %d", email, code)
+		}
+	}
+	b := e.browser()
+	b.enroll(email)
+	return b
+}
+
+func firstList(t *testing.T, k *softkey.Key, at time.Time) verify.Signed {
+	t.Helper()
+	l := verify.Admins{Format: 1, Type: "admins", SignedAt: at, Nonce: strings.Repeat("ab", 16), Sequence: 1,
+		Administrators: []verify.Administrator{{Name: "Owner", Keys: []verify.Key{k.ListKey()}}}}
+	raw, _ := verify.Marshal(l)
+	s, err := k.SignStatement(raw, softkey.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func nextList(t *testing.T, prev verify.Signed, seq int64, by *softkey.Key, at time.Time, admins ...*softkey.Key) verify.Signed {
+	t.Helper()
+	h := prev.Hash()
+	var ks []verify.Key
+	for _, a := range admins {
+		ks = append(ks, a.ListKey())
+	}
+	var company string
+	if seq == 2 {
+		company = hex.EncodeToString(h[:])
+	} else {
+		var p verify.Admins
+		if err := jsonv2.Unmarshal(prev.Statement, &p); err != nil {
+			t.Fatal(err)
+		}
+		company = p.Company
+	}
+	l := verify.Admins{Format: 1, Type: "admins", SignedAt: at, Company: company, Sequence: seq,
+		Previous: hex.EncodeToString(h[:]), Administrators: []verify.Administrator{{Name: "Owner", Keys: ks}}}
+	raw, _ := verify.Marshal(l)
+	s, err := by.SignStatement(raw, softkey.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 func TestSignAPI(t *testing.T) {
 	e := setup(t)
 	owner := e.browser()
@@ -734,74 +825,43 @@ func TestSignAPI(t *testing.T) {
 	acme, me := owner.idOf("Acme"), owner.idOf("owner@example.com")
 	owner.post("/admin/member", url.Values{"company": {acme}, "account": {me}, "role": {"admin"}})
 
-	owner.get("/account")
-	_, body := owner.post("/account/sign-code", nil)
-	m := regexp.MustCompile(`<code class="secret">([A-Z2-9]{4}-[A-Z2-9]{4})</code>`).FindStringSubmatch(body)
-	if m == nil {
-		t.Fatal("no code on the account page")
+	tok, account := owner.signIn()
+	if account != me {
+		t.Fatalf("login names account %s, not %s", account, me)
 	}
-	code, out := e.api("POST", "login", "", map[string]string{"code": strings.ToLower(m[1])})
-	var login struct {
-		Token string `json:"token"`
-	}
-	if code != http.StatusOK || jsonv2.Unmarshal(out, &login) != nil || login.Token == "" {
-		t.Fatalf("login: %d %s", code, out)
-	}
-	if code, _ := e.api("POST", "login", "", map[string]string{"code": m[1]}); code != http.StatusUnauthorized {
-		t.Fatalf("the code used twice: %d", code)
-	}
-	if code, _ := e.api("GET", "me", "nope", nil); code != http.StatusUnauthorized {
-		t.Fatalf("a wrong token: %d", code)
-	}
-	tok := login.Token
 	if code, out := e.api("GET", "me", tok, nil); code != http.StatusOK || !strings.Contains(string(out), `"name":"Acme"`) ||
-		strings.Contains(string(out), "fingerprint") {
+		strings.Contains(string(out), "fingerprint") || !strings.Contains(string(out), me) {
 		t.Fatalf("me: %d %s", code, out)
 	}
 
 	// A key registered, the first admin list signed with it, then a second.
-	anna, err := softkey.New(verify.ES256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code, out := e.api("POST", "keys", tok, map[string][]byte{"cose": anna.COSEKey()}); code != http.StatusOK ||
-		!strings.Contains(string(out), anna.ID()) {
+	anna, _ := softkey.New(verify.ES256)
+	if code, out := e.registerKey(tok, account, anna); code != http.StatusOK || !strings.Contains(string(out), anna.ID()) {
 		t.Fatalf("register a key: %d %s", code, out)
 	}
-	if code, _ := e.api("POST", "keys", tok, map[string][]byte{"cose": []byte("not a key")}); code != http.StatusBadRequest {
-		t.Fatalf("a key that isn't one: %d", code)
+	if code, _ := e.registerKey(tok, account, anna); code != http.StatusOK {
+		t.Fatalf("the same key again: %d", code)
 	}
-	if code, _ := e.api("POST", "keys", tok, map[string]string{"other": "x"}); code != http.StatusBadRequest {
-		t.Fatalf("an unknown member: %d", code)
-	}
-	if code, out := e.api("GET", "companies/"+acme+"/keys", tok, nil); code != http.StatusOK || !strings.Contains(string(out), anna.ID()) {
+	if code, out := e.api("GET", "companies/"+acme+"/keys", tok, nil); code != http.StatusOK || strings.Count(string(out), anna.ID()) != 1 {
 		t.Fatalf("the company's keys: %d %s", code, out)
 	}
 	now := e.clock.now().UTC()
-	first := verify.Admins{Format: 1, Type: "admins", SignedAt: now, Nonce: strings.Repeat("ab", 16), Sequence: 1,
-		Administrators: []verify.Administrator{{Name: "Owner", Keys: []verify.Key{anna.ListKey()}}}}
-	raw, _ := verify.Marshal(first)
-	s1, err := anna.SignStatement(raw, softkey.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	code, out = e.api("POST", "companies/"+acme+"/chain", tok, s1)
+	s1 := firstList(t, anna, now)
+	code, out := e.api("POST", "companies/"+acme+"/chain", tok, s1)
 	if code != http.StatusOK || !strings.Contains(string(out), verify.Fingerprint(s1.Hash())) {
 		t.Fatalf("the first list: %d %s", code, out)
 	}
 	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, s1); code != http.StatusConflict {
 		t.Fatalf("the first list again: %d", code)
 	}
-	h := s1.Hash()
-	second := verify.Admins{Format: 1, Type: "admins", SignedAt: now, Company: hex.EncodeToString(h[:]), Sequence: 2,
-		Previous: hex.EncodeToString(h[:]), Administrators: first.Administrators}
-	raw2, _ := verify.Marshal(second)
+	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, firstList(t, anna, now.Add(time.Second))); code != http.StatusConflict {
+		t.Fatalf("a second first list: %d", code)
+	}
 	stranger, _ := softkey.New(verify.ES256)
-	bad, _ := stranger.SignStatement(raw2, softkey.Options{})
-	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, bad); code != http.StatusConflict {
+	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, nextList(t, s1, 2, stranger, now, anna)); code != http.StatusConflict {
 		t.Fatalf("a list signed by a stranger: %d", code)
 	}
-	s2, _ := anna.SignStatement(raw2, softkey.Options{})
+	s2 := nextList(t, s1, 2, anna, now, anna)
 	if code, out := e.api("POST", "companies/"+acme+"/chain", tok, s2); code != http.StatusOK || !strings.Contains(string(out), `"sequence":2`) {
 		t.Fatalf("the second list: %d %s", code, out)
 	}
@@ -815,16 +875,167 @@ func TestSignAPI(t *testing.T) {
 	if _, err := verify.VerifyChain(verify.Fingerprint(s1.Hash()), chain.Lists); err != nil {
 		t.Fatalf("the chain as handed out: %v", err)
 	}
-	if _, body := owner.get("/c/" + acme); !strings.Contains(body, verify.Fingerprint(s1.Hash())) || !strings.Contains(body, "Admin list number 2") {
-		t.Fatal("the company page doesn't show the chain")
+	if code, out := e.api("GET", "me", tok, nil); code != http.StatusOK || !strings.Contains(string(out), verify.Fingerprint(s1.Hash())) {
+		t.Fatalf("me after the first list: %d %s", code, out)
+	}
+	_, body := owner.get("/c/" + acme)
+	if !strings.Contains(body, verify.Fingerprint(s1.Hash())) || !strings.Contains(body, "Admin list number 2") ||
+		!strings.Contains(body, "admins.signed") {
+		t.Fatal("the company page doesn't show the chain and its audit entries")
 	}
 	if code, _ := e.api("GET", "time", "", nil); code != http.StatusOK {
 		t.Fatalf("time: %d", code)
 	}
-	// Disconnected from the panel: the token stops working.
+
+	// The same chain under a second company is refused.
+	owner.get("/admin")
+	owner.post("/admin/company", url.Values{"name": {"Other"}})
+	other := owner.idOf("Other")
+	owner.post("/admin/member", url.Values{"company": {other}, "account": {me}, "role": {"admin"}})
+	if code, _ := e.api("POST", "companies/"+other+"/chain", tok, s1); code != http.StatusConflict {
+		t.Fatalf("Acme's first list for another company: %d", code)
+	}
+
+	// A list changed by hand in the database shows on the company page.
+	db := storetest.Superuser(t, e.panel.Store)
+	bad := s2
+	bad.Signature = append([]byte{}, s2.Signature...)
+	bad.Signature[len(bad.Signature)-1] ^= 1
+	raw, _ := jsonv2.Marshal(bad)
+	if _, err := db.Exec(context.Background(), `UPDATE admin_lists SET signed = $1 WHERE sequence = 2`, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := owner.get("/c/" + acme); !strings.Contains(body, "The stored admin lists don&#39;t check") {
+		t.Fatal("a broken stored chain doesn't show")
+	}
+	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, nextList(t, s2, 3, anna, now, anna)); code != http.StatusConflict {
+		t.Fatalf("a list over a broken stored chain: %d", code)
+	}
+
+	// Disconnected from the panel: the token stops working, and so does a code still waiting.
 	owner.get("/account")
+	_, body = owner.post("/account/sign-code", nil)
+	waiting := signCodeRe.FindStringSubmatch(body)
 	owner.post("/account/sign-revoke", nil)
 	if code, _ := e.api("GET", "me", tok, nil); code != http.StatusUnauthorized {
 		t.Fatalf("a token after disconnecting: %d", code)
+	}
+	if code, _ := e.api("POST", "login", "", map[string]string{"code": waiting[1]}); code != http.StatusUnauthorized {
+		t.Fatalf("a code made before disconnecting: %d", code)
+	}
+}
+
+func TestSignAPIRefusals(t *testing.T) {
+	e := setup(t)
+	owner := e.browser()
+	secret := owner.enroll("owner@example.com")
+	owner.get("/admin")
+	owner.post("/admin/company", url.Values{"name": {"Acme"}})
+	acme, me := owner.idOf("Acme"), owner.idOf("owner@example.com")
+	owner.post("/admin/member", url.Values{"company": {acme}, "account": {me}, "role": {"admin"}})
+	tok, account := owner.signIn()
+	anna, _ := softkey.New(verify.ES256)
+	e.registerKey(tok, account, anna)
+	s1 := firstList(t, anna, e.clock.now().UTC())
+	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, s1); code != http.StatusOK {
+		t.Fatalf("the first list: %d", code)
+	}
+
+	// A person (not an administrator) and an outsider.
+	person := e.person(owner, "person@example.com", acme, "person")
+	ptok, paccount := person.signIn()
+	outsider := e.person(owner, "outsider@example.com", "", "")
+	otok, _ := outsider.signIn()
+	s2 := nextList(t, s1, 2, anna, e.clock.now().UTC(), anna)
+	for _, c := range []struct {
+		name, method, path, tok string
+		body                    any
+		want                    int
+	}{
+		{"a person appends", "POST", "companies/" + acme + "/chain", ptok, s2, http.StatusForbidden},
+		{"a person lists the keys", "GET", "companies/" + acme + "/keys", ptok, nil, http.StatusForbidden},
+		{"an outsider reads the chain", "GET", "companies/" + acme + "/chain", otok, nil, http.StatusForbidden},
+		{"an outsider appends", "POST", "companies/" + acme + "/chain", otok, s2, http.StatusForbidden},
+		{"an outsider lists the keys", "GET", "companies/" + acme + "/keys", otok, nil, http.StatusForbidden},
+		{"a company that doesn't exist", "GET", "companies/00000000-0000-0000-0000-000000000000/chain", tok, nil, http.StatusForbidden},
+		{"an id that isn't one", "GET", "companies/not-an-id/chain", tok, nil, http.StatusNotFound},
+		{"a call that doesn't exist", "GET", "nothing", tok, nil, http.StatusNotFound},
+		{"no token", "GET", "me", "", nil, http.StatusUnauthorized},
+		{"a wrong token", "GET", "me", "nope", nil, http.StatusUnauthorized},
+		{"an unknown member", "POST", "keys", tok, map[string]string{"other": "x"}, http.StatusBadRequest},
+		{"a key without a proof", "POST", "keys", tok, map[string][]byte{"cose": anna.COSEKey()}, http.StatusBadRequest},
+	} {
+		code, out := e.api(c.method, c.path, c.tok, c.body)
+		if code != c.want || !strings.HasPrefix(string(out), `{"error":`) {
+			t.Errorf("%s: %d %s, want %d and JSON", c.name, code, out, c.want)
+		}
+	}
+	if code, _ := e.api("GET", "companies/"+acme+"/chain", ptok, nil); code != http.StatusOK {
+		t.Errorf("a person reads the chain: %d", code)
+	}
+
+	// Keys: a proof for another account, a key someone else registered, the cap.
+	proof, _ := anna.SignStatement(verify.MakeKeyProof(account, e.clock.now()), softkey.Options{})
+	if code, _ := e.api("POST", "keys", ptok, map[string]any{"cose": anna.COSEKey(), "proof": proof}); code != http.StatusBadRequest {
+		t.Errorf("the owner's proof sent by a person: %d", code)
+	}
+	if code, _ := e.registerKey(ptok, paccount, anna); code != http.StatusConflict {
+		t.Errorf("a key registered by another account: %d", code)
+	}
+	for i := 1; i < chains.MaxKeys; i++ {
+		k, _ := softkey.New(verify.EdDSA)
+		if code, _ := e.registerKey(tok, account, k); code != http.StatusOK {
+			t.Fatalf("key %d: %d", i+1, code)
+		}
+	}
+	k, _ := softkey.New(verify.EdDSA)
+	if code, _ := e.registerKey(tok, account, k); code != http.StatusConflict {
+		t.Errorf("a key over the cap: %d", code)
+	}
+
+	// A code needs a fresh second factor, works for 5 minutes, and gives a token for 12 hours.
+	e.clock.add(auth.FreshFor + time.Minute)
+	owner.get("/account")
+	if _, body := owner.post("/account/sign-code", nil); signCodeRe.MatchString(body) || !strings.Contains(body, "sign in again") {
+		t.Error("a code for a session whose second factor is old")
+	}
+	late := e.browser()
+	late.get("/signin")
+	late.post("/signin", url.Values{"email": {"owner@example.com"}, "password": {pw}})
+	if code, _ := late.post("/signin/code", url.Values{"code": {totpNow(t, secret, e.clock.now())}}); code != http.StatusOK {
+		t.Fatalf("signing in again: %d", code)
+	}
+	late.get("/account")
+	_, body := late.post("/account/sign-code", nil)
+	m := signCodeRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("no code after signing in again")
+	}
+	e.clock.add(auth.SignCodeLife + time.Second)
+	if code, _ := e.api("POST", "login", "", map[string]string{"code": m[1]}); code != http.StatusUnauthorized {
+		t.Errorf("an expired code: %d", code)
+	}
+	e.clock.add(auth.SignTokenLife - auth.SignCodeLife - auth.FreshFor)
+	if code, _ := e.api("GET", "me", tok, nil); code != http.StatusUnauthorized {
+		t.Errorf("an expired token: %d", code)
+	}
+
+	// A disabled account: its token stops working.
+	db := storetest.Superuser(t, e.panel.Store)
+	if _, err := db.Exec(context.Background(), `UPDATE accounts SET disabled = true WHERE email = 'person@example.com'`); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.add(-time.Hour) // back within the person's token
+	if code, _ := e.api("GET", "me", ptok, nil); code != http.StatusUnauthorized {
+		t.Errorf("a disabled account's token: %d", code)
+	}
+
+	// Guessing: the limit per address answers 429.
+	var last int
+	for range auth.PerAddress + 1 {
+		last, _ = e.api("POST", "login", "", map[string]string{"code": "AAAAA-AAAAA"})
+	}
+	if last != http.StatusTooManyRequests {
+		t.Errorf("guessing codes: %d", last)
 	}
 }
