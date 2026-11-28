@@ -95,13 +95,23 @@ type Options struct {
 
 // Sign signs a statement's hash.
 func (k *Key) Sign(statementHash [32]byte, o Options) (verify.Assertion, error) {
-	rpID := o.RPID
-	if rpID == "" {
-		rpID = verify.RPID
-	}
 	clientData := o.ClientData
 	if clientData == nil {
 		clientData = verify.ClientDataJSON(statementHash)
+	}
+	ad, sig, err := k.SignClientDataHash(sha256.Sum256(clientData), o)
+	if err != nil {
+		return verify.Assertion{}, err
+	}
+	return verify.Assertion{AuthenticatorData: ad, ClientDataJSON: clientData, Signature: sig}, nil
+}
+
+// SignClientDataHash signs the way a security key does, given only the hash of the client data: it returns the
+// authenticator data and the signature over it followed by the hash. Options.ClientData is not used.
+func (k *Key) SignClientDataHash(clientHash [32]byte, o Options) (authenticatorData, signature []byte, err error) {
+	rpID := o.RPID
+	if rpID == "" {
+		rpID = verify.RPID
 	}
 	flags := byte(0x01 | 0x04)
 	if o.NoTouch {
@@ -121,10 +131,8 @@ func (k *Key) Sign(statementHash [32]byte, o Options) (verify.Assertion, error) 
 	ad = append(ad, flags)
 	ad = binary.BigEndian.AppendUint32(ad, k.counter)
 
-	clientHash := sha256.Sum256(clientData)
 	signed := append(append([]byte{}, ad...), clientHash[:]...)
 	var sig []byte
-	var err error
 	switch k.Alg {
 	case verify.EdDSA:
 		sig, err = k.signer.Sign(rand.Reader, signed, crypto.Hash(0))
@@ -133,9 +141,9 @@ func (k *Key) Sign(statementHash [32]byte, o Options) (verify.Assertion, error) 
 		sig, err = k.signer.Sign(rand.Reader, h[:], crypto.SHA256)
 	}
 	if err != nil {
-		return verify.Assertion{}, err
+		return nil, nil, err
 	}
-	return verify.Assertion{AuthenticatorData: ad, ClientDataJSON: clientData, Signature: sig}, nil
+	return ad, sig, nil
 }
 
 // ID is the key's id as lists name it.

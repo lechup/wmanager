@@ -36,7 +36,7 @@ party id no web page can claim.
   lost or expired link is replaced with "New link".
 - **A company's page** shows its people and its audit log, checked link by link, with an export as JSON lines (to
   check the hashes) or CSV, and its administrators who sign, with the company's fingerprint.
-- **wmanager-sign** connects with a code from the page "Account", made within 10 minutes of the second factor. It
+- **[wmanager-sign](sign.md)** connects with a code from the page "Account", made within 10 minutes of the second factor. It
   works once, for 5 minutes, and nobody else should ever see it. Wrong codes are limited per address and, together,
   to 1000 a minute for the whole server. The token lasts 12 hours and reaches only the sign API. "Disconnect
   wmanager-sign everywhere" ends every token of the account and a code still waiting.
