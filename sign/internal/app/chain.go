@@ -21,27 +21,33 @@ import (
 // gets the lists it lacks, when the account may give them. A chain that leaves the held one, or another chain for
 // the id the server gave this company before, is an alarm: it could bring back a key removed since.
 func (a *App) load(ctx context.Context, s *session, c api.Company) (*home.Company, *verify.Chain, error) {
+	held, ch, _, err := a.loadLists(ctx, s, c)
+	return held, ch, err
+}
+
+// loadLists is load, with the lists the server gave.
+func (a *App) loadLists(ctx context.Context, s *session, c api.Company) (*home.Company, *verify.Chain, []verify.Signed, error) {
 	lists, err := s.client.Chain(ctx, c.ID)
 	if err != nil {
-		return nil, nil, a.apiErr(s, err)
+		return nil, nil, nil, a.apiErr(s, err)
 	}
 	mapped, mappedCh, err := a.Home.ByServer(s.client.Server, c.ID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	held, ch := mapped, mappedCh
 	if len(lists) > 0 {
 		id := lists[0].Hash()
 		if mapped != nil && mappedCh.Company != id {
-			return nil, nil, a.failAs(verify.ErrForkedChain, "chain.forked", show.Visible(c.Name),
+			return nil, nil, nil, a.failAs(verify.ErrForkedChain, "chain.forked", show.Visible(c.Name),
 				a.t("chain.another", verify.Fingerprint(mappedCh.Company)))
 		}
 		if held, ch, err = a.Home.Company(hex.EncodeToString(id[:])); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	if held == nil {
-		return nil, nil, nil
+		return nil, nil, lists, nil
 	}
 	name := show.Visible(held.Name)
 	before := len(ch.Signed)
@@ -61,9 +67,9 @@ func (a *App) load(ctx context.Context, s *session, c api.Company) (*home.Compan
 			}
 		}
 	case errors.Is(err, verify.ErrForkedChain):
-		return nil, nil, a.failAs(verify.ErrForkedChain, "chain.forked", name, err.Error())
+		return nil, nil, nil, a.failAs(verify.ErrForkedChain, "chain.forked", name, err.Error())
 	case err != nil:
-		return nil, nil, a.fail("chain.bad", name, err.Error())
+		return nil, nil, nil, a.fail("chain.bad", name, err.Error())
 	}
 	for i := before; i < len(ch.Signed); i++ {
 		a.say("chain.new", ch.Lists[i].Sequence, show.Visible(signerName(ch.Lists[i-1], ch.Signed[i].Key)),
@@ -81,10 +87,10 @@ func (a *App) load(ctx context.Context, s *session, c api.Company) (*home.Compan
 	if len(ch.Signed) > before || held.Servers[s.client.Server] != c.ID {
 		held.Servers[s.client.Server] = c.ID
 		if err := a.Home.SetCompany(held, ch); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return held, ch, nil
+	return held, ch, lists, nil
 }
 
 // held is a company whose chain is held, brought up to the server's.
@@ -222,15 +228,13 @@ func (a *App) trustCompany(ctx context.Context, which string) error {
 	if err != nil {
 		return err
 	}
-	if h, ch, err := a.load(ctx, s, c); err != nil {
+	h, ch, lists, err := a.loadLists(ctx, s, c)
+	if err != nil {
 		return err
-	} else if h != nil {
+	}
+	if h != nil {
 		a.say("company.heldalready", show.Visible(h.Name), verify.Fingerprint(ch.Company))
 		return nil
-	}
-	lists, err := s.client.Chain(ctx, c.ID)
-	if err != nil {
-		return a.apiErr(s, err)
 	}
 	if len(lists) == 0 {
 		return a.fail("err.nochainyet", show.Visible(c.Name))
@@ -242,11 +246,11 @@ func (a *App) trustCompany(ctx context.Context, which string) error {
 	if !verify.MatchesFingerprint(lists[0].Hash(), typed) {
 		return a.fail("err.fpmismatch", show.Visible(c.Name))
 	}
-	ch, err := verify.VerifyChain(typed, lists)
+	ch, err = verify.VerifyChain(typed, lists)
 	if err != nil {
 		return a.fail("chain.bad", show.Visible(c.Name), err.Error())
 	}
-	h := &home.Company{Name: c.Name, Servers: map[string]string{s.client.Server: c.ID}}
+	h = &home.Company{Name: c.Name, Servers: map[string]string{s.client.Server: c.ID}}
 	if err := a.Home.SetCompany(h, ch); err != nil {
 		return err
 	}
@@ -271,14 +275,12 @@ func (a *App) initCompany(ctx context.Context, which string) error {
 	if c.Role != "admin" {
 		return a.fail("err.notadmin", show.Visible(c.Name))
 	}
-	if h, _, err := a.load(ctx, s, c); err != nil {
-		return err
-	} else if h != nil {
-		return a.fail("err.haschain", show.Visible(h.Name))
-	}
-	lists, err := s.client.Chain(ctx, c.ID)
+	held, _, lists, err := a.loadLists(ctx, s, c)
 	if err != nil {
-		return a.apiErr(s, err)
+		return err
+	}
+	if held != nil {
+		return a.fail("err.haschain", show.Visible(held.Name))
 	}
 	if len(lists) > 0 {
 		return a.fail("err.haschain", show.Visible(c.Name))
@@ -355,9 +357,14 @@ func (a *App) initCompany(ctx context.Context, which string) error {
 	a.say("company.made", show.Visible(c.Name), verify.Fingerprint(ch.Company))
 	if err := s.client.Append(ctx, c.ID, signed); err != nil {
 		if st := api.Status(err); st >= 400 && st < 500 {
-			// Refused: this list is no company's; forget it, and its fingerprint with it.
-			a.Home.ForgetCompany(ch.CompanyID())
-			a.say("company.refused")
+			// Refused: unless the server has this list all the same, it is no company's; forget it, and its
+			// fingerprint with it.
+			if l, cerr := s.client.Chain(ctx, c.ID); cerr == nil && (len(l) == 0 || l[0].Hash() != signed.Hash()) {
+				if ferr := a.Home.ForgetCompany(ch.CompanyID()); ferr != nil {
+					return ferr
+				}
+				a.say("company.refused")
+			}
 			return a.apiErr(s, err)
 		}
 		a.say("company.notsent", err.Error())

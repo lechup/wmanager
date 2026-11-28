@@ -74,7 +74,7 @@ func Normalize(raw string) (string, error) {
 	host := strings.ToLower(u.Hostname())
 	switch {
 	case strings.Contains(host, ":"):
-		if net.ParseIP(host) == nil {
+		if net.ParseIP(host) == nil || strings.Contains(host, ".") {
 			return "", ErrBadServer
 		}
 		host = "[" + host + "]"
@@ -187,11 +187,20 @@ type Me struct {
 	Companies []Company `json:"companies"`
 }
 
-// Me is who the token is for.
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// Me is who the token is for. A company id that isn't one refuses the whole answer.
 func (c *Client) Me(ctx context.Context) (Me, error) {
 	var m Me
-	err := c.do(ctx, http.MethodGet, "me", nil, &m)
-	return m, err
+	if err := c.do(ctx, http.MethodGet, "me", nil, &m); err != nil {
+		return m, err
+	}
+	for _, co := range m.Companies {
+		if !uuidRe.MatchString(co.ID) {
+			return Me{}, fmt.Errorf("the server lists a company with an id that isn't one (%s)", show.Clip(co.ID, 40))
+		}
+	}
+	return m, nil
 }
 
 func companyPath(id, rest string) string { return "companies/" + url.PathEscape(id) + "/" + rest }

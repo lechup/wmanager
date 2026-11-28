@@ -55,7 +55,7 @@
  "err.nopublicurl": "The server can't register keys until its address is set (WMANAGER_PUBLIC_URL).",
  "err.noserver": "Not connected to a server: run wmanager-sign connect https://your-server",
  "err.notadmin": "You are not an administrator of %s.",
- "err.notlisted": "The server doesn't list %s among your companies any more.",
+ "err.notlisted": "The server doesn't list %s among your companies under the id it gave it before. Run wmanager-sign to see the companies it lists, or give the company's id.",
  "err.notoken": "The connection to %[1]s has ended: make a code on the panel's page Account, then run wmanager-sign connect %[1]s",
  "err.nouv": "The security key made the key without checking your PIN or fingerprint and your touch: it can't be used.",
  "err.synced": "That is a synced passkey (backup eligible): a signing key must stay on one security key. Use a security key, not a phone or a password manager.",

@@ -20,7 +20,7 @@ func TestNormalize(t *testing.T) {
 		"https://wm.example.com?x", "https://wm.example.com#x", "https://wm.example.com:0", "https://wm.example.com:99999",
 		"https://", "ftp://wm.example.com", "https://wm.example.com:08443x", "https://..", "https://.",
 		"https://a%c2%9b31m", "https://wm_example.com", "https://-wm.example.com", "https://wm..example.com",
-		"https://[fe80::1%25eth0]", "https://[not-ip]"} {
+		"https://[fe80::1%25eth0]", "https://[not-ip]", "https://[::ffff:1.2.3.4]"} {
 		if got, err := Normalize(in); err == nil {
 			t.Errorf("Normalize(%q) = %q, want a refusal", in, got)
 		}

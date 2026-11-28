@@ -14,15 +14,18 @@ package home
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,6 +35,8 @@ import (
 // Home is the folder.
 type Home struct {
 	Dir string
+	// checked are the chains checked already in this run, by the hash of their file: each is checked once.
+	checked map[[32]byte]*verify.Chain
 }
 
 // Default is $WMANAGER_SIGN_HOME, or wmanager-sign in the user's configuration folder.
@@ -232,19 +237,36 @@ func (h *Home) Company(id string) (*Company, *verify.Chain, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	var c Company
-	ok, err := readJSON(p, &c)
-	if err != nil || !ok {
+	b, err := os.ReadFile(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
 		return nil, nil, err
 	}
-	ch, err := verify.VerifyChain(c.Fingerprint, c.Chain)
-	if err != nil || ch.CompanyID() != id {
-		return nil, nil, fmt.Errorf("the chain kept in %s doesn't check: %v", p, err)
+	var c Company
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", p, err)
+	}
+	sum := sha256.Sum256(b)
+	ch := h.checked[sum]
+	if ch == nil {
+		if ch, err = verify.VerifyChain(c.Fingerprint, c.Chain); err != nil {
+			return nil, nil, fmt.Errorf("the chain kept in %s doesn't check: %w", p, err)
+		}
+		if h.checked == nil {
+			h.checked = map[[32]byte]*verify.Chain{}
+		}
+		h.checked[sum] = ch
+	}
+	if ch.CompanyID() != id {
+		return nil, nil, fmt.Errorf("the chain kept in %s is another company's", p)
 	}
 	if c.Servers == nil {
 		c.Servers = map[string]string{}
 	}
-	return &c, ch, nil
+	// A copy: callers extend it.
+	return &c, &verify.Chain{Company: ch.Company, Lists: slices.Clone(ch.Lists), Signed: slices.Clone(ch.Signed)}, nil
 }
 
 // Companies is every company held.
@@ -274,7 +296,7 @@ func (h *Home) ByServer(server, serverID string) (*Company, *verify.Chain, error
 		return nil, nil, err
 	}
 	for i, c := range cs {
-		if c.Servers[server] == serverID {
+		if id, ok := c.Servers[server]; ok && id == serverID {
 			return c, chs[i], nil
 		}
 	}
@@ -282,21 +304,31 @@ func (h *Home) ByServer(server, serverID string) (*Company, *verify.Chain, error
 }
 
 // SetCompany keeps a company with its checked chain. A chain is only ever replaced by one that starts with it: the
-// caller checks that with verify.Chain.Update; this checks it again.
+// caller checks that with verify.Chain.Update; this checks it again. A company held keeps the name it was taken
+// with, and the ids other servers give it.
 func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 	p, err := h.companyPath(ch.CompanyID())
 	if err != nil {
 		return err
 	}
-	if _, held, err := h.Company(ch.CompanyID()); err != nil {
+	name, servers := c.Name, maps.Clone(c.Servers)
+	if servers == nil {
+		servers = map[string]string{}
+	}
+	if old, held, err := h.Company(ch.CompanyID()); err != nil {
 		return err
 	} else if held != nil {
-		again := &verify.Chain{Company: held.Company, Lists: held.Lists, Signed: held.Signed}
-		if err := again.Update(ch.Signed); err != nil {
+		if err := held.Update(ch.Signed); err != nil {
 			return err
 		}
+		name = old.Name
+		for k, v := range old.Servers {
+			if _, ok := servers[k]; !ok {
+				servers[k] = v
+			}
+		}
 	}
-	return writeJSON(p, Company{Name: c.Name, Fingerprint: verify.Fingerprint(ch.Company), Servers: c.Servers, Chain: ch.Signed})
+	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed})
 }
 
 // ForgetCompany removes a company held: only for a first list the server refused, never for a chain taken.

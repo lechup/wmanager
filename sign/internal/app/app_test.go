@@ -41,6 +41,8 @@ type person struct {
 	alias     [2]string
 	// lose loses the server's answers to POSTs, after the server has them; drop loses the POSTs themselves.
 	lose, drop bool
+	// refuse answers POSTs with a refusal: after the server has taken them, or (refuseOnly) without passing them on.
+	refuse, refuseOnly bool
 }
 
 func newPerson(t *testing.T, srv *servertest.Server, account string) *person {
@@ -60,7 +62,19 @@ func (l lying) RoundTrip(r *http.Request) (*http.Response, error) {
 	if l.p.drop && r.Method == http.MethodPost {
 		return nil, errors.New("no route to host (the test's)")
 	}
+	refusal := func() *http.Response {
+		b := []byte(`{"error":"refused (the test's)"}`)
+		return &http.Response{StatusCode: http.StatusConflict, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(bytes.NewReader(b)), ContentLength: int64(len(b)), Request: r}
+	}
+	if l.p.refuseOnly && r.Method == http.MethodPost {
+		return refusal(), nil
+	}
 	resp, err := l.next.RoundTrip(r)
+	if err == nil && l.p.refuse && r.Method == http.MethodPost {
+		resp.Body.Close()
+		return refusal(), nil
+	}
 	if err == nil && l.p.lose && r.Method == http.MethodPost {
 		resp.Body.Close()
 		return nil, errors.New("connection reset (the test's)")
@@ -556,5 +570,68 @@ func TestFirstListAnswerLost(t *testing.T) {
 	}
 	if out := anna.must("", ""); strings.Contains(out, "behind") || !strings.Contains(out, "Beta (admin)") {
 		t.Fatalf("the server has it: %s", out)
+	}
+}
+
+// A first list the server refuses is forgotten, unless the server has it all the same.
+func TestFirstListRefused(t *testing.T) {
+	srv := servertest.New(t)
+	anna := newPerson(t, srv, srv.Person("anna@example.com", "", ""))
+	acme, beta := srv.Company("Acme"), srv.Company("Beta")
+	srv.Join(anna.account, acme, "admin")
+	srv.Join(anna.account, beta, "admin")
+	anna.connect()
+	anna.newKey()
+	anna.refuseOnly = true
+	if out, err := anna.run("Anna\nyes\n", "company", "init", "Acme"); err == nil || !strings.Contains(out, "Forget it") {
+		t.Fatalf("a refused first list: %v\n%s", err, out)
+	}
+	anna.refuseOnly = false
+	if anna.heldLists(acme) != 0 {
+		t.Fatal("a refused first list is kept")
+	}
+	anna.refuse = true
+	if out, err := anna.run("Anna\nyes\n", "company", "init", "Beta"); err == nil || strings.Contains(out, "Forget it") {
+		t.Fatalf("a first list the server took and said it refused: %v\n%s", err, out)
+	}
+	anna.refuse = false
+	if anna.heldLists(beta) != 1 {
+		t.Fatal("a first list the server has was forgotten")
+	}
+	// Acme can be made again.
+	anna.must("Anna\nyes\n", "company", "init", "Acme")
+}
+
+// A server that swaps two companies' names doesn't swap which one a command acts on; a company id that isn't one
+// refuses the server's list.
+func TestServerSwapsNames(t *testing.T) {
+	w := setup(t)
+	beta := w.srv.Company("Beta")
+	w.srv.Join(w.anna.account, beta, "admin")
+	out := w.anna.must("Anna\nyes\n", "company", "init", "Beta")
+	betaFP := fpRe.FindString(out[strings.Index(out, "is set up"):])
+	w.anna.rewriteMe = func(m *api.Me) {
+		for i := range m.Companies {
+			switch m.Companies[i].Name {
+			case "Acme":
+				m.Companies[i].Name = "Beta"
+			case "Beta":
+				m.Companies[i].Name = "Acme"
+			}
+		}
+	}
+	out = w.anna.must("", "fingerprint", "Acme")
+	if !strings.Contains(out, w.fp) || strings.Contains(out, betaFP) || !strings.Contains(out, "now calls it Beta") {
+		t.Fatalf("names swapped: %s", out)
+	}
+	w.anna.rewriteMe = func(m *api.Me) { m.Companies = append(m.Companies, api.Company{ID: "", Name: "X", Role: "admin"}) }
+	if _, err := w.anna.run("", ""); err == nil || !strings.Contains(err.Error(), "isn't one") {
+		t.Fatalf("an empty company id: %v", err)
+	}
+	w.anna.rewriteMe = func(m *api.Me) {
+		m.Companies = append(m.Companies, api.Company{ID: "../" + w.company, Name: "X", Role: "admin"})
+	}
+	if _, err := w.anna.run("", ""); err == nil || !strings.Contains(err.Error(), "isn't one") {
+		t.Fatalf("a company id with a path: %v", err)
 	}
 }
