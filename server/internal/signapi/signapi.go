@@ -1,0 +1,291 @@
+// Package signapi is the API wmanager-sign talks to (stage 2b): signing in with a code from the panel, the server's
+// clock (wmanager-sign signs only when its own is within 10 minutes of it), the companies, their chains of admin
+// lists, and the signing keys people register. It hands out and takes signed statements; it signs nothing.
+package signapi
+
+import (
+	"encoding/json/v2"
+	"errors"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/lechup/wmanager/server/internal/accounts"
+	"github.com/lechup/wmanager/server/internal/auth"
+	"github.com/lechup/wmanager/server/internal/chains"
+	"github.com/lechup/wmanager/server/internal/store"
+	"github.com/lechup/wmanager/verify"
+)
+
+// Prefix is where the API lives.
+const Prefix = "/api/sign/v1/"
+
+// MaxBody is the largest request: an admin list's limit and its signature, with room.
+const MaxBody = 512 << 10
+
+// API is the sign API.
+type API struct {
+	Store *store.Store
+	Auth  *auth.Service
+	Log   *slog.Logger
+	// ClientAddr gives the client's address (the panel's, which knows the trusted proxies).
+	ClientAddr func(*http.Request) string
+	// PublicURL gives the server's address (WMANAGER_PUBLIC_URL), which key proofs name; "" refuses them.
+	PublicURL func() string
+}
+
+var errNoPublicURL = errors.New("registering keys needs WMANAGER_PUBLIC_URL")
+
+// Handler is the API's routes, every answer JSON.
+func (a *API) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+Prefix+"login", a.login)
+	mux.HandleFunc("GET "+Prefix+"time", a.time)
+	mux.HandleFunc("GET "+Prefix+"me", a.authed(a.me))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/chain", a.authed(a.company(a.chain)))
+	mux.HandleFunc("POST "+Prefix+"companies/{company}/chain", a.authed(a.company(a.appendList)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/keys", a.authed(a.company(a.companyKeys)))
+	mux.HandleFunc("POST "+Prefix+"keys", a.authed(a.registerKey))
+	cop := http.NewCrossOriginProtection()
+	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fail(w, http.StatusForbidden, "cross-origin request")
+	}))
+	return cop.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if _, pattern := mux.Handler(r); pattern == "" {
+			fail(w, http.StatusNotFound, "no such call")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, MaxBody)
+		mux.ServeHTTP(w, r)
+	}))
+}
+
+func out(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.MarshalWrite(w, v)
+}
+
+type apiError struct {
+	Error string `json:"error"`
+}
+
+func fail(w http.ResponseWriter, status int, msg string) { out(w, status, apiError{msg}) }
+
+var errBadRequest = errors.New("not the JSON this call takes")
+
+func (a *API) failErr(w http.ResponseWriter, r *http.Request, err error) {
+	var tooBig *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooBig):
+		fail(w, http.StatusRequestEntityTooLarge, "too large")
+	case errors.Is(err, errBadRequest):
+		fail(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, errNoPublicURL):
+		fail(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, verify.ErrKeyProof):
+		fail(w, http.StatusBadRequest, "not a signing key with a proof for this account")
+	case errors.Is(err, auth.ErrSignCode), errors.Is(err, auth.ErrSignToken):
+		fail(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, auth.ErrTooMany):
+		fail(w, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, chains.ErrNotAdmin), errors.Is(err, chains.ErrNotMember):
+		fail(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, chains.ErrKeyTaken), errors.Is(err, chains.ErrTooManyKeys), errors.Is(err, chains.ErrTaken):
+		fail(w, http.StatusConflict, err.Error())
+	case errors.Is(err, chains.ErrBroken):
+		a.Log.Error("sign api: a stored chain doesn't check", "path", r.URL.Path, "err", err)
+		fail(w, http.StatusConflict, err.Error())
+	case errors.Is(err, verify.ErrStatement), errors.Is(err, verify.ErrSignature), errors.Is(err, verify.ErrForkedChain),
+		errors.Is(err, verify.ErrOlderChain):
+		fail(w, http.StatusConflict, err.Error())
+	default:
+		a.Log.Error("sign api", "path", r.URL.Path, "err", err)
+		fail(w, http.StatusInternalServerError, "internal error")
+	}
+}
+
+func readJSON(r *http.Request, v any) error {
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, v, json.RejectUnknownMembers(true)); err != nil {
+		return errBadRequest
+	}
+	return nil
+}
+
+func (a *API) addr(r *http.Request) string {
+	if a.ClientAddr != nil {
+		return a.ClientAddr(r)
+	}
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return host
+}
+
+func (a *API) login(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Code string `json:"code"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	tok, account, expires, err := a.Auth.ExchangeSignCode(r.Context(), a.addr(r), in.Code)
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, struct {
+		Token   string    `json:"token"`
+		Account string    `json:"account"`
+		Expires time.Time `json:"expires"`
+	}{tok, account, expires})
+}
+
+func (a *API) time(w http.ResponseWriter, r *http.Request) {
+	out(w, http.StatusOK, struct {
+		Now time.Time `json:"now"`
+	}{a.Auth.Now().UTC()})
+}
+
+type authedHandler func(w http.ResponseWriter, r *http.Request, accountID string)
+
+func (a *API) authed(h authedHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || tok == "" {
+			fail(w, http.StatusUnauthorized, "no token")
+			return
+		}
+		account, err := a.Auth.LookupSignToken(r.Context(), tok)
+		if err != nil {
+			a.failErr(w, r, err)
+			return
+		}
+		h(w, r, account)
+	}
+}
+
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// company refuses a company id that isn't one, as the panel does.
+func (a *API) company(h authedHandler) authedHandler {
+	return func(w http.ResponseWriter, r *http.Request, account string) {
+		if !uuidRe.MatchString(r.PathValue("company")) {
+			fail(w, http.StatusNotFound, "no such company")
+			return
+		}
+		h(w, r, account)
+	}
+}
+
+// Company is a company as wmanager-sign lists it. Its fingerprint is the server's word only: wmanager-sign checks
+// the chain against the fingerprint it keeps.
+type Company struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	Fingerprint string `json:"fingerprint,omitzero"`
+}
+
+func (a *API) me(w http.ResponseWriter, r *http.Request, account string) {
+	cs, err := accounts.CompaniesOf(r.Context(), a.Store, account)
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	list := []Company{}
+	for _, c := range cs {
+		fp, err := chains.Fingerprint(r.Context(), a.Store, account, c.ID)
+		if err != nil {
+			a.failErr(w, r, err)
+			return
+		}
+		list = append(list, Company{ID: c.ID, Name: c.Name, Role: c.Role, Fingerprint: fp})
+	}
+	out(w, http.StatusOK, struct {
+		Account   string    `json:"account"`
+		Companies []Company `json:"companies"`
+	}{account, list})
+}
+
+func (a *API) chain(w http.ResponseWriter, r *http.Request, account string) {
+	lists, err := chains.Load(r.Context(), a.Store, account, r.PathValue("company"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if lists == nil {
+		lists = []verify.Signed{}
+	}
+	out(w, http.StatusOK, struct {
+		Lists []verify.Signed `json:"lists"`
+	}{lists})
+}
+
+func (a *API) appendList(w http.ResponseWriter, r *http.Request, account string) {
+	var next verify.Signed
+	if err := readJSON(r, &next); err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	c, err := chains.Append(r.Context(), a.Store, account, r.PathValue("company"), next)
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, struct {
+		Fingerprint string `json:"fingerprint"`
+		Sequence    int64  `json:"sequence"`
+	}{verify.Fingerprint(c.Company), c.Current().Sequence})
+}
+
+// registerKey takes a new signing key with its proof (verify.MakeKeyProof for this server and account, at the
+// server's time, signed by the key).
+func (a *API) registerKey(w http.ResponseWriter, r *http.Request, account string) {
+	var in struct {
+		COSE  []byte        `json:"cose"`
+		Proof verify.Signed `json:"proof"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	server := ""
+	if a.PublicURL != nil {
+		server = strings.TrimSuffix(a.PublicURL(), "/")
+	}
+	if server == "" {
+		a.failErr(w, r, errNoPublicURL)
+		return
+	}
+	id, err := chains.RegisterKey(r.Context(), a.Store, server, account, in.COSE, in.Proof, a.Auth.Now())
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, struct {
+		ID string `json:"id"`
+	}{id})
+}
+
+func (a *API) companyKeys(w http.ResponseWriter, r *http.Request, account string) {
+	keys, err := chains.CompanyKeys(r.Context(), a.Store, account, r.PathValue("company"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if keys == nil {
+		keys = []chains.Key{}
+	}
+	out(w, http.StatusOK, struct {
+		Keys []chains.Key `json:"keys"`
+	}{keys})
+}

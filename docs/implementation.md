@@ -136,6 +136,10 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - the six checks;
   - a software authenticator for the tests, with a test for every refusal: a synced key, another company, a wrong
     origin, an old serial, a wrong algorithm.
+- **2b, the server's side** (done first): a short code made in the panel, typed into `wmanager-sign`, becomes a
+  token of the sign API for 12 hours; the API hands out each company's chain and takes the next admin list, checked
+  with `verify` (the computers check it again themselves); people register their signing keys there, each with a
+  proof signed by the key (`verify.KeyProof`); the panel shows a company's fingerprint and administrators.
 - **2b, `wmanager-sign` on Linux:**
   - the first admin list and the company's fingerprint, then the changes of the list;
   - showing what is signed, with control characters made visible and the difference from the last verified state;
@@ -204,7 +208,7 @@ option is the proposal.
 
 | Decision | Before | Options |
 | --- | --- | --- |
-| How `wmanager-sign` signs in to the server | 2b | through the browser and back to a local address, as `gh auth login` does / a code from the panel typed into `wmanager-sign` |
+| How `wmanager-sign` signs in to the server | 2b | decided: a code from the panel typed into `wmanager-sign` (it also works over SSH on another machine) |
 | How the agent proves itself to the server | 3a | every request signed with the computer's key in the TPM / TLS with a client certificate of that key, which Caddy would have to pass through |
 | The TPM library | 3a | the one trial 3 shows to work |
 | What the payload reads | 4b | today's `manifest.psd1` and `groups.psd1`, written by the agent / a new JSON format, with the PowerShell code changed to read it |

@@ -27,6 +27,8 @@ import (
 	"github.com/lechup/wmanager/server/internal/accounts"
 	"github.com/lechup/wmanager/server/internal/audit"
 	"github.com/lechup/wmanager/server/internal/auth"
+	"github.com/lechup/wmanager/server/internal/chains"
+	"github.com/lechup/wmanager/server/internal/signapi"
 	"github.com/lechup/wmanager/server/internal/store"
 )
 
@@ -74,6 +76,16 @@ var funcs = template.FuncMap{
 	"t":    func(key string, args ...any) string { return key },
 	"time": func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05 UTC") },
 	"b64":  func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) },
+	"keyfp": func(id string) string {
+		if len(id) < 32 {
+			return id
+		}
+		var g []string
+		for i := 0; i < 32; i += 4 {
+			g = append(g, strings.ToUpper(id[i:i+4]))
+		}
+		return strings.Join(g, "-")
+	},
 }
 
 // Handler is the panel's routes, with its protections around them.
@@ -104,6 +116,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /account/passkey/begin", s.full(s.passkeyAddBegin))
 	mux.HandleFunc("POST /account/passkey/finish", s.full(s.passkeyAddFinish))
 	mux.HandleFunc("POST /account/passkey/remove", s.full(s.passkeyRemove))
+	mux.HandleFunc("POST /account/sign-code", s.full(s.signCode))
+	mux.HandleFunc("POST /account/sign-revoke", s.full(s.signRevoke))
 	mux.HandleFunc("GET /c/{company}", s.full(s.company))
 	mux.HandleFunc("GET /c/{company}/audit.json", s.full(s.auditExport))
 	mux.HandleFunc("GET /c/{company}/audit.csv", s.full(s.auditExport))
@@ -116,7 +130,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/unlock", s.owner(s.unlock))
 
 	cop := http.NewCrossOriginProtection()
-	return s.logged(headers(cop.Handler(limitBody(mux))))
+	top := http.NewServeMux()
+	top.Handle("/", cop.Handler(limitBody(mux)))
+	api := &signapi.API{Store: s.Store, Auth: s.Auth, Log: s.Log, ClientAddr: s.clientAddr,
+		PublicURL: func() string { return s.PublicURL }}
+	top.Handle(signapi.Prefix, api.Handler())
+	return s.logged(headers(top))
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
@@ -612,12 +631,14 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request, ses auth.Session) 
 
 // CompanyPage is the data of a company's page.
 type CompanyPage struct {
-	Company accounts.Company
-	Members []accounts.Member
-	Entries []audit.Record // newest first, at most 100
-	Total   int
-	Head    string
-	Broken  string
+	Chain       *chains.Summary
+	ChainBroken string
+	Company     accounts.Company
+	Members     []accounts.Member
+	Entries     []audit.Record // newest first, at most 100
+	Total       int
+	Head        string
+	Broken      string
 }
 
 // companyOf finds the company among the account's own: another company's id is "not found", the same as one
@@ -652,6 +673,14 @@ func (s *Server) company(w http.ResponseWriter, r *http.Request, ses auth.Sessio
 	}
 	who := store.Who{Account: ses.AccountID}
 	p := CompanyPage{Company: c, Members: members}
+	p.Chain, err = chains.Summarize(r.Context(), s.Store, ses.AccountID, c.ID)
+	switch {
+	case errors.Is(err, chains.ErrBroken):
+		p.ChainBroken = err.Error()
+	case err != nil:
+		s.internal(w, r, err)
+		return
+	}
 	head, recs, err := audit.Check(r.Context(), s.Store, who, audit.CompanyChain(c.ID), nil)
 	switch {
 	case errors.Is(err, audit.ErrBroken):
@@ -906,18 +935,48 @@ func (s *Server) passkeySignInFinish(w http.ResponseWriter, r *http.Request, ses
 
 // AccountPage is the data of the account's page.
 type AccountPage struct {
-	Passkeys []auth.Passkey
-	CanAdd   bool // the panel knows its own address (WMANAGER_PUBLIC_URL), which passkeys need
+	Passkeys    []auth.Passkey
+	CanAdd      bool   // the panel knows its own address (WMANAGER_PUBLIC_URL), which passkeys need
+	SignCode    string // a code for wmanager-sign, shown once
+	SignExpires time.Time
+	SignStale   bool // a code needs the second factor given within auth.FreshFor
 }
 
 func (s *Server) account(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	s.accountPage(w, r, ses, AccountPage{})
+}
+
+func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, ses auth.Session, data AccountPage) {
 	keys, err := s.Auth.Passkeys(r.Context(), token(r))
 	if err != nil {
 		s.internal(w, r, err)
 		return
 	}
 	_, rpErr := s.rp()
-	s.render(w, r, http.StatusOK, "account", &ses, Page{Data: AccountPage{Passkeys: keys, CanAdd: rpErr == nil}})
+	data.Passkeys, data.CanAdd = keys, rpErr == nil
+	s.render(w, r, http.StatusOK, "account", &ses, Page{Data: data})
+}
+
+// signCode shows a code for wmanager-sign once, in this response.
+func (s *Server) signCode(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	code, expires, err := s.Auth.CreateSignCode(r.Context(), token(r))
+	if errors.Is(err, auth.ErrStale) {
+		s.accountPage(w, r, ses, AccountPage{SignStale: true})
+		return
+	}
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	s.accountPage(w, r, ses, AccountPage{SignCode: code, SignExpires: expires})
+}
+
+func (s *Server) signRevoke(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	if err := s.Auth.RevokeSignTokens(r.Context(), token(r)); err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/account", http.StatusSeeOther)
 }
 
 func (s *Server) passkeyAddBegin(w http.ResponseWriter, r *http.Request, ses auth.Session) {
