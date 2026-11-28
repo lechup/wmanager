@@ -51,9 +51,9 @@ of `certtag`, which re-encoded the signature with `encoding/asn1` as Omaha does,
 SET OF, so about half of all two-certificate chains were refused. It now keeps the signature's bytes and only
 replaces its certificates, in their order. A fuzz test (`FuzzGetSet`) finds no input that crashes it.
 
-**On Windows** (2026-11-28, before the tag moved to its OID of 2.25 from a UUID, with a certificate written by
-`crypto/x509` under the example number 32473; to be done again with the 2.25 OID and the hand-written certificate
-before stage 3b relies on it; Windows 11 Pro build 26300, a virtual machine with a TPM 2.0 from swtpm;
+**On Windows** (2026-11-28, first with a certificate written by `crypto/x509` under the example number 32473, then
+again with the tag's OID of 2.25 from a UUID and the certificate written by hand, with the same results; Windows 11
+Pro build 26300, a virtual machine with a TPM 2.0 from swtpm;
 `trials/vm/stage0.ps1`): a Go exe signed with Authenticode by a self-signed certificate trusted on that machine.
 
 | File | Signature, padding check off | Signature, `EnableCertPaddingCheck` on |
