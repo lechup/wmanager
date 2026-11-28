@@ -42,6 +42,7 @@ type person struct {
 	rewriteState func(st **verify.Signed, reported *int64)
 	rewriteFile  func(content []byte) []byte
 	rewriteAudit func(after string, entries [][]byte) [][]byte
+	rewriteJob   func(job *verify.Signed)
 	alias        [2]string
 	// lose loses the server's answers to POSTs, after the server has them; drop loses the POSTs themselves.
 	lose, drop bool
@@ -133,6 +134,13 @@ func (l lying) RoundTrip(r *http.Request) (*http.Response, error) {
 			au.Entries = [][]byte{}
 		}
 		out = au
+	case l.p.rewriteJob != nil && strings.Contains(r.URL.Path, "/jobs/"):
+		var j verify.Signed
+		if err := json.UnmarshalRead(resp.Body, &j); err != nil {
+			return nil, err
+		}
+		l.p.rewriteJob(&j)
+		out = j
 	case l.p.rewriteFile != nil && strings.Contains(r.URL.Path, "/files/"):
 		var f struct {
 			Content []byte `json:"content"`

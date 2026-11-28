@@ -228,16 +228,29 @@ type Company struct {
 	// Former is the newest state seen signed by an administrator removed since: the computers that took it before
 	// the newer admin list have it, so the next state is shown against it too while it isn't older than the others.
 	Former *verify.Signed `json:"former,omitzero"`
-	// Audit is the newest entry of the company's audit log seen here: the history shown later must lead to it.
-	Audit *AuditHead `json:"audit,omitzero"`
+	// Audits is the newest entry of the company's audit log seen here, for each server: the whole history a
+	// server shows later must lead to it.
+	Audits map[string]AuditHead `json:"audits,omitzero"`
+
+	accepted map[string]bool // heads accepted anew in this run: they replace the one kept
 }
 
-// AuditHead is an entry of an audit log: its number, its hash, and the hash of the entry before, so that the
-// entry itself can be checked again when the server hands it out.
+// AuditHead is an entry of an audit log: its number and its hash (of the one before and its own bytes).
 type AuditHead struct {
 	Seq  int64    `json:"seq"`
 	Hash [32]byte `json:"hash"`
-	Prev [32]byte `json:"prev"`
+}
+
+// AcceptAudit replaces the head kept for a server with another, as the administrator decides (e.g. after the
+// server was moved or restored).
+func (c *Company) AcceptAudit(server string, head AuditHead) {
+	if c.Audits == nil {
+		c.Audits = map[string]AuditHead{}
+	}
+	if c.accepted == nil {
+		c.accepted = map[string]bool{}
+	}
+	c.Audits[server], c.accepted[server] = head, true
 }
 
 // Serial is a state's serial, or 0 for none.
@@ -350,7 +363,10 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 	if err != nil {
 		return err
 	}
-	name, servers, state, mine, former, audit := c.Name, maps.Clone(c.Servers), c.State, c.Mine, c.Former, c.Audit
+	name, servers, state, mine, former, audits := c.Name, maps.Clone(c.Servers), c.State, c.Mine, c.Former, maps.Clone(c.Audits)
+	if audits == nil {
+		audits = map[string]AuditHead{}
+	}
 	if servers == nil {
 		servers = map[string]string{}
 	}
@@ -368,13 +384,15 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 		}
 		// A state held is only replaced by a newer one, unless the caller drops the one signed here.
 		state, mine, former = Newer(old.State, state), Newer(old.Mine, mine), Newer(old.Former, former)
-		// The audit head seen only moves forward.
-		if old.Audit != nil && (audit == nil || audit.Seq < old.Audit.Seq) {
-			audit = old.Audit
+		// An audit head seen only moves forward, unless the administrator accepted another.
+		for srv, oh := range old.Audits {
+			if nh, ok := audits[srv]; !c.accepted[srv] && (!ok || nh.Seq < oh.Seq) {
+				audits[srv] = oh
+			}
 		}
 	}
 	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed,
-		State: state, Mine: mine, Former: former, Audit: audit})
+		State: state, Mine: mine, Former: former, Audits: audits})
 }
 
 // ForgetCompany removes a company held: only for a first list the server refused, never for a chain taken.

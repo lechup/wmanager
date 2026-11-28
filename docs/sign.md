@@ -149,7 +149,8 @@ The script (2 lines):
 - Its groups become their computers when it is signed, from the state verified here; a computer or a secret that
   state doesn't have is refused. Its id is made here, and it expires at most 7 days after signing.
 - A **stop** names a signed job and some of its computers: it stops the job where it runs, and refuses it where it
-  comes later. `wmanager-sign` shows the job it stops.
+  comes later. `wmanager-sign` fetches the job by its id, checks its signature against the company's chain (an
+  administrator removed since may have signed it), and shows it whole before signing the stop.
 - **A secret's new value** is typed here and goes into the next state, with nothing else changed:
 
   ```bash
@@ -158,10 +159,16 @@ The script (2 lines):
 
 ## The audit log
 
-Each time `wmanager-sign` lists your companies, it reads the entries of each company's audit log added since it
-looked last and links them itself, from the newest entry it saw (which it checks again first). When the history
-the server shows no longer leads to that entry (changed, or restored from an older backup), it says so, and keeps
-the entry it saw. This is a head of the audit log kept off the server, next to the ones in Loki.
+Each time `wmanager-sign` lists your companies, it reads each company's whole audit log from the server, links it
+itself from the first entry (each entry's hash is the SHA-256 of the hash before and the entry's bytes), and checks
+that it leads to the newest entry it saw from that server. It shows that entry as `<number>:<hash>`, which can be
+compared with the heads in Loki (`wmanager-server audit verify company:<id> <number>:<hash>`). When the history no
+longer leads there (changed, or restored from an older backup), it says so, keeps the entry it saw, and the run
+ends with an error. Once you know why (a server moved or restored), take the log as it is now:
+
+```bash
+wmanager-sign audit accept Acme
+```
 
 ## What it refuses
 
@@ -185,7 +192,7 @@ In a folder only you can open: `$WMANAGER_SIGN_HOME`, or `~/.config/wmanager-sig
 | `server` | the server connected last |
 | `servers/<host>[_<port>]/token.json` | the connection's token, until it ends |
 | `servers/<host>[_<port>]/keys.json` | the signing keys made here: their public keys and credential ids |
-| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, one signed by an administrator removed since, and the newest audit entry it saw |
+| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, one signed by an administrator removed since, and the newest audit entry it saw from each server |
 
 A company is kept under its own id (the hash of its first admin list), not under the id a server gives it: a
 server that lists it again under a new id meets the chain held. Commands find a company by the name it had when it

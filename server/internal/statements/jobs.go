@@ -21,6 +21,7 @@ import (
 var (
 	ErrJobTaken = errors.New("statements: a job with that id is signed already")
 	ErrNoJob    = errors.New("statements: no such job")
+	ErrSame     = errors.New("statements: that statement is here already")
 )
 
 // MaxJobs is how many of the newest jobs Jobs lists.
@@ -57,7 +58,10 @@ func submit(ctx context.Context, s *store.Store, accountID, companyID string, si
 		                           VALUES ($1, $2, $3, $4, $5, $6, $7)`, companyID, h[:], typ, job, raw, signed.Key, accountID); err != nil {
 			var pg *pgconn.PgError
 			if errors.As(err, &pg) && pg.Code == "23505" {
-				return ErrJobTaken
+				if pg.ConstraintName == "statements_job" {
+					return ErrJobTaken
+				}
+				return ErrSame
 			}
 			return err
 		}
@@ -127,6 +131,27 @@ func SubmitStop(ctx context.Context, s *store.Store, accountID, companyID string
 		}
 		return st.Job, map[string]any{"job": st.Job, "computers": len(st.Computers)}, nil
 	})
+}
+
+// Job is a signed job of the company by its id, for one of its members.
+func Job(ctx context.Context, s *store.Store, accountID, companyID, id string) (verify.Signed, error) {
+	var out verify.Signed
+	err := s.Tx(ctx, store.Who{Account: accountID}, func(tx pgx.Tx) error {
+		if err := member(ctx, tx, accountID, companyID, false); err != nil {
+			return err
+		}
+		var raw []byte
+		err := tx.QueryRow(ctx, `SELECT signed FROM statements WHERE company_id = $1 AND type = 'job' AND job = $2`,
+			companyID, id).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoJob
+		}
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(raw, &out)
+	})
+	return out, err
 }
 
 // Jobs is the company's newest signed jobs, newest first, for one of its members.

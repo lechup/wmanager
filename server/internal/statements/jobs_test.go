@@ -98,8 +98,21 @@ func TestJobs(t *testing.T) {
 	if err := SubmitStop(ctx, e.s, e.admin, e.company, e.stop(e.key, id, pc("a")), ""); err != nil {
 		t.Fatal(err)
 	}
-	// A second stop of the same job, for the other computer.
-	if err := SubmitStop(ctx, e.s, e.admin, e.company, e.stop(e.key, id, pc("b")), ""); err != nil {
+	// A second stop of the same job, for the other computer; the same stop twice.
+	second := e.stop(e.key, id, pc("b"))
+	if err := SubmitStop(ctx, e.s, e.admin, e.company, second, ""); err != nil {
 		t.Fatal(err)
+	}
+	if err := SubmitStop(ctx, e.s, e.admin, e.company, second, ""); !errors.Is(err, ErrSame) {
+		t.Fatalf("the same stop twice: %v", err)
+	}
+	if j, err := Job(ctx, e.s, e.person, e.company, id); err != nil || j.Key != e.key.ID() {
+		t.Fatalf("Job: %v", err)
+	}
+	if _, err := Job(ctx, e.s, e.person, e.company, strings.Repeat("9c", 16)); !errors.Is(err, ErrNoJob) {
+		t.Fatalf("no such job: %v", err)
+	}
+	if _, err := Job(ctx, e.s, e.outside, e.company, id); !errors.Is(err, ErrNotMember) {
+		t.Fatalf("another company's job: %v", err)
 	}
 }

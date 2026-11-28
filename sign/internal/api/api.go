@@ -359,3 +359,10 @@ func (c *Client) AuditAfter(ctx context.Context, company string, seq int64) ([][
 	err := c.do(ctx, http.MethodGet, companyPath(company, "audit")+"?after="+strconv.FormatInt(seq, 10), nil, &a)
 	return a.Entries, err
 }
+
+// Job is a signed job of the company by its id, as the server has it: its signature is checked before it is used.
+func (c *Client) Job(ctx context.Context, company, id string) (verify.Signed, error) {
+	var j verify.Signed
+	err := c.do(ctx, http.MethodGet, companyPath(company, "jobs/"+url.PathEscape(id)), nil, &j)
+	return j, err
+}

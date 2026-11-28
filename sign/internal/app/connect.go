@@ -126,10 +126,14 @@ func (a *App) status(ctx context.Context) error {
 				}
 			}
 			a.say("status.state", serial, waiting)
-			if n, err := a.checkAudit(ctx, s, c, held, ch); err != nil {
+			head, n, err := a.checkAudit(ctx, s, c, held, ch)
+			switch {
+			case errors.Is(err, ErrAuditBroken):
+				alarm = cmp.Or(alarm, err)
+			case err != nil:
 				a.say("status.error", show.Visible(held.Name), err.Error())
-			} else if held.Audit != nil {
-				a.say("status.audit", held.Audit.Seq, n)
+			case head.Seq > 0:
+				a.say("status.audit", headString(head), n)
 			}
 		case c.Fingerprint == "":
 			a.say("status.nochain", name, role)

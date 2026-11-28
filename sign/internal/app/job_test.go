@@ -63,7 +63,7 @@ func TestJobsAndStops(t *testing.T) {
 	}
 	srv.Draft(w.anna.account, acme, "stop", map[string]any{"job": first.ID, "computers": []string{o7.ID}})
 	out = w.anna.must("1\nyes\n", "sign", "Acme")
-	if !strings.Contains(out, "Stop job "+first.ID) || !strings.Contains(out, "by Anna, valid until") ||
+	if !strings.Contains(out, "Stop job "+first.ID) || !strings.Contains(out, "by Anna, which runs") ||
 		!strings.Contains(out, "Computers (1): OFFICE-07") || !strings.Contains(out, "The stop of job") {
 		t.Fatalf("the stop: %s", out)
 	}
@@ -153,5 +153,64 @@ func TestSecretSet(t *testing.T) {
 	}
 	if out := w.bob.must("", ""); !strings.Contains(out, "state 3") {
 		t.Fatalf("Bob: %s", out)
+	}
+}
+
+// A stop shows the job it stops only once the job's signature checks: a server can't have a running job stopped
+// by showing another one in its place.
+func TestStopShowsTheSignedJob(t *testing.T) {
+	w, o3, o7 := withState(t)
+	srv, acme := w.srv, w.company
+	firmware := srv.File(w.anna.account, acme, []byte("Update-Firmware -Now\n"))
+	harmless := srv.File(w.anna.account, acme, []byte("Write-Output 'hello'\n"))
+	d := jobDraftOf(firmware, []string{o3.ID, o7.ID}, nil)
+	d["run_as"] = "user"
+	d["start_after"] = "2020-01-01T00:00:00Z"
+	srv.Draft(w.anna.account, acme, "job", d)
+	out := w.anna.must("1\nyes\n", "sign", "Acme")
+	if !strings.Contains(out, "Runs as the signed-in user") || !strings.Contains(out, "From 2020-01-01") {
+		t.Fatalf("a job as the user, from the past: %s", out)
+	}
+	js, _ := jobsOf(t, w)
+	id := js[0].ID
+
+	// The server shows the job with a harmless script: the signature doesn't check, nothing is signed.
+	w.anna.rewriteJob = func(j *verify.Signed) {
+		job, _ := verify.ParseJob(j.Statement)
+		job.Script = harmless
+		j.Statement, _ = verify.Marshal(job)
+	}
+	srv.Draft(w.anna.account, acme, "stop", map[string]any{"job": id, "computers": []string{o3.ID}})
+	if _, err := w.anna.run("1\nyes\n", "sign", "Acme"); err == nil || !strings.Contains(err.Error(), "isn't one signed by an administrator") {
+		t.Fatalf("a forged job behind a stop: %v", err)
+	}
+	w.anna.rewriteJob = nil
+	out = w.anna.must("1\nyes\n", "sign", "Acme")
+	if !strings.Contains(out, "1 | Update-Firmware -Now") || !strings.Contains(out, "Runs as the signed-in user") ||
+		!strings.Contains(out, "Computers (2): ") {
+		t.Fatalf("the stop: %s", out)
+	}
+	// The same stop again.
+	srv.Draft(w.anna.account, acme, "stop", map[string]any{"job": id, "computers": []string{o3.ID}})
+	// (The test's clock stands still, so it is the same statement, byte for byte.)
+	if _, err := w.anna.run("1\nyes\n", "sign", "Acme"); err == nil || !strings.Contains(err.Error(), "here already") {
+		t.Fatalf("the same stop again: %v", err)
+	}
+}
+
+// A job signed by an administrator removed since can still be stopped.
+func TestStopAJobOfARemovedAdmin(t *testing.T) {
+	w, o3, _ := withState(t)
+	srv, acme := w.srv, w.company
+	w.anna.must("Bob\n"+w.bobKey+"\nyes\n", "admins", "add", "Acme")
+	w.bob.must("", "")
+	script := srv.File(w.bob.account, acme, []byte("Write-Output 'x'\n"))
+	srv.Draft(w.bob.account, acme, "job", jobDraftOf(script, []string{o3.ID}, nil))
+	w.bob.must("1\nyes\n", "sign", "Acme")
+	js, _ := jobsOf(t, w)
+	w.anna.must("2\nyes\n", "admins", "remove", "Acme")
+	srv.Draft(w.anna.account, acme, "stop", map[string]any{"job": js[0].ID, "computers": []string{o3.ID}})
+	if out := w.anna.must("1\nyes\n", "sign", "Acme"); !strings.Contains(out, "by Bob, which runs") || !strings.Contains(out, "The stop of job") {
+		t.Fatalf("stopping a removed admin's job: %s", out)
 	}
 }

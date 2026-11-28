@@ -73,14 +73,20 @@ func (a *App) ask(key string, args ...any) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-// confirm asks for the word "yes" (in the language shown), and nothing else, before signing.
+// confirm asks for the word "yes", in the language shown or in English, and nothing else, before signing. An accent
+// may be left out (si for sí).
 func (a *App) confirm(key string, args ...any) (bool, error) {
 	ans, err := a.ask(key, args...)
 	if err != nil {
 		return false, err
 	}
-	return strings.EqualFold(ans, a.t("word.yes")), nil
+	return strings.EqualFold(ans, "yes") || strings.EqualFold(unaccented(ans), unaccented(a.t("word.yes"))), nil
 }
+
+var accents = strings.NewReplacer("á", "a", "à", "a", "â", "a", "ã", "a", "é", "e", "è", "e", "ê", "e", "í", "i", "ì", "i",
+	"î", "i", "ó", "o", "ò", "o", "ô", "o", "õ", "o", "ú", "u", "ù", "u", "û", "u", "Í", "I", "Ì", "I", "Á", "A", "É", "E")
+
+func unaccented(s string) string { return accents.Replace(strings.TrimSpace(s)) }
 
 // Run runs a command line.
 func (a *App) Run(ctx context.Context, args []string) error {
@@ -139,6 +145,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "sign":
 		if len(args) == 1 {
 			return a.signDraft(ctx, args[0])
+		}
+	case "audit":
+		if len(args) == 2 && args[0] == "accept" {
+			return a.acceptAudit(ctx, args[1])
 		}
 	case "secret":
 		if len(args) == 3 && args[0] == "set" {

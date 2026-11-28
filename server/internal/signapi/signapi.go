@@ -75,6 +75,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc(jobsRoute, a.authed(a.company(a.submitJob)))
 	mux.HandleFunc(stopsRoute, a.authed(a.company(a.submitStop)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/jobs", a.authed(a.company(a.jobs)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/jobs/{job}", a.authed(a.company(a.job)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/audit", a.authed(a.company(a.auditAfter)))
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +140,8 @@ func (a *API) failErr(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, statements.ErrTooLarge):
 		fail(w, http.StatusRequestEntityTooLarge, err.Error())
 	case errors.Is(err, statements.ErrNoChain), errors.Is(err, statements.ErrMissing), errors.Is(err, statements.ErrNewer),
-		errors.Is(err, statements.ErrWrongPlace), errors.Is(err, statements.ErrTooMany), errors.Is(err, statements.ErrJobTaken):
+		errors.Is(err, statements.ErrWrongPlace), errors.Is(err, statements.ErrTooMany), errors.Is(err, statements.ErrJobTaken),
+		errors.Is(err, statements.ErrSame):
 		fail(w, http.StatusConflict, err.Error())
 	case errors.Is(err, chains.ErrBroken):
 		a.Log.Error("sign api: a stored chain doesn't check", "path", r.URL.Path, "err", err)
@@ -513,4 +515,20 @@ func (a *API) auditAfter(w http.ResponseWriter, r *http.Request, account string)
 	out(w, http.StatusOK, struct {
 		Entries [][]byte `json:"entries"`
 	}{entries})
+}
+
+var jobIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// job is one signed job by its id: wmanager-sign checks its signature before it shows it.
+func (a *API) job(w http.ResponseWriter, r *http.Request, account string) {
+	if !jobIDRe.MatchString(r.PathValue("job")) {
+		a.failErr(w, r, statements.ErrNoJob)
+		return
+	}
+	j, err := statements.Job(r.Context(), a.Store, account, r.PathValue("company"), r.PathValue("job"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, j)
 }

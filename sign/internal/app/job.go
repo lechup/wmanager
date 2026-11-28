@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -96,7 +97,7 @@ func (a *App) signJob(ctx context.Context, s *session, c api.Company, h *home.Co
 			return a.fail("err.nosecret", show.Visible(n))
 		}
 	}
-	if dr.ValidFor < 1 || time.Duration(dr.ValidFor)*time.Second > verify.MaxJobLife {
+	if dr.ValidFor < 1 || dr.ValidFor > int64(verify.MaxJobLife/time.Second) {
 		return a.fail("err.validfor")
 	}
 	script, err := a.fetch(ctx, s, c, dr.Script)
@@ -174,7 +175,8 @@ func (a *App) signJob(ctx context.Context, s *session, c api.Company, h *home.Co
 	return nil
 }
 
-// signStop builds a stop of a job signed before, on some of its computers, and shows the job it stops.
+// signStop builds a stop of a job signed before, on some of its computers. The job is fetched by its id and its
+// signature checked against the chain (an administrator removed since may have signed it), then shown whole.
 func (a *App) signStop(ctx context.Context, s *session, c api.Company, h *home.Company, ch *verify.Chain,
 	b *base, d api.Draft) error {
 	held := b.st
@@ -185,26 +187,29 @@ func (a *App) signStop(ctx context.Context, s *session, c api.Company, h *home.C
 	if held == nil {
 		return a.fail("err.nostate", show.Visible(h.Name))
 	}
-	jobs, err := s.client.Jobs(ctx, c.ID)
+	if !jobIDRe.MatchString(dr.Job) {
+		return a.fail("err.nojob", show.Clip(dr.Job, 32))
+	}
+	js, err := s.client.Job(ctx, c.ID, dr.Job)
+	if api.Status(err) == http.StatusNotFound {
+		return a.fail("err.nojob", dr.Job)
+	}
 	if err != nil {
 		return a.apiErr(s, err)
 	}
-	var job *verify.Job
-	var by string
-	for _, js := range jobs {
-		j, err := verify.ParseJob(js.Statement)
-		if err == nil && j.ID == dr.Job && j.Company == ch.CompanyID() {
-			job, by = j, js.Key
-			break
-		}
-	}
-	if job == nil {
-		return a.fail("err.nojob", show.Clip(dr.Job, 32))
+	signer := formerSigner(ch, js)
+	job, perr := verify.ParseJob(js.Statement)
+	if signer == "" || perr != nil || job.ID != dr.Job || job.Company != ch.CompanyID() {
+		return a.fail("err.jobbad", dr.Job)
 	}
 	for _, id := range dr.Computers {
 		if !slices.Contains(job.Computers, id) {
 			return a.fail("err.notinjob", show.Clip(id, 64))
 		}
+	}
+	script, err := a.fetch(ctx, s, c, job.Script)
+	if err != nil {
+		return a.fail("err.noscript", err.Error())
 	}
 	if err := a.checkClock(ctx, s); err != nil {
 		return err
@@ -218,10 +223,21 @@ func (a *App) signStop(ctx context.Context, s *session, c api.Company, h *home.C
 	if _, err := verify.ParseStop(raw); err != nil {
 		return a.fail("err.badjob", err.Error())
 	}
-	signer := signerOf(ch, by)
 	a.say("stop.head", job.ID, show.Visible(h.Name), verify.Fingerprint(ch.Company))
-	a.say("stop.job", a.when(job.SignedAt), show.Visible(signer), a.when(job.Expires), job.Script)
 	a.say("job.computers", len(dr.Computers), computerNames(held, dr.Computers))
+	a.say("stop.job", a.when(job.SignedAt), show.Visible(signer))
+	a.say("job.computers", len(job.Computers), computerNames(held, job.Computers))
+	if job.RunAs == "user" {
+		a.say("job.asuser")
+	} else {
+		a.say("job.assystem")
+	}
+	a.say("job.times", a.when(job.StartAfter), a.when(job.Expires), (time.Duration(job.Limit) * time.Second).String())
+	lines := show.Lines(string(script))
+	a.say("job.script", len(lines))
+	for i, l := range lines {
+		a.say("line", fmt.Sprintf("    %4d | %s", i+1, l))
+	}
 	if ok, err := a.confirm("sign.confirm"); err != nil || !ok {
 		if err == nil {
 			a.say("sign.cancelled")
@@ -245,15 +261,7 @@ func (a *App) signStop(ctx context.Context, s *session, c api.Company, h *home.C
 	return nil
 }
 
-// signerOf is the name a list of the chain gives a key, newest first, or "?".
-func signerOf(ch *verify.Chain, key string) string {
-	for i := len(ch.Lists) - 1; i >= 0; i-- {
-		if n := signerName(ch.Lists[i], key); n != "?" {
-			return n
-		}
-	}
-	return "?"
-}
+var jobIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // setSecret makes the next state with a secret's new value, typed here, and signs it: the only change.
 func (a *App) setSecret(ctx context.Context, which, name string) error {
