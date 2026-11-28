@@ -34,6 +34,8 @@ type Client struct {
 	Server string // https://host[:port]
 	Token  string
 	HTTP   *http.Client
+	// Upload is for add-file's uploads, which may last long (HTTP when nil).
+	Upload *http.Client
 }
 
 // Error is the server's refusal.
@@ -112,6 +114,11 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	return c.send(req, out)
+}
+
+// send sends a request with the token, and reads its JSON answer into out.
+func (c *Client) send(req *http.Request, out any) error {
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -365,4 +372,20 @@ func (c *Client) Job(ctx context.Context, company, id string) (verify.Signed, er
 	var j verify.Signed
 	err := c.do(ctx, http.MethodGet, companyPath(company, "jobs/"+url.PathEscape(id)), nil, &j)
 	return j, err
+}
+
+// UploadFile gives the server a file added with add-file, read from r (size bytes), under its SHA-256, which the
+// server checks.
+func (c *Client) UploadFile(ctx context.Context, company string, hash [32]byte, r io.Reader, size int64) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.Server+Prefix+companyPath(company, "files/"+hex.EncodeToString(hash[:])), r)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = size
+	req.Header.Set("Content-Type", "application/octet-stream")
+	up := *c
+	if c.Upload != nil {
+		up.HTTP = c.Upload
+	}
+	return up.send(req, nil)
 }

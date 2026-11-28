@@ -232,7 +232,18 @@ type Company struct {
 	// server shows later must lead to it.
 	Audits map[string]AuditHead `json:"audits,omitzero"`
 
+	// Added is the files added here with add-file, by their hash: a file that isn't text is signed only when it
+	// was added here, from the administrator's own disk.
+	Added map[string]AddedFile `json:"added,omitzero"`
+
 	accepted map[string]bool // heads accepted anew in this run: they replace the one kept
+}
+
+// AddedFile is a file added here: its name on this computer, its size, and when it was signed in a state.
+type AddedFile struct {
+	From string    `json:"from"`
+	Size int64     `json:"size"`
+	At   time.Time `json:"at"`
 }
 
 // AuditHead is an entry of an audit log: its number and its hash (of the one before and its own bytes).
@@ -364,6 +375,10 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 		return err
 	}
 	name, servers, state, mine, former, audits := c.Name, maps.Clone(c.Servers), c.State, c.Mine, c.Former, maps.Clone(c.Audits)
+	added := maps.Clone(c.Added)
+	if added == nil {
+		added = map[string]AddedFile{}
+	}
 	if audits == nil {
 		audits = map[string]AuditHead{}
 	}
@@ -384,6 +399,11 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 		}
 		// A state held is only replaced by a newer one, unless the caller drops the one signed here.
 		state, mine, former = Newer(old.State, state), Newer(old.Mine, mine), Newer(old.Former, former)
+		for h, f := range old.Added {
+			if _, ok := added[h]; !ok {
+				added[h] = f
+			}
+		}
 		// An audit head seen only moves forward, unless the administrator accepted another.
 		for srv, oh := range old.Audits {
 			if nh, ok := audits[srv]; !c.accepted[srv] && (!ok || nh.Seq < oh.Seq) {
@@ -392,7 +412,7 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 		}
 	}
 	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed,
-		State: state, Mine: mine, Former: former, Audits: audits})
+		State: state, Mine: mine, Former: former, Audits: audits, Added: added})
 }
 
 // ForgetCompany removes a company held: only for a first list the server refused, never for a chain taken.

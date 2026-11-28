@@ -45,6 +45,7 @@ type Server struct {
 	Auth           *auth.Service
 	Log            *slog.Logger
 	PublicURL      string         // e.g. https://wm.example.com; "" means the request's host
+	FilesDir       string         // where files added with wmanager-sign add-file are kept; "" refuses them
 	TrustedProxies []netip.Prefix // whose X-Forwarded-For is believed
 
 	pages map[string]*template.Template
@@ -133,7 +134,7 @@ func (s *Server) Handler() http.Handler {
 	top := http.NewServeMux()
 	top.Handle("/", cop.Handler(limitBody(mux)))
 	api := &signapi.API{Store: s.Store, Auth: s.Auth, Log: s.Log, ClientAddr: s.clientAddr,
-		PublicURL: func() string { return s.PublicURL }}
+		PublicURL: func() string { return s.PublicURL }, FilesDir: func() string { return s.FilesDir }}
 	top.Handle(signapi.Prefix, api.Handler())
 	return s.logged(headers(top))
 }
@@ -178,6 +179,9 @@ type statusWriter struct {
 }
 
 func (w *statusWriter) WriteHeader(code int) { w.status = code; w.ResponseWriter.WriteHeader(code) }
+
+// Unwrap lets http.ResponseController reach the connection (an upload moves its deadlines on).
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // logged logs each request, without the token of a setup link in its path.
 func (s *Server) logged(next http.Handler) http.Handler {

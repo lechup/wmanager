@@ -233,6 +233,9 @@ func (a *App) signStop(ctx context.Context, s *session, c api.Company, h *home.C
 		a.say("job.assystem")
 	}
 	a.say("job.times", a.when(job.StartAfter), a.when(job.Expires), (time.Duration(job.Limit) * time.Second).String())
+	if job.Expires.Before(a.Now()) {
+		a.say("stop.expired")
+	}
 	lines := show.Lines(string(script))
 	a.say("job.script", len(lines))
 	for i, l := range lines {

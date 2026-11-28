@@ -34,6 +34,7 @@ type App struct {
 	// OpenDevice opens the security key.
 	OpenDevice func() (fido.Device, error)
 	HTTP       *http.Client
+	UploadHTTP *http.Client // add-file's uploads, which may last long (HTTP when nil)
 	Now        func() time.Time
 	Lang       string
 	Server     string // -server, or "" for the one set up last
@@ -146,6 +147,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		if len(args) == 1 {
 			return a.signDraft(ctx, args[0])
 		}
+	case "add-file":
+		if len(args) == 3 {
+			return a.addFile(ctx, args[0], args[1], args[2])
+		}
 	case "audit":
 		if len(args) == 2 && args[0] == "accept" {
 			return a.acceptAudit(ctx, args[1])
@@ -195,7 +200,8 @@ func (a *App) connected() (*session, error) {
 	if tok == nil {
 		return nil, a.fail("err.notoken", server)
 	}
-	return &session{srv: srv, client: &api.Client{Server: server, Token: tok.Token, HTTP: a.HTTP}, account: tok.Account}, nil
+	return &session{srv: srv, client: &api.Client{Server: server, Token: tok.Token, HTTP: a.HTTP, Upload: a.UploadHTTP},
+		account: tok.Account}, nil
 }
 
 // apiErr explains a refusal of the server; a token that ended asks for a new code.

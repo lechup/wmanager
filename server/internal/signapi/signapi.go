@@ -46,6 +46,8 @@ type API struct {
 	ClientAddr func(*http.Request) string
 	// PublicURL gives the server's address (WMANAGER_PUBLIC_URL), which key proofs name; "" refuses them.
 	PublicURL func() string
+	// FilesDir gives the folder of the files added with add-file (WMANAGER_FILES_DIR); "" refuses them.
+	FilesDir func() string
 }
 
 var errNoPublicURL = errors.New("registering keys and taking states needs WMANAGER_PUBLIC_URL")
@@ -54,6 +56,7 @@ const (
 	statesRoute = "POST " + Prefix + "companies/{company}/states"
 	jobsRoute   = "POST " + Prefix + "companies/{company}/jobs"
 	stopsRoute  = "POST " + Prefix + "companies/{company}/stops"
+	storeRoute  = "PUT " + Prefix + "companies/{company}/files/{hash}"
 )
 
 // Handler is the API's routes, every answer JSON.
@@ -72,6 +75,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/state", a.authed(a.company(a.state)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/secrets", a.authed(a.company(a.secretHashes)))
 	mux.HandleFunc(statesRoute, a.authed(a.company(a.submitState)))
+	mux.HandleFunc(storeRoute, a.authed(a.company(a.storeFile)))
 	mux.HandleFunc(jobsRoute, a.authed(a.company(a.submitJob)))
 	mux.HandleFunc(stopsRoute, a.authed(a.company(a.submitStop)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/jobs", a.authed(a.company(a.jobs)))
@@ -94,6 +98,8 @@ func (a *API) Handler() http.Handler {
 			limit = MaxStateBody
 		case jobsRoute, stopsRoute:
 			limit = MaxJobBody
+		case storeRoute:
+			limit = statements.MaxStored
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		mux.ServeHTTP(w, r)
@@ -133,7 +139,11 @@ func (a *API) failErr(w http.ResponseWriter, r *http.Request, err error) {
 		fail(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, chains.ErrKeyTaken), errors.Is(err, chains.ErrTooManyKeys), errors.Is(err, chains.ErrTaken):
 		fail(w, http.StatusConflict, err.Error())
-	case errors.Is(err, statements.ErrBadDraft), errors.Is(err, statements.ErrBadSecret):
+	case errors.Is(err, statements.ErrNoStore), errors.Is(err, statements.ErrBusy):
+		fail(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, statements.ErrQuota):
+		fail(w, http.StatusInsufficientStorage, err.Error())
+	case errors.Is(err, statements.ErrBadDraft), errors.Is(err, statements.ErrBadSecret), errors.Is(err, statements.ErrFileHash):
 		fail(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, statements.ErrNoFile), errors.Is(err, statements.ErrNoDraft), errors.Is(err, statements.ErrNoJob):
 		fail(w, http.StatusNotFound, err.Error())
@@ -531,4 +541,56 @@ func (a *API) job(w http.ResponseWriter, r *http.Request, account string) {
 		return
 	}
 	out(w, http.StatusOK, j)
+}
+
+// storeFile takes a file added with wmanager-sign add-file: its bytes as the request's body, checked against the
+// hash in its path, kept on disk.
+func (a *API) storeFile(w http.ResponseWriter, r *http.Request, account string) {
+	if !hashRe.MatchString(r.PathValue("hash")) {
+		fail(w, http.StatusNotFound, "no such file")
+		return
+	}
+	var h [32]byte
+	hex.Decode(h[:], []byte(r.PathValue("hash")))
+	dir := ""
+	if a.FilesDir != nil {
+		dir = a.FilesDir()
+	}
+	// A large file arrives for longer than the server's read and write timeouts allow a request: they are moved
+	// on while it keeps coming, at least UploadPace bytes in each UploadIdle.
+	rc := http.NewResponseController(w)
+	rc.SetReadDeadline(time.Now().Add(UploadIdle))
+	body := &paced{r: r.Body, rc: rc}
+	n, err := statements.StoreFile(r.Context(), a.Store, dir, account, r.PathValue("company"), h, r.ContentLength, body)
+	rc.SetWriteDeadline(time.Now().Add(UploadIdle))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, struct {
+		Size int64 `json:"size"`
+	}{n})
+}
+
+// An upload must bring at least UploadPace bytes in each UploadIdle, or the connection's deadline ends it.
+const (
+	UploadIdle = time.Minute
+	UploadPace = 1 << 20
+)
+
+// paced moves the connection's read deadline on each time UploadPace more bytes have come.
+type paced struct {
+	r    io.Reader
+	rc   *http.ResponseController
+	read int64
+}
+
+func (p *paced) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.read += int64(n)
+	if p.read >= UploadPace {
+		p.read = 0
+		p.rc.SetReadDeadline(time.Now().Add(UploadIdle))
+	}
+	return n, err
 }

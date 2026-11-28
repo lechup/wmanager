@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
@@ -28,6 +29,7 @@ import (
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/auth/authtest"
 	"github.com/lechup/wmanager/server/internal/chains"
+	"github.com/lechup/wmanager/server/internal/signapi"
 	"github.com/lechup/wmanager/server/internal/statements"
 	"github.com/lechup/wmanager/server/internal/store/storetest"
 	"github.com/lechup/wmanager/verify"
@@ -1189,5 +1191,62 @@ func TestStatesAPI(t *testing.T) {
 	}
 	if code, _ := e.api("GET", "companies/"+acme+"/audit?after=0", otok, nil); code != http.StatusForbidden {
 		t.Fatalf("an outsider's audit: %d", code)
+	}
+}
+
+// An upload of add-file takes longer than the server's read and write timeouts, as a large file over the internet
+// does: it goes through while it keeps coming.
+func TestSlowUpload(t *testing.T) {
+	e := setup(t)
+	e.panel.PublicURL, e.panel.FilesDir = "https://wm.example.com", t.TempDir()
+	owner := e.browser()
+	owner.enroll("owner@example.com")
+	owner.get("/admin")
+	owner.post("/admin/company", url.Values{"name": {"Acme"}})
+	acme, me := owner.idOf("Acme"), owner.idOf("owner@example.com")
+	owner.post("/admin/member", url.Values{"company": {acme}, "account": {me}, "role": {"admin"}})
+	tok, _ := owner.signIn()
+
+	srv := httptest.NewUnstartedServer(e.panel.Handler())
+	srv.Config.ReadTimeout, srv.Config.WriteTimeout = 300*time.Millisecond, 600*time.Millisecond
+	srv.StartTLS()
+	defer srv.Close()
+	chunk := bytes.Repeat([]byte{0x4d, 0x5a, 0, 1}, signapi.UploadPace/4)
+	const chunks = 5
+	whole := sha256.New()
+	for range chunks {
+		whole.Write(chunk)
+	}
+	h := hex.EncodeToString(whole.Sum(nil))
+	put := func(body io.Reader, size int64) (int, string) {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/sign/v1/companies/"+acme+"/files/"+h, body)
+		req.ContentLength = size
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			return 0, err.Error()
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		for range chunks {
+			time.Sleep(250 * time.Millisecond)
+			pw.Write(chunk)
+		}
+		pw.Close()
+	}()
+	if code, out := put(pr, int64(chunks*len(chunk))); code != http.StatusOK {
+		t.Fatalf("a slow upload: %d %s", code, out)
+	}
+	// The API's other answers: a wrong hash, no folder (the limits are StoreFile's own test).
+	if code, _ := put(bytes.NewReader(chunk), int64(len(chunk))); code != http.StatusBadRequest {
+		t.Errorf("a wrong hash: %d", code)
+	}
+	e.panel.FilesDir = ""
+	if code, _ := put(bytes.NewReader(chunk), int64(len(chunk))); code != http.StatusServiceUnavailable {
+		t.Errorf("no folder: %d", code)
 	}
 }

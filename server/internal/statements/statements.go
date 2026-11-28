@@ -286,7 +286,9 @@ func haveFiles(ctx context.Context, tx pgx.Tx, companyID string, st *verify.Stat
 		return nil
 	}
 	var n int
-	if err := tx.QueryRow(ctx, `SELECT count(DISTINCT hash) FROM files WHERE company_id = $1 AND hash = ANY($2)`,
+	if err := tx.QueryRow(ctx, `SELECT count(DISTINCT hash) FROM (
+	                               SELECT hash FROM files WHERE company_id = $1 AND hash = ANY($2)
+	                               UNION SELECT hash FROM stored_files WHERE company_id = $1 AND hash = ANY($2)) f`,
 		companyID, want).Scan(&n); err != nil {
 		return err
 	}

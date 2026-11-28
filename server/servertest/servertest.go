@@ -69,7 +69,7 @@ func New(t *testing.T) *Server {
 	h := httptest.NewTLSServer(panel.Handler())
 	t.Cleanup(h.Close)
 	srv.URL, srv.Client = h.URL, h.Client()
-	panel.PublicURL = h.URL
+	panel.PublicURL, panel.FilesDir = h.URL, t.TempDir()
 	return srv
 }
 

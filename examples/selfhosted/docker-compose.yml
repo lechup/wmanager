@@ -120,6 +120,10 @@ services:
       WMANAGER_TRUSTED_PROXIES: 172.31.250.2
       WMANAGER_LOKI_URL: http://loki:3100
       WMANAGER_LOKI_HEAD_EVERY: ${WMANAGER_LOKI_HEAD_EVERY:-5m}
+      WMANAGER_FILES_DIR: /var/lib/wmanager/files
+    # The files added with wmanager-sign add-file (selfhosted.sh backup copies them next to the database's dump)
+    volumes:
+      - files-data:/var/lib/wmanager/files
     secrets: [database-url]
 networks:
   front:
@@ -150,3 +154,4 @@ volumes:
   loki-data: {}
   grafana-data: {}
   postgres-data: {}
+  files-data: {}

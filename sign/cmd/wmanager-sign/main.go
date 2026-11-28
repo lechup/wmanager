@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,13 +39,18 @@ func main() {
 		os.Exit(1)
 	}
 	in := bufio.NewReader(os.Stdin)
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 30 * time.Second, ResponseHeaderTimeout: 2 * time.Minute, IdleConnTimeout: time.Minute,
+		ForceAttemptHTTP2: true}
 	a := &app.App{
-		Home:   h,
-		In:     in,
-		Out:    os.Stdout,
-		HTTP:   &http.Client{Timeout: time.Minute},
-		Lang:   app.Language(*lang),
-		Server: *server,
+		Home: h,
+		In:   in,
+		Out:  os.Stdout,
+		HTTP: &http.Client{Timeout: time.Minute, Transport: transport},
+		// add-file's uploads have no limit on the whole request, only on each step of it.
+		UploadHTTP: &http.Client{Transport: transport},
+		Lang:       app.Language(*lang),
+		Server:     *server,
 		ReadSecret: func(prompt string) (string, error) {
 			fmt.Print(prompt)
 			if term.IsTerminal(int(os.Stdin.Fd())) {

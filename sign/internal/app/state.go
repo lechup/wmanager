@@ -279,7 +279,7 @@ func (a *App) describeState(ctx context.Context, s *session, c api.Company, h *h
 			files = append(files, mark+" "+show.Visible(p))
 			continue
 		}
-		lines, ok := a.fileLines(ctx, s, c, mark, p, before, hash)
+		lines, ok := a.fileLines(ctx, s, c, h, mark, p, before, hash)
 		files, shown = append(files, lines...), shown && ok
 	}
 	for _, p := range slices.Sorted(maps.Keys(old.Files)) {
@@ -350,8 +350,12 @@ func pathChanges(old, next map[string]string, hashes bool) []string {
 
 // fileLines shows a new or changed file: a text file whole when new, its changed lines with two around each
 // otherwise; anything else by its size. It is false when the file couldn't be fetched, and so wasn't shown.
-func (a *App) fileLines(ctx context.Context, s *session, c api.Company, mark, path, before, after string) ([]string, bool) {
+func (a *App) fileLines(ctx context.Context, s *session, c api.Company, h *home.Company, mark, path, before, after string) ([]string, bool) {
 	head := mark + " " + show.Visible(path)
+	if f, ok := h.Added[after]; ok {
+		// Added here with add-file, from the administrator's own disk: its hash is of the file read here.
+		return []string{head + " " + a.t("state.addedhere", show.Visible(f.From), f.At.Local().Format("2006-01-02 15:04"), f.Size, after[:16])}, true
+	}
 	content, err := a.fetch(ctx, s, c, after)
 	if err != nil {
 		return []string{head, "    " + a.t("state.nofile", err.Error())}, false
