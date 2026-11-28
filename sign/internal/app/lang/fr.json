@@ -142,7 +142,7 @@
  "state.noold": "(l'ancien contenu n'est plus sur le serveur : le nouveau en entier)",
  "state.notours": "pas un état de cette entreprise",
  "state.oldkey": "Le dernier état de %s sur le serveur, %d, est signé par %s, dont la clé n'est plus dans la liste des administrateurs. Les ordinateurs qui l'ont pris avant la nouvelle liste l'ont : le prochain état est aussi montré par rapport à lui, et a un numéro de série plus élevé.",
- "state.otherformer": "l'état %d, signé par %s (retiré depuis) : les ordinateurs qui l'ont pris avant la nouvelle liste des administrateurs l'ont",
+ "state.otherformer": "l'état %d, signé par %s, dont la clé a été retirée depuis : les ordinateurs qui l'ont pris avant la nouvelle liste des administrateurs l'ont",
  "state.othermine": "l'état %d signé ici, que le serveur n'a pas (il l'a refusé, ou sa réponse s'est perdue) : des ordinateurs peuvent l'avoir",
  "state.pushed": "Le dernier état connu ici a été transmis au serveur (%d).",
  "state.pushfailed": "Le serveur n'a pas accepté le dernier état connu ici : %s",

@@ -128,7 +128,7 @@
  "state.farabove": "il suo numero %d, firmato da %s, la cui chiave è stata rimossa nel frattempo, è molto più alto di qualsiasi numero noto qui, e non viene contato",
  "state.files": "File:",
  "state.first": "Il primo stato: tutto ciò che contiene è nuovo.",
- "state.forked": "ALLARME: il server ora mostra per %s uno stato con il numero %d diverso da quello che aveva distribuito prima. Il server potrebbe essere compromesso; non è stato firmato nulla.",
+ "state.forked": "ALLARME: il server ora mostra per %s un altro stato con il numero %d, diverso da quello con lo stesso numero che aveva distribuito prima. Il server potrebbe essere compromesso; non è stato firmato nulla.",
  "state.groups": "gruppi: %s",
  "state.lacking": "Al server manca il valore del segreto %s: digitalo di nuovo.",
  "state.lines": "(%d righe)",

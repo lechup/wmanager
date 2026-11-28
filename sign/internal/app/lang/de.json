@@ -142,7 +142,7 @@
  "state.noold": "(der alte Inhalt ist nicht mehr auf dem Server: der neue vollständig)",
  "state.notours": "kein Zustand dieser Firma",
  "state.oldkey": "Der neueste Zustand von %s auf dem Server, %d, ist von %s signiert, dessen Schlüssel nicht mehr in der Administratorenliste steht. Die Computer, die ihn vor der neueren Liste übernommen haben, haben ihn: Der nächste Zustand wird auch im Vergleich zu ihm gezeigt und hat eine höhere Seriennummer.",
- "state.otherformer": "dem Zustand %d, signiert von %s (seither entfernt): Die Computer, die ihn vor der neueren Administratorenliste übernommen haben, haben ihn",
+ "state.otherformer": "dem Zustand %d, signiert von %s, dessen Schlüssel seither entfernt wurde: Die Computer, die ihn vor der neueren Administratorenliste übernommen haben, haben ihn",
  "state.othermine": "dem hier signierten Zustand %d, den der Server nicht hat (er hat ihn abgelehnt, oder seine Antwort ging verloren): Computer können ihn haben",
  "state.pushed": "Der neueste hier bekannte Zustand wurde dem Server übergeben (%d).",
  "state.pushfailed": "Der Server hat den neuesten hier bekannten Zustand nicht angenommen: %s",
