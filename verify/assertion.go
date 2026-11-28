@@ -103,6 +103,11 @@ func ClientDataJSON(statementHash [32]byte) []byte {
 // CheckAssertion checks a signature over a statement's hash (checks 3 to 5 of docs/architecture.md): the client
 // data, the authenticator data and the signature with the algorithm pinned for the key.
 func CheckAssertion(statementHash [32]byte, a Assertion, key PublicKey) error {
+	// Sizes first: nothing large and unsigned is read. The client data wmanager-sign builds is about 150 bytes, a
+	// signature at most 512 (RSA 4096).
+	if len(a.ClientDataJSON) > 1024 || len(a.Signature) > 512 || len(a.AuthenticatorData) > 64 {
+		return refuse("client data, authenticator data or signature too large")
+	}
 	if err := checkClientData(statementHash, a.ClientDataJSON); err != nil {
 		return err
 	}
@@ -122,10 +127,10 @@ func checkClientData(statementHash [32]byte, raw []byte) error {
 		return refuse("client data: %v", err)
 	}
 	if cd.Type != "webauthn.get" {
-		return refuse("client data: type %q", cd.Type)
+		return refuse("client data: type %q", clip(cd.Type))
 	}
 	if cd.Origin != Origin {
-		return refuse("client data: origin %q", cd.Origin)
+		return refuse("client data: origin %q", clip(cd.Origin))
 	}
 	if cd.CrossOrigin != nil && *cd.CrossOrigin {
 		return refuse("client data: crossOrigin is true")
@@ -220,4 +225,12 @@ func checkSignature(key PublicKey, signed, sig []byte) error {
 		}
 	}
 	return nil
+}
+
+// clip shortens a value quoted into an error, which may come from unsigned input and end up in a log.
+func clip(s string) string {
+	if len(s) > 40 {
+		return s[:40] + "…"
+	}
+	return s
 }

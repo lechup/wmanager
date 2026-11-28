@@ -137,3 +137,20 @@ func (k *Key) Sign(statementHash [32]byte, o Options) (verify.Assertion, error) 
 	}
 	return verify.Assertion{AuthenticatorData: ad, ClientDataJSON: clientData, Signature: sig}, nil
 }
+
+// ID is the key's id as lists name it.
+func (k *Key) ID() string { return verify.KeyID(k.COSEKey()) }
+
+// ListKey is the key as an admin list names it.
+func (k *Key) ListKey() verify.Key { return verify.Key{ID: k.ID(), COSE: k.COSEKey()} }
+
+// SignStatement signs a statement's bytes the way wmanager-sign does.
+func (k *Key) SignStatement(raw []byte, o Options) (verify.Signed, error) {
+	h := verify.Signed{Statement: raw}.Hash()
+	a, err := k.Sign(h, o)
+	if err != nil {
+		return verify.Signed{}, err
+	}
+	return verify.Signed{Statement: raw, Key: k.ID(), AuthenticatorData: a.AuthenticatorData,
+		ClientDataJSON: a.ClientDataJSON, Signature: a.Signature}, nil
+}
