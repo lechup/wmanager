@@ -106,6 +106,20 @@ func held(stored []verify.Signed) (*verify.Chain, error) {
 	return c, nil
 }
 
+// Held is the company's stored chain, checked again, in the caller's transaction; nil when it has none yet.
+func Held(ctx context.Context, tx pgx.Tx, companyID string) (*verify.Chain, error) {
+	stored, err := load(ctx, tx, companyID, all)
+	if err != nil || len(stored) == 0 {
+		return nil, err
+	}
+	return held(stored)
+}
+
+// Role is the account's role in the company ("admin", "person"), or "" for none, in the caller's transaction.
+func Role(ctx context.Context, tx pgx.Tx, accountID, companyID string) (string, error) {
+	return role(ctx, tx, accountID, companyID)
+}
+
 // Append takes the company's next admin list from one of its administrators: the first one (signed by a key of its
 // own), or one that extends the stored chain.
 func Append(ctx context.Context, s *store.Store, accountID, companyID string, next verify.Signed) (*verify.Chain, error) {

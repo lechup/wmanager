@@ -219,6 +219,34 @@ type Company struct {
 	Fingerprint string            `json:"fingerprint"`
 	Servers     map[string]string `json:"servers"` // a server's address: its id of the company
 	Chain       []verify.Signed   `json:"chain"`
+	// State is the newest state verified here as the server handed it out.
+	State *verify.Signed `json:"state,omitzero"`
+	// Mine is the newest state signed here, whether or not the server took it or still shows it: the next one is
+	// shown against the newer of the two, and has a higher serial.
+	Mine *verify.Signed `json:"mine,omitzero"`
+	// Former is the newest state seen signed by an administrator removed since: the computers that took it before
+	// the newer admin list have it, so the next state is shown against it too while it isn't older than the others.
+	Former *verify.Signed `json:"former,omitzero"`
+}
+
+// Serial is a state's serial, or 0 for none.
+func Serial(s *verify.Signed) int64 {
+	if s == nil {
+		return 0
+	}
+	st, err := verify.ParseState(s.Statement)
+	if err != nil {
+		return 0
+	}
+	return st.Serial
+}
+
+// Newer is the newer of two states, the one held when they have the same serial.
+func Newer(held, next *verify.Signed) *verify.Signed {
+	if held != nil && Serial(held) >= Serial(next) {
+		return held
+	}
+	return next
 }
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -311,7 +339,7 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 	if err != nil {
 		return err
 	}
-	name, servers := c.Name, maps.Clone(c.Servers)
+	name, servers, state, mine, former := c.Name, maps.Clone(c.Servers), c.State, c.Mine, c.Former
 	if servers == nil {
 		servers = map[string]string{}
 	}
@@ -327,8 +355,11 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 				servers[k] = v
 			}
 		}
+		// A state held is only replaced by a newer one, unless the caller drops the one signed here.
+		state, mine, former = Newer(old.State, state), Newer(old.Mine, mine), Newer(old.Former, former)
 	}
-	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed})
+	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed,
+		State: state, Mine: mine, Former: former})
 }
 
 // ForgetCompany removes a company held: only for a first list the server refused, never for a chain taken.

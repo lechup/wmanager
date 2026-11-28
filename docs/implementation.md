@@ -147,12 +147,18 @@ Short trials of what could overturn the design, each on a branch of its own. The
     full fingerprint typed by the administrator; the whole chain kept per company, refusing an older or forked one,
     and giving a server that is behind the lists it lacks; names shown with control characters made visible; the
     clock check against the server. Its tests run the whole server (`server/servertest`) with a software key;
+  - then (done) states: the server keeps drafts, files by their hash, signed states and the secrets' values
+    (read only by its own work), and checks each state against the chain; `wmanager-sign sign` shows a draft as
+    the difference from the last state it verified (text files line by line, Myers' diff), asks for the start of
+    each new computer's id and the values of new secrets, and makes the serial; states signed by others are
+    checked and shown as they arrive. The difference is from the newer of the state verified and the one signed
+    here, and a computer's report of a newer state stops signing (the review found that a server hiding a newer
+    state could otherwise have it undone unseen); a file that isn't text comes only with `add-file`;
+  - jobs and stops, `add-file`, and changing a secret's value;
+  - the head of the audit log it saw last;
   - its messages in the ten languages;
-  - showing what is signed with the difference from the last verified state;
-  - `add-file`, typing secrets, the serial numbers;
-  - how each person's rights change, and the head of the audit log it saw last;
-  - a test by hand with a real security key, once there is one;
-  - the server's side: storing statements and handing them out.
+  - a test by hand with a real security key, once there is one.
+  - How each person's rights change moves to 4a, with the people in the state.
 - **2c:** Windows Hello in `wmanager-sign`.
 
 ### Stage 3: the agent and the installer
@@ -194,7 +200,9 @@ Short trials of what could overturn the design, each on a branch of its own. The
 - the release: a reproducible build (`-trimpath`, a fixed date), the signed `SHA256SUMS` and exe files, and the
   server's image;
 - the agent updating itself and the payload, the check on the computer, and going back;
-- `wmanager-sign` updating itself, and a new release key, named by a release signed with the old one.
+- `wmanager-sign` updating itself, and a new release key, named by a release signed with the old one;
+- `wmanager-sign` checking a state's release certificate and wmanager's version against the signed releases (until
+  then it shows their hashes and says they aren't checked).
 
 ### Stage 7: without the serverless mode
 

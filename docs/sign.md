@@ -2,8 +2,8 @@
 
 > The signer of wmanager v1 ([Architecture of v1](architecture.md#wmanager-sign)). It is being built
 > ([Implementation plan](implementation.md)): today it connects to the server, makes and registers signing keys,
-> and keeps and signs each company's chain of admin lists. States, jobs, files and secrets come next; Windows
-> Hello in stage 2c.
+> keeps and signs each company's chain of admin lists, and signs its states. Jobs, `add-file` and changing a
+> secret come next; Windows Hello in stage 2c.
 
 `wmanager-sign` runs on the administrator's own computer, never on the server. A server, even a hacked one, can't
 make it sign anything it didn't show, and can't make it take an admin list that doesn't follow the one it holds.
@@ -86,6 +86,48 @@ control or formatting character is refused.
 A **leaked key**: sign a list without it at once. If the server may be hacked too, it can keep that list from the
 computers: install them again.
 
+## States
+
+What the company's computers have (their groups, files, wmanager's version and secrets) is a signed **state**.
+Changes are made in the panel (stage 4a) and wait there as drafts; `wmanager-sign` shows each one and signs it:
+
+```bash
+wmanager-sign                  # each company's state, and how many drafts wait
+wmanager-sign sign Acme        # pick a draft, see what it changes, and sign it
+```
+
+It shows the difference from the newest state it has checked itself, not from what the server says:
+
+```
+State 2 of Acme (7F3A-91C2-04BD-E85F-2C6B-90AE-5D17-3B48):
+Computers:
+  + OFFICE-07 (13123709), groups: office, finance
+  - OFFICE-03 (63c34cb3)
+Files:
+  ~ groups/office/hello.ps1 (+1 -1)
+         1   Write-Output 'hello'
+         2 - Write-Output 'old'
+         2 + Write-Output 'bye'
+```
+
+- A new file is shown whole, a changed one as its changed lines with two around each. Each is fetched by its hash
+  and checked; a file that can't be shown isn't signed. That includes a file that isn't text: such files come only
+  with `add-file`, from your own disk.
+- The difference is from the newer of the state it verified and the one it signed itself, which it keeps even
+  when the server doesn't show it. When the computers report a newer state than either, it signs nothing. When
+  some computers may have another state (one signed by an administrator removed since, or one signed here that
+  the server never got, next to another administrator's with its serial), the difference from that one is shown
+  too.
+- A secret whose value the server lacks (a state signed here may never have reached it) is typed again.
+- A change of wmanager's version or of the release certificate is shown with the new hashes; until stage 6
+  `wmanager-sign` doesn't check them against the signed releases, and says so.
+- **A new computer** is added only with the first 8 characters of its id typed, as its installer showed them.
+- **A new secret's value** is typed here, twice; `wmanager-sign` makes its salt and puts its hash into the state,
+  and gives the value and the salt to the server.
+- The serial is one more than the highest it knows.
+- States signed by others are shown, in short, as they arrive, checked against the newest admin list. One signed
+  by a key removed since is kept apart: the next state is shown against it too, and has a higher serial.
+
 ## What it refuses
 
 - **A chain that doesn't start with the one it holds**, whatever id the server lists the company under. A server
@@ -95,6 +137,8 @@ computers: install them again.
 - **A key whose fingerprint wasn't typed.** The server only says which keys its members registered; the 32
   characters typed, as the key's owner reads them out, decide which one goes into the list.
 - **A clock more than 10 minutes off the server's**, before it signs.
+- **A state it can't show whole**, another state with the serial it holds (an alarm), and a newer one not signed
+  by a key of the newest admin list.
 - **A synced passkey**, and a key made without your PIN (or fingerprint) and touch.
 
 ## What it keeps
@@ -106,7 +150,7 @@ In a folder only you can open: `$WMANAGER_SIGN_HOME`, or `~/.config/wmanager-sig
 | `server` | the server connected last |
 | `servers/<host>[_<port>]/token.json` | the connection's token, until it ends |
 | `servers/<host>[_<port>]/keys.json` | the signing keys made here: their public keys and credential ids |
-| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, and the id each server gives it |
+| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, and one signed by an administrator removed since |
 
 A company is kept under its own id (the hash of its first admin list), not under the id a server gives it: a
 server that lists it again under a new id meets the chain held. Commands find a company by the name it had when it

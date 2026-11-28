@@ -4,6 +4,7 @@
 package signapi
 
 import (
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/lechup/wmanager/server/internal/accounts"
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/chains"
+	"github.com/lechup/wmanager/server/internal/statements"
 	"github.com/lechup/wmanager/server/internal/store"
 	"github.com/lechup/wmanager/verify"
 )
@@ -24,8 +26,12 @@ import (
 // Prefix is where the API lives.
 const Prefix = "/api/sign/v1/"
 
-// MaxBody is the largest request: an admin list's limit and its signature, with room.
-const MaxBody = 512 << 10
+// MaxBody is the largest request: an admin list's limit and its signature, with room. A state may be larger:
+// MaxStateBody, its limit in base64 with the secrets given with it.
+const (
+	MaxBody      = 512 << 10
+	MaxStateBody = 16 << 20
+)
 
 // API is the sign API.
 type API struct {
@@ -38,7 +44,9 @@ type API struct {
 	PublicURL func() string
 }
 
-var errNoPublicURL = errors.New("registering keys needs WMANAGER_PUBLIC_URL")
+var errNoPublicURL = errors.New("registering keys and taking states needs WMANAGER_PUBLIC_URL")
+
+const statesRoute = "POST " + Prefix + "companies/{company}/states"
 
 // Handler is the API's routes, every answer JSON.
 func (a *API) Handler() http.Handler {
@@ -50,17 +58,28 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST "+Prefix+"companies/{company}/chain", a.authed(a.company(a.appendList)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/keys", a.authed(a.company(a.companyKeys)))
 	mux.HandleFunc("POST "+Prefix+"keys", a.authed(a.registerKey))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/drafts", a.authed(a.company(a.drafts)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/drafts/{draft}", a.authed(a.company(a.draft)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/files/{hash}", a.authed(a.company(a.file)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/state", a.authed(a.company(a.state)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/secrets", a.authed(a.company(a.secretHashes)))
+	mux.HandleFunc(statesRoute, a.authed(a.company(a.submitState)))
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusForbidden, "cross-origin request")
 	}))
 	return cop.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		if _, pattern := mux.Handler(r); pattern == "" {
+		_, pattern := mux.Handler(r)
+		if pattern == "" {
 			fail(w, http.StatusNotFound, "no such call")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, MaxBody)
+		limit := int64(MaxBody)
+		if pattern == statesRoute {
+			limit = MaxStateBody
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		mux.ServeHTTP(w, r)
 	}))
 }
@@ -97,6 +116,15 @@ func (a *API) failErr(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, chains.ErrNotAdmin), errors.Is(err, chains.ErrNotMember):
 		fail(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, chains.ErrKeyTaken), errors.Is(err, chains.ErrTooManyKeys), errors.Is(err, chains.ErrTaken):
+		fail(w, http.StatusConflict, err.Error())
+	case errors.Is(err, statements.ErrBadDraft), errors.Is(err, statements.ErrBadSecret):
+		fail(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, statements.ErrNoFile), errors.Is(err, statements.ErrNoDraft):
+		fail(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, statements.ErrTooLarge):
+		fail(w, http.StatusRequestEntityTooLarge, err.Error())
+	case errors.Is(err, statements.ErrNoChain), errors.Is(err, statements.ErrMissing), errors.Is(err, statements.ErrNewer),
+		errors.Is(err, statements.ErrWrongPlace), errors.Is(err, statements.ErrTooMany):
 		fail(w, http.StatusConflict, err.Error())
 	case errors.Is(err, chains.ErrBroken):
 		a.Log.Error("sign api: a stored chain doesn't check", "path", r.URL.Path, "err", err)
@@ -288,4 +316,113 @@ func (a *API) companyKeys(w http.ResponseWriter, r *http.Request, account string
 	out(w, http.StatusOK, struct {
 		Keys []chains.Key `json:"keys"`
 	}{keys})
+}
+
+func (a *API) drafts(w http.ResponseWriter, r *http.Request, account string) {
+	ds, err := statements.Drafts(r.Context(), a.Store, account, r.PathValue("company"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if ds == nil {
+		ds = []statements.Draft{}
+	}
+	out(w, http.StatusOK, struct {
+		Drafts []statements.Draft `json:"drafts"`
+	}{ds})
+}
+
+// draft is one waiting draft, whole.
+func (a *API) draft(w http.ResponseWriter, r *http.Request, account string) {
+	if !uuidRe.MatchString(r.PathValue("draft")) {
+		a.failErr(w, r, statements.ErrNoDraft)
+		return
+	}
+	d, err := statements.DraftBody(r.Context(), a.Store, account, r.PathValue("company"), r.PathValue("draft"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, d)
+}
+
+var hashRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// file is a file of the company by its hash; wmanager-sign hashes what it gets again.
+func (a *API) file(w http.ResponseWriter, r *http.Request, account string) {
+	if !hashRe.MatchString(r.PathValue("hash")) {
+		fail(w, http.StatusNotFound, "no such file")
+		return
+	}
+	var h [32]byte
+	hex.Decode(h[:], []byte(r.PathValue("hash")))
+	content, err := statements.File(r.Context(), a.Store, account, r.PathValue("company"), h)
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, struct {
+		Content []byte `json:"content"`
+	}{content})
+}
+
+// state is the company's newest signed state, and the highest serial its computers report (none before stage 3).
+func (a *API) state(w http.ResponseWriter, r *http.Request, account string) {
+	st, err := statements.NewestState(r.Context(), a.Store, account, r.PathValue("company"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, struct {
+		State    *verify.Signed `json:"state"`
+		Reported int64          `json:"reported"`
+	}{st, 0})
+}
+
+// submitState takes a signed state, with the draft it was signed from and the secrets' values typed for it.
+func (a *API) submitState(w http.ResponseWriter, r *http.Request, account string) {
+	var in struct {
+		Signed  verify.Signed       `json:"signed"`
+		Draft   string              `json:"draft"`
+		Secrets []statements.Secret `json:"secrets"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if in.Draft != "" && !uuidRe.MatchString(in.Draft) {
+		a.failErr(w, r, statements.ErrNoDraft)
+		return
+	}
+	server := ""
+	if a.PublicURL != nil {
+		server = strings.TrimSuffix(a.PublicURL(), "/")
+	}
+	if server == "" {
+		a.failErr(w, r, errNoPublicURL)
+		return
+	}
+	serial, err := statements.SubmitState(r.Context(), a.Store, server, account, r.PathValue("company"), in.Signed, in.Draft, in.Secrets)
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, struct {
+		Serial int64 `json:"serial"`
+	}{serial})
+}
+
+// secretHashes is which secrets' values the server has: their names and hashes, never the values.
+func (a *API) secretHashes(w http.ResponseWriter, r *http.Request, account string) {
+	hs, err := statements.SecretHashes(r.Context(), a.Store, account, r.PathValue("company"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if hs == nil {
+		hs = []statements.SecretHash{}
+	}
+	out(w, http.StatusOK, struct {
+		Secrets []statements.SecretHash `json:"secrets"`
+	}{hs})
 }

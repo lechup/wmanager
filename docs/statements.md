@@ -70,7 +70,33 @@ and no space around them. Paths have letters, digits, `-`, `_`, `.` and `/`, are
 - A computer has at most 100 groups, each once.
 - Groups and secret names: a letter or digit, then up to 62 of letters, digits, `.`, `_` and `-`.
 
+- A secret's hash is the SHA-256 of `wmanager secret v1`, a zero byte, then the company's id (hex), the name, the
+  salt (128 random bits, made in `wmanager-sign` for each value) and the value, each with its length first as 4
+  bytes, big-endian (`verify.SecretHash`). The salt is kept with the value on the server, not in the state.
+
 The people who are not administrators, with their keys, units and rights, join the state in stage 4.
+
+### A state's draft
+
+What the panel prepares (stage 4a) and `wmanager-sign sign` reads, strictly (an unknown member refuses it):
+
+```json
+{"computers": [{"id": "...", "name": "OFFICE-03", "groups": ["office"]}],
+ "files": {"groups/office/choco-reqs.txt": "<hash>"},
+ "version": {"name": "v1.0.0", "files": {"Provision.ps1": "<hash>"}},
+ "release": "<hash of the release certificate (DER)>",
+ "secrets": ["wifi-office"]}
+```
+
+`wmanager-sign` sets the rest: the format, type, time and company; the serial, one more than the highest it knows
+(the newest state it verified and the newest it signed; it signs nothing when the computers report a newer one); the
+server, the one it is connected to; and each secret's hash, kept from the state it holds or made from a value
+typed now (again when the server lacks the value). It shows every change from the newer of the state it verified
+and the one it signed, and from any other state some computers may have: each new or
+changed file fetched by its hash and checked (a file that isn't text can't be shown, so it comes only with
+`add-file`), each new hash of wmanager's version, and the release certificate's. It asks for the first 8
+characters of each new computer's id. Until stage 6 it doesn't check the release and the version against the signed
+releases, and says so.
 
 ## job
 

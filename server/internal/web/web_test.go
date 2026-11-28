@@ -28,6 +28,7 @@ import (
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/auth/authtest"
 	"github.com/lechup/wmanager/server/internal/chains"
+	"github.com/lechup/wmanager/server/internal/statements"
 	"github.com/lechup/wmanager/server/internal/store/storetest"
 	"github.com/lechup/wmanager/verify"
 	"github.com/lechup/wmanager/verify/softkey"
@@ -1052,5 +1053,121 @@ func TestSignAPIRefusals(t *testing.T) {
 	}
 	if last != http.StatusTooManyRequests {
 		t.Errorf("guessing codes: %d", last)
+	}
+}
+
+func TestStatesAPI(t *testing.T) {
+	e := setup(t)
+	e.panel.PublicURL = "https://wm.example.com"
+	owner := e.browser()
+	owner.enroll("owner@example.com")
+	owner.get("/admin")
+	owner.post("/admin/company", url.Values{"name": {"Acme"}})
+	acme, me := owner.idOf("Acme"), owner.idOf("owner@example.com")
+	owner.post("/admin/member", url.Values{"company": {acme}, "account": {me}, "role": {"admin"}})
+	tok, account := owner.signIn()
+	anna, _ := softkey.New(verify.ES256)
+	e.registerKey(tok, account, anna)
+	s1 := firstList(t, anna, e.clock.now().UTC())
+	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, s1); code != http.StatusOK {
+		t.Fatalf("the first list: %d", code)
+	}
+	ctx := context.Background()
+	script := []byte("Write-Output 'hello'\n")
+	h, err := statements.PutFile(ctx, e.panel.Store, account, acme, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := statements.SaveDraft(ctx, e.panel.Store, account, acme, "state", []byte(`{"files": {}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code, out := e.api("GET", "companies/"+acme+"/drafts", tok, nil); code != http.StatusOK || !strings.Contains(string(out), draft) ||
+		strings.Contains(string(out), `"body"`) {
+		t.Fatalf("drafts: %d %s", code, out)
+	}
+	if code, out := e.api("GET", "companies/"+acme+"/drafts/"+draft, tok, nil); code != http.StatusOK || !strings.Contains(string(out), `"body"`) {
+		t.Fatalf("a draft: %d %s", code, out)
+	}
+	if code, _ := e.api("GET", "companies/"+acme+"/drafts/x", tok, nil); code != http.StatusNotFound {
+		t.Fatalf("a draft id that isn't one: %d", code)
+	}
+	var f struct {
+		Content []byte `json:"content"`
+	}
+	code, out := e.api("GET", "companies/"+acme+"/files/"+hex.EncodeToString(h[:]), tok, nil)
+	if code != http.StatusOK || jsonv2.Unmarshal(out, &f) != nil || string(f.Content) != string(script) {
+		t.Fatalf("a file: %d %s", code, out)
+	}
+	for _, p := range []string{"files/" + strings.Repeat("0", 64), "files/xyz", "files/" + strings.ToUpper(hex.EncodeToString(h[:]))} {
+		if code, _ := e.api("GET", "companies/"+acme+"/"+p, tok, nil); code != http.StatusNotFound {
+			t.Errorf("GET %s: %d", p, code)
+		}
+	}
+	if code, out := e.api("GET", "companies/"+acme+"/state", tok, nil); code != http.StatusOK || !strings.Contains(string(out), `"state":null`) {
+		t.Fatalf("no state yet: %d %s", code, out)
+	}
+
+	company := hex.EncodeToString(func() []byte { x := s1.Hash(); return x[:] }())
+	state := func(serial int64, server string) verify.Signed {
+		raw, _ := verify.Marshal(verify.State{Format: 1, Type: "state", SignedAt: e.clock.now().UTC().Truncate(time.Second),
+			Company: company, Serial: serial, Server: server, Release: strings.Repeat("ab", 32), Computers: []verify.Computer{},
+			Files:   map[string]string{"groups/office/hello.ps1": hex.EncodeToString(h[:])},
+			Version: verify.Version{Name: "v1.0.0", Files: map[string]string{}}, Secrets: map[string]string{}})
+		s, err := anna.SignStatement(raw, softkey.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if code, _ := e.api("POST", "companies/"+acme+"/states", tok, map[string]any{"signed": state(1, "https://other.example.com")}); code != http.StatusConflict {
+		t.Fatalf("a state for another server: %d", code)
+	}
+	if code, _ := e.api("POST", "companies/"+acme+"/states", tok, map[string]any{"signed": state(1, "https://wm.example.com"), "draft": "x"}); code != http.StatusNotFound {
+		t.Fatalf("a draft id that isn't one: %d", code)
+	}
+	if code, out := e.api("POST", "companies/"+acme+"/states", tok, map[string]any{"signed": state(1, "https://wm.example.com"), "draft": draft}); code != http.StatusOK || !strings.Contains(string(out), `"serial":1`) {
+		t.Fatalf("a state: %d %s", code, out)
+	}
+	if code, _ := e.api("POST", "companies/"+acme+"/states", tok, map[string]any{"signed": state(1, "https://wm.example.com")}); code != http.StatusConflict {
+		t.Fatalf("the same serial again: %d", code)
+	}
+	var got struct {
+		State *verify.Signed `json:"state"`
+	}
+	code, out = e.api("GET", "companies/"+acme+"/state", tok, nil)
+	if code != http.StatusOK || jsonv2.Unmarshal(out, &got) != nil || got.State == nil {
+		t.Fatalf("the state: %d %s", code, out)
+	}
+	ch, _ := verify.VerifyChain(verify.Fingerprint(s1.Hash()), []verify.Signed{s1})
+	if _, err := ch.VerifyState(*got.State, 0); err != nil {
+		t.Fatalf("the state as handed out: %v", err)
+	}
+	if code, out := e.api("GET", "companies/"+acme+"/drafts", tok, nil); code != http.StatusOK || strings.Contains(string(out), draft) {
+		t.Fatalf("the draft after signing: %d %s", code, out)
+	}
+
+	// A person and an outsider.
+	person := e.person(owner, "person@example.com", acme, "person")
+	ptok, _ := person.signIn()
+	outsider := e.person(owner, "outsider@example.com", "", "")
+	otok, _ := outsider.signIn()
+	for _, c := range []struct {
+		name, method, path, tok string
+		body                    any
+		want                    int
+	}{
+		{"a person's drafts", "GET", "drafts", ptok, nil, http.StatusForbidden},
+		{"a person's state", "POST", "states", ptok, map[string]any{"signed": state(2, "https://wm.example.com")}, http.StatusForbidden},
+		{"an outsider's file", "GET", "files/" + hex.EncodeToString(h[:]), otok, nil, http.StatusForbidden},
+		{"an outsider's state", "GET", "state", otok, nil, http.StatusForbidden},
+	} {
+		if code, _ := e.api(c.method, "companies/"+acme+"/"+c.path, c.tok, c.body); code != c.want {
+			t.Errorf("%s: %d, want %d", c.name, code, c.want)
+		}
+	}
+	if code, _ := e.api("GET", "companies/"+acme+"/state", ptok, nil); code != http.StatusOK {
+		t.Fatalf("a person reads the state: %d", code)
 	}
 }

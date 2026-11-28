@@ -5,6 +5,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -242,4 +244,90 @@ func (c *Client) RegisterKey(ctx context.Context, cose []byte, proof verify.Sign
 	}
 	err := c.do(ctx, http.MethodPost, "keys", map[string]any{"cose": cose, "proof": proof}, &r)
 	return r.ID, err
+}
+
+// Draft is a change made in the panel, waiting to be signed. Nothing in it is taken without being shown.
+type Draft struct {
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`
+	Body      []byte    `json:"body"`
+	CreatedBy string    `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Drafts is the company's drafts waiting to be signed.
+func (c *Client) Drafts(ctx context.Context, company string) ([]Draft, error) {
+	var ds struct {
+		Drafts []Draft `json:"drafts"`
+	}
+	err := c.do(ctx, http.MethodGet, companyPath(company, "drafts"), nil, &ds)
+	return ds.Drafts, err
+}
+
+// ErrFileHash is a file the server gave that doesn't match the hash asked for.
+var ErrFileHash = errors.New("the server gave a file that doesn't match its hash")
+
+// File is a file of the company by its SHA-256, checked against it.
+func (c *Client) File(ctx context.Context, company string, hash [32]byte) ([]byte, error) {
+	var f struct {
+		Content []byte `json:"content"`
+	}
+	if err := c.do(ctx, http.MethodGet, companyPath(company, "files/"+hex.EncodeToString(hash[:])), nil, &f); err != nil {
+		return nil, err
+	}
+	if sha256.Sum256(f.Content) != hash {
+		return nil, ErrFileHash
+	}
+	return f.Content, nil
+}
+
+// State is the company's newest signed state as the server has it (nil for none), and the highest serial its
+// computers report. Both are the server's word: wmanager-sign checks the state, and bounds the serial.
+func (c *Client) State(ctx context.Context, company string) (*verify.Signed, int64, error) {
+	var st struct {
+		State    *verify.Signed `json:"state"`
+		Reported int64          `json:"reported"`
+	}
+	err := c.do(ctx, http.MethodGet, companyPath(company, "state"), nil, &st)
+	return st.State, st.Reported, err
+}
+
+// Secret is a secret's value typed in wmanager-sign, with its salt.
+type Secret struct {
+	Name  string `json:"name"`
+	Salt  []byte `json:"salt"`
+	Value []byte `json:"value"`
+}
+
+// SubmitState gives the server a signed state, the draft it was signed from (or ""), and the secrets' values
+// typed for it.
+func (c *Client) SubmitState(ctx context.Context, company string, signed verify.Signed, draft string, secrets []Secret) (int64, error) {
+	var r struct {
+		Serial int64 `json:"serial"`
+	}
+	err := c.do(ctx, http.MethodPost, companyPath(company, "states"),
+		map[string]any{"signed": signed, "draft": draft, "secrets": secrets}, &r)
+	return r.Serial, err
+}
+
+// Draft is one waiting draft, whole.
+func (c *Client) Draft(ctx context.Context, company, id string) (Draft, error) {
+	var d Draft
+	err := c.do(ctx, http.MethodGet, companyPath(company, "drafts/"+url.PathEscape(id)), nil, &d)
+	return d, err
+}
+
+// SecretHash is a secret's value the server says it has, by its name and hash.
+type SecretHash struct {
+	Name string `json:"name"`
+	Hash string `json:"hash"`
+}
+
+// SecretHashes is which secrets' values the server says it has. A lie only makes the server refuse a state.
+func (c *Client) SecretHashes(ctx context.Context, company string) ([]SecretHash, error) {
+	var r struct {
+		Secrets []SecretHash `json:"secrets"`
+	}
+	err := c.do(ctx, http.MethodGet, companyPath(company, "secrets"), nil, &r)
+	return r.Secrets, err
 }
