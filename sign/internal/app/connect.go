@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -91,19 +92,24 @@ func (a *App) status(ctx context.Context) error {
 		a.say("status.nocompanies")
 		return nil
 	}
+	// An alarm for one company doesn't hide the others; it ends the run with an error all the same.
+	var alarm error
 	for _, c := range me.Companies {
 		name, role := show.Visible(c.Name), show.Visible(c.Role)
 		held, ch, err := a.load(ctx, s, c)
 		switch {
 		case errors.Is(err, verify.ErrForkedChain):
-			return err
+			a.say("line", err.Error())
+			alarm = cmp.Or(alarm, err)
 		case err != nil:
 			a.say("status.error", name, err.Error())
 		case held != nil:
 			a.say("status.held", show.Visible(held.Name), role, verify.Fingerprint(ch.Company), ch.Current().Sequence)
 			b, err := a.loadState(ctx, s, c, held, ch)
 			if errors.Is(err, verify.ErrForkedChain) {
-				return err
+				a.say("line", err.Error())
+				alarm = cmp.Or(alarm, err)
+				continue
 			}
 			if err != nil {
 				a.say("status.error", show.Visible(held.Name), err.Error())
@@ -126,5 +132,5 @@ func (a *App) status(ctx context.Context) error {
 			a.say("status.untrusted", name, role)
 		}
 	}
-	return nil
+	return alarm
 }

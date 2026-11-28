@@ -333,3 +333,33 @@ func keepSecrets(ctx context.Context, tx pgx.Tx, companyHex, companyID string, s
 	}
 	return nil
 }
+
+// SecretHash is a secret's value the server has, by its name and the hash a state names: not the value.
+type SecretHash struct {
+	Name string `json:"name"`
+	Hash string `json:"hash"`
+}
+
+// SecretHashes is which secrets' values the server has, for one of the company's administrators: so that
+// wmanager-sign asks again for a value the server lacks before it signs a state naming it.
+func SecretHashes(ctx context.Context, s *store.Store, accountID, companyID string) ([]SecretHash, error) {
+	var out []SecretHash
+	err := s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		if err := member(ctx, tx, accountID, companyID, true); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT name, hash FROM secrets WHERE company_id = $1 ORDER BY name, created_at`, companyID)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (SecretHash, error) {
+			var sh SecretHash
+			var h []byte
+			err := r.Scan(&sh.Name, &h)
+			sh.Hash = hex.EncodeToString(h)
+			return sh, err
+		})
+		return err
+	})
+	return out, err
+}

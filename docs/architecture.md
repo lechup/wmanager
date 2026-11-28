@@ -204,8 +204,10 @@ the next one against even when the server doesn't show it. So a server restored 
 hides a state signed here, doesn't make the computers refuse the next one, nor have it undo the hidden one unseen.
 The computers report the serial they have, through the server; when that is higher than any state `wmanager-sign`
 knows, it signs no state, since it can't show what changes from what the computers have (the administrator who
-signed that state gives it to the server again). A state signed by a key removed since isn't shown against, but the
-next serial passes it.
+signed that state gives it to the server again). The next state is also shown against every other state some
+computers may have: one signed by a key removed since (the computers that took it before the newer admin list
+have it), and one signed here that the server never got or refused, next to another administrator's with its
+serial. A secret's value the server lacks is typed again.
 
 `wmanager-sign` signs only when its clock is within 10 minutes of the server's. A hacked server can use that only to
 stop signing, and a wrong clock on the administrator's computer can't stamp a statement far in the future.

@@ -13,7 +13,6 @@
 package home
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -225,16 +224,10 @@ type Company struct {
 	// Mine is the newest state signed here, whether or not the server took it or still shows it: the next one is
 	// shown against the newer of the two, and has a higher serial.
 	Mine *verify.Signed `json:"mine,omitzero"`
-	// MineRefused is set when the server answered Mine with a refusal: another state with its serial, signed by
-	// another administrator, then replaces it rather than raising an alarm.
-	MineRefused bool `json:"mine_refused,omitzero"`
-
-	dropMine bool
+	// Former is the newest state seen signed by an administrator removed since: the computers that took it before
+	// the newer admin list have it, so the next state is shown against it too while it isn't older than the others.
+	Former *verify.Signed `json:"former,omitzero"`
 }
-
-// DropMine forgets the state signed here: one the server refused, replaced by another administrator's with its
-// serial.
-func (c *Company) DropMine() { c.Mine, c.MineRefused, c.dropMine = nil, false, true }
 
 // Serial is a state's serial, or 0 for none.
 func Serial(s *verify.Signed) int64 {
@@ -346,7 +339,7 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 	if err != nil {
 		return err
 	}
-	name, servers, state, mine, refused := c.Name, maps.Clone(c.Servers), c.State, c.Mine, c.MineRefused
+	name, servers, state, mine, former := c.Name, maps.Clone(c.Servers), c.State, c.Mine, c.Former
 	if servers == nil {
 		servers = map[string]string{}
 	}
@@ -363,14 +356,10 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 			}
 		}
 		// A state held is only replaced by a newer one, unless the caller drops the one signed here.
-		state = Newer(old.State, state)
-		same := old.Mine != nil && mine != nil && bytes.Equal(old.Mine.Statement, mine.Statement)
-		if !(mine == nil && c.dropMine) && !same && Newer(old.Mine, mine) == old.Mine {
-			mine, refused = old.Mine, old.MineRefused
-		}
+		state, mine, former = Newer(old.State, state), Newer(old.Mine, mine), Newer(old.Former, former)
 	}
 	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed,
-		State: state, Mine: mine, MineRefused: refused})
+		State: state, Mine: mine, Former: former})
 }
 
 // ForgetCompany removes a company held: only for a first list the server refused, never for a chain taken.

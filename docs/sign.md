@@ -114,7 +114,11 @@ Files:
   and checked; a file that can't be shown isn't signed. That includes a file that isn't text: such files come only
   with `add-file`, from your own disk.
 - The difference is from the newer of the state it verified and the one it signed itself, which it keeps even
-  when the server doesn't show it. When the computers report a newer state than either, it signs nothing.
+  when the server doesn't show it. When the computers report a newer state than either, it signs nothing. When
+  some computers may have another state (one signed by an administrator removed since, or one signed here that
+  the server never got, next to another administrator's with its serial), the difference from that one is shown
+  too.
+- A secret whose value the server lacks (a state signed here may never have reached it) is typed again.
 - A change of wmanager's version or of the release certificate is shown with the new hashes; until stage 6
   `wmanager-sign` doesn't check them against the signed releases, and says so.
 - **A new computer** is added only with the first 8 characters of its id typed, as its installer showed them.
@@ -122,7 +126,7 @@ Files:
   and gives the value and the salt to the server.
 - The serial is one more than the highest it knows.
 - States signed by others are shown, in short, as they arrive, checked against the newest admin list. One signed
-  by a key removed since isn't taken (the computers refuse it); its serial is passed.
+  by a key removed since is kept apart: the next state is shown against it too, and has a higher serial.
 
 ## What it refuses
 
@@ -146,7 +150,7 @@ In a folder only you can open: `$WMANAGER_SIGN_HOME`, or `~/.config/wmanager-sig
 | `server` | the server connected last |
 | `servers/<host>[_<port>]/token.json` | the connection's token, until it ends |
 | `servers/<host>[_<port>]/keys.json` | the signing keys made here: their public keys and credential ids |
-| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked and the newest it signed |
+| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, and one signed by an administrator removed since |
 
 A company is kept under its own id (the hash of its first admin list), not under the id a server gives it: a
 server that lists it again under a new id meets the chain held. Commands find a company by the name it had when it

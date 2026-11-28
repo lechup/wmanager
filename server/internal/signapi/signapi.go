@@ -62,6 +62,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/drafts/{draft}", a.authed(a.company(a.draft)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/files/{hash}", a.authed(a.company(a.file)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/state", a.authed(a.company(a.state)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/secrets", a.authed(a.company(a.secretHashes)))
 	mux.HandleFunc(statesRoute, a.authed(a.company(a.submitState)))
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -409,4 +410,19 @@ func (a *API) submitState(w http.ResponseWriter, r *http.Request, account string
 	out(w, http.StatusOK, struct {
 		Serial int64 `json:"serial"`
 	}{serial})
+}
+
+// secretHashes is which secrets' values the server has: their names and hashes, never the values.
+func (a *API) secretHashes(w http.ResponseWriter, r *http.Request, account string) {
+	hs, err := statements.SecretHashes(r.Context(), a.Store, account, r.PathValue("company"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if hs == nil {
+		hs = []statements.SecretHash{}
+	}
+	out(w, http.StatusOK, struct {
+		Secrets []statements.SecretHash `json:"secrets"`
+	}{hs})
 }

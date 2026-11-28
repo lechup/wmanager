@@ -192,17 +192,4 @@ func TestStatesOnlyMoveForward(t *testing.T) {
 			t.Fatalf("after %+v: state %d, mine %d, name %q", next, Serial(got.State), Serial(got.Mine), got.Name)
 		}
 	}
-	// The same state, refused: the flag is kept; a state dropped is forgotten.
-	held := get()
-	held.MineRefused = true
-	h.SetCompany(held, ch)
-	if !get().MineRefused {
-		t.Fatal("the refusal wasn't kept")
-	}
-	held = get()
-	held.DropMine()
-	h.SetCompany(held, ch)
-	if got := get(); got.Mine != nil || got.MineRefused || got.State == nil {
-		t.Fatalf("after DropMine: %+v", got)
-	}
 }

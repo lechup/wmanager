@@ -260,8 +260,15 @@ func TestStateOfARemovedAdmin(t *testing.T) {
 	w.anna.must("2\nyes\n", "admins", "remove", "Acme")
 	srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3}, map[string]string{}))
 	out := w.anna.must("1\n"+o3.ID[:8]+"\nyes\n", "sign", "Acme")
-	if !strings.Contains(out, "signed by Bob, whose key is no longer in the admin list") || !strings.Contains(out, "State 2 of Acme is signed") {
+	if !strings.Contains(out, "signed by Bob, whose key is no longer in the admin list") || !strings.Contains(out, "State 2 of Acme is signed") ||
+		!strings.Contains(out, "computers that have state 1, signed by Bob, removed since") {
 		t.Fatalf("after a removed admin's state: %s", out)
+	}
+	// Bob's state removed STOLEN; Anna's next draft brings it back: shown for the computers that have Bob's.
+	stolen := verify.Computer{ID: computerID("STOLEN"), Name: "STOLEN", Groups: []string{"office"}}
+	srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3, stolen}, map[string]string{}))
+	if out := w.anna.must("1\n"+stolen.ID[:8]+"\nyes\n", "sign", "Acme"); !strings.Contains(out, "+ STOLEN") {
+		t.Fatalf("a computer brought back: %s", out)
 	}
 	// A state with the serial held but not signed by an admin is only said, not an alarm.
 	stranger, _ := softkey.New(verify.ES256)
@@ -277,30 +284,85 @@ func TestStateOfARemovedAdmin(t *testing.T) {
 	}
 }
 
-// A state the server refused, and another administrator's with its serial: that one counts, no alarm.
-func TestRefusedStateReplaced(t *testing.T) {
+// A state signed here that the server refused, or whose answer was lost, and another administrator's with its
+// serial: no alarm, and the next state is shown against both.
+func TestStateSignedHereAndAnother(t *testing.T) {
+	for _, how := range []string{"refused", "lost"} {
+		t.Run(how, func(t *testing.T) {
+			w := setup(t)
+			w.anna.must("Bob\n"+w.bobKey+"\nyes\n", "admins", "add", "Acme")
+			w.bob.must("", "")
+			srv, acme := w.srv, w.company
+			o3 := verify.Computer{ID: computerID("OFFICE-03"), Name: "OFFICE-03", Groups: []string{"office"}}
+			o7 := verify.Computer{ID: computerID("OFFICE-07"), Name: "OFFICE-07", Groups: []string{"office"}}
+			srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3}, map[string]string{}, "wifi"))
+			w.anna.refuseOnly, w.anna.drop = how == "refused", how == "lost"
+			w.anna.secrets = []string{"pw", "pw"}
+			if _, err := w.anna.run("1\n"+o3.ID[:8]+"\nyes\n", "sign", "Acme"); err == nil {
+				t.Fatal("a state the server didn't get")
+			}
+			w.anna.refuseOnly, w.anna.drop = false, false
+			srv.ClearDrafts(acme)
+			srv.Draft(w.bob.account, acme, "state", draft([]verify.Computer{o7}, map[string]string{}))
+			w.bob.must("1\n"+o7.ID[:8]+"\nyes\n", "sign", "Acme")
+			out := w.anna.must("", "")
+			if !strings.Contains(out, "Both may be on computers") || strings.Contains(out, "ALARM") {
+				t.Fatalf("after Bob's state: %s", out)
+			}
+			// Anna's next state keeps the secret her state named: its value never reached the server, so it is typed
+			// again.
+			srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3, o7}, map[string]string{}, "wifi"))
+			w.anna.secrets = []string{"pw2", "pw2"}
+			out = w.anna.must("1\n"+o3.ID[:8]+"\nyes\n", "sign", "Acme")
+			for _, want := range []string{"State 2 of Acme", "+ OFFICE-03", "What it changes for the computers that have state 1 signed here",
+				"+ OFFICE-07", "State 2 of Acme is signed"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("Anna's next state doesn't show %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+}
+
+// A secret typed for a state that never reached the server is typed again for the next one.
+func TestSecretValueLost(t *testing.T) {
+	w := setup(t)
+	srv, acme := w.srv, w.company
+	o3 := verify.Computer{ID: computerID("OFFICE-03"), Name: "OFFICE-03", Groups: []string{"office"}}
+	srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3}, map[string]string{}, "wifi"))
+	w.anna.drop = true
+	w.anna.secrets = []string{"pw", "pw"}
+	if _, err := w.anna.run("1\n"+o3.ID[:8]+"\nyes\n", "sign", "Acme"); err == nil {
+		t.Fatal("a dropped state")
+	}
+	w.anna.drop = false
+	w.anna.secrets = []string{"pw", "pw"}
+	out := w.anna.must("1\nyes\n", "sign", "Acme")
+	if !strings.Contains(out, "lacks the value of the secret wifi") || !strings.Contains(out, "~ wifi (a new value)") ||
+		!strings.Contains(out, "State 2 of Acme is signed") {
+		t.Fatalf("the next state: %s", out)
+	}
+}
+
+// The review's case: Anna's state has STOLEN, Bob's next removes it, Anna removes Bob before she sees it, and her
+// next draft brings STOLEN back. It is shown for the computers that took Bob's.
+func TestRemovedAdminsStateNotUndoneUnseen(t *testing.T) {
 	w := setup(t)
 	w.anna.must("Bob\n"+w.bobKey+"\nyes\n", "admins", "add", "Acme")
 	w.bob.must("", "")
 	srv, acme := w.srv, w.company
 	o3 := verify.Computer{ID: computerID("OFFICE-03"), Name: "OFFICE-03", Groups: []string{"office"}}
-	srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3}, map[string]string{}))
-	w.anna.refuseOnly = true
-	if _, err := w.anna.run("1\n"+o3.ID[:8]+"\nyes\n", "sign", "Acme"); err == nil || !strings.Contains(err.Error(), "didn't take it") {
-		t.Fatalf("a refused state: %v", err)
-	}
-	w.anna.refuseOnly = false
-	o7 := verify.Computer{ID: computerID("OFFICE-07"), Name: "OFFICE-07", Groups: []string{"office"}}
-	srv.Draft(w.bob.account, acme, "state", draft([]verify.Computer{o3, o7}, map[string]string{}))
-	w.bob.must("2\n"+o3.ID[:8]+"\n"+o7.ID[:8]+"\nyes\n", "sign", "Acme")
-	out := w.anna.must("", "")
-	if !strings.Contains(out, "another administrator's with its serial") || strings.Contains(out, "ALARM") {
-		t.Fatalf("after Bob's state: %s", out)
-	}
-	srv.ClearDrafts(acme)
-	srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{}, map[string]string{}))
-	if out := w.anna.must("1\nyes\n", "sign", "Acme"); !strings.Contains(out, "State 2 of Acme") || !strings.Contains(out, "- OFFICE-03") ||
-		!strings.Contains(out, "- OFFICE-07") {
-		t.Fatalf("Anna's next state: %s", out)
+	stolen := verify.Computer{ID: computerID("STOLEN"), Name: "STOLEN", Groups: []string{"office"}}
+	srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3, stolen}, map[string]string{}))
+	w.anna.must("1\n"+o3.ID[:8]+"\n"+stolen.ID[:8]+"\nyes\n", "sign", "Acme")
+	w.bob.must("", "")
+	srv.Draft(w.bob.account, acme, "state", draft([]verify.Computer{o3}, map[string]string{}))
+	w.bob.must("1\nyes\n", "sign", "Acme")
+	w.anna.must("2\nyes\n", "admins", "remove", "Acme")
+	srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3, stolen}, map[string]string{}))
+	out := w.anna.must("1\nyes\n", "sign", "Acme")
+	i := strings.Index(out, "computers that have state 2, signed by Bob")
+	if i < 0 || !strings.Contains(out[i:], "+ STOLEN") || !strings.Contains(out, "State 3 of Acme is signed") {
+		t.Fatalf("Bob's state undone unseen: %s", out)
 	}
 }

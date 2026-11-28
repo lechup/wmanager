@@ -224,6 +224,12 @@ func TestStates(t *testing.T) {
 		t.Fatalf("another company's state: %v", err)
 	}
 
+	if hs, err := SecretHashes(ctx, e.s, e.admin, e.company); err != nil || len(hs) != 1 || hs[0].Name != "wifi-office" || hs[0].Hash != secret {
+		t.Fatalf("SecretHashes: %+v %v", hs, err)
+	}
+	if _, err := SecretHashes(ctx, e.s, e.person, e.company); !errors.Is(err, ErrNotAdmin) {
+		t.Fatalf("a person's SecretHashes: %v", err)
+	}
 	// Secrets' values are the server's own: a member's queries see none of them, even past the member check.
 	var n int
 	if err := e.s.Tx(ctx, store.Who{Account: e.admin}, func(tx pgx.Tx) error {

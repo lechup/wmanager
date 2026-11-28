@@ -316,3 +316,18 @@ func (c *Client) Draft(ctx context.Context, company, id string) (Draft, error) {
 	err := c.do(ctx, http.MethodGet, companyPath(company, "drafts/"+url.PathEscape(id)), nil, &d)
 	return d, err
 }
+
+// SecretHash is a secret's value the server says it has, by its name and hash.
+type SecretHash struct {
+	Name string `json:"name"`
+	Hash string `json:"hash"`
+}
+
+// SecretHashes is which secrets' values the server says it has. A lie only makes the server refuse a state.
+func (c *Client) SecretHashes(ctx context.Context, company string) ([]SecretHash, error) {
+	var r struct {
+		Secrets []SecretHash `json:"secrets"`
+	}
+	err := c.do(ctx, http.MethodGet, companyPath(company, "secrets"), nil, &r)
+	return r.Secrets, err
+}
