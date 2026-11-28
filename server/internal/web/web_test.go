@@ -1,11 +1,14 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base32"
 	"encoding/binary"
+	"encoding/hex"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"io/fs"
@@ -25,6 +28,8 @@ import (
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/auth/authtest"
 	"github.com/lechup/wmanager/server/internal/store/storetest"
+	"github.com/lechup/wmanager/verify"
+	"github.com/lechup/wmanager/verify/softkey"
 )
 
 const pw = "a long enough password"
@@ -693,5 +698,133 @@ func TestPasskeyJSONAfterTheSessionEnds(t *testing.T) {
 	e.clock.add(auth.SessionIdle + time.Hour)
 	if code, out := b.postJSON("/account/passkey/begin", "", nil); code != http.StatusUnauthorized || !strings.Contains(string(out), "signin") {
 		t.Fatalf("a JSON request after the session ended: %d %s", code, out)
+	}
+}
+
+// api calls the sign API with a token (or none).
+func (e *env) api(method, path, tok string, body any) (int, []byte) {
+	e.t.Helper()
+	var rdr io.Reader
+	if body != nil {
+		b, err := jsonv2.Marshal(body)
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		rdr = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, e.srv.URL+"/api/sign/v1/"+path, rdr)
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := e.srv.Client().Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, out
+}
+
+func TestSignAPI(t *testing.T) {
+	e := setup(t)
+	owner := e.browser()
+	owner.enroll("owner@example.com")
+	owner.get("/admin")
+	owner.post("/admin/company", url.Values{"name": {"Acme"}})
+	acme, me := owner.idOf("Acme"), owner.idOf("owner@example.com")
+	owner.post("/admin/member", url.Values{"company": {acme}, "account": {me}, "role": {"admin"}})
+
+	owner.get("/account")
+	_, body := owner.post("/account/sign-code", nil)
+	m := regexp.MustCompile(`<code class="secret">([A-Z2-9]{4}-[A-Z2-9]{4})</code>`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("no code on the account page")
+	}
+	code, out := e.api("POST", "login", "", map[string]string{"code": strings.ToLower(m[1])})
+	var login struct {
+		Token string `json:"token"`
+	}
+	if code != http.StatusOK || jsonv2.Unmarshal(out, &login) != nil || login.Token == "" {
+		t.Fatalf("login: %d %s", code, out)
+	}
+	if code, _ := e.api("POST", "login", "", map[string]string{"code": m[1]}); code != http.StatusUnauthorized {
+		t.Fatalf("the code used twice: %d", code)
+	}
+	if code, _ := e.api("GET", "me", "nope", nil); code != http.StatusUnauthorized {
+		t.Fatalf("a wrong token: %d", code)
+	}
+	tok := login.Token
+	if code, out := e.api("GET", "me", tok, nil); code != http.StatusOK || !strings.Contains(string(out), `"name":"Acme"`) ||
+		strings.Contains(string(out), "fingerprint") {
+		t.Fatalf("me: %d %s", code, out)
+	}
+
+	// A key registered, the first admin list signed with it, then a second.
+	anna, err := softkey.New(verify.ES256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out := e.api("POST", "keys", tok, map[string][]byte{"cose": anna.COSEKey()}); code != http.StatusOK ||
+		!strings.Contains(string(out), anna.ID()) {
+		t.Fatalf("register a key: %d %s", code, out)
+	}
+	if code, _ := e.api("POST", "keys", tok, map[string][]byte{"cose": []byte("not a key")}); code != http.StatusBadRequest {
+		t.Fatalf("a key that isn't one: %d", code)
+	}
+	if code, _ := e.api("POST", "keys", tok, map[string]string{"other": "x"}); code != http.StatusBadRequest {
+		t.Fatalf("an unknown member: %d", code)
+	}
+	if code, out := e.api("GET", "companies/"+acme+"/keys", tok, nil); code != http.StatusOK || !strings.Contains(string(out), anna.ID()) {
+		t.Fatalf("the company's keys: %d %s", code, out)
+	}
+	now := e.clock.now().UTC()
+	first := verify.Admins{Format: 1, Type: "admins", SignedAt: now, Nonce: strings.Repeat("ab", 16), Sequence: 1,
+		Administrators: []verify.Administrator{{Name: "Owner", Keys: []verify.Key{anna.ListKey()}}}}
+	raw, _ := verify.Marshal(first)
+	s1, err := anna.SignStatement(raw, softkey.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out = e.api("POST", "companies/"+acme+"/chain", tok, s1)
+	if code != http.StatusOK || !strings.Contains(string(out), verify.Fingerprint(s1.Hash())) {
+		t.Fatalf("the first list: %d %s", code, out)
+	}
+	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, s1); code != http.StatusConflict {
+		t.Fatalf("the first list again: %d", code)
+	}
+	h := s1.Hash()
+	second := verify.Admins{Format: 1, Type: "admins", SignedAt: now, Company: hex.EncodeToString(h[:]), Sequence: 2,
+		Previous: hex.EncodeToString(h[:]), Administrators: first.Administrators}
+	raw2, _ := verify.Marshal(second)
+	stranger, _ := softkey.New(verify.ES256)
+	bad, _ := stranger.SignStatement(raw2, softkey.Options{})
+	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, bad); code != http.StatusConflict {
+		t.Fatalf("a list signed by a stranger: %d", code)
+	}
+	s2, _ := anna.SignStatement(raw2, softkey.Options{})
+	if code, out := e.api("POST", "companies/"+acme+"/chain", tok, s2); code != http.StatusOK || !strings.Contains(string(out), `"sequence":2`) {
+		t.Fatalf("the second list: %d %s", code, out)
+	}
+	var chain struct {
+		Lists []verify.Signed `json:"lists"`
+	}
+	code, out = e.api("GET", "companies/"+acme+"/chain", tok, nil)
+	if code != http.StatusOK || jsonv2.Unmarshal(out, &chain) != nil || len(chain.Lists) != 2 {
+		t.Fatalf("the chain: %d %s", code, out)
+	}
+	if _, err := verify.VerifyChain(verify.Fingerprint(s1.Hash()), chain.Lists); err != nil {
+		t.Fatalf("the chain as handed out: %v", err)
+	}
+	if _, body := owner.get("/c/" + acme); !strings.Contains(body, verify.Fingerprint(s1.Hash())) || !strings.Contains(body, "Admin list number 2") {
+		t.Fatal("the company page doesn't show the chain")
+	}
+	if code, _ := e.api("GET", "time", "", nil); code != http.StatusOK {
+		t.Fatalf("time: %d", code)
+	}
+	// Disconnected from the panel: the token stops working.
+	owner.get("/account")
+	owner.post("/account/sign-revoke", nil)
+	if code, _ := e.api("GET", "me", tok, nil); code != http.StatusUnauthorized {
+		t.Fatalf("a token after disconnecting: %d", code)
 	}
 }

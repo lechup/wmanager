@@ -23,4 +23,15 @@
 </div>
 <p id="passkey-status" class="error" role="status"></p>
 {{else}}<p class="muted">{{t "account.nopublicurl"}}</p>{{end}}
+
+<h2>wmanager-sign</h2>
+<p>{{t "account.signtext"}}</p>
+{{if .Data.SignCode}}<div class="notice" role="status"><p>{{t "account.signshow" (time .Data.SignExpires)}}</p>
+<p><code class="secret">{{.Data.SignCode}}</code></p></div>{{end}}
+<div class="row">
+  <form method="post" action="/account/sign-code" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">{{t "account.signcode"}}</button></form>
+  <form method="post" action="/account/sign-revoke" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">{{t "account.signrevoke"}}</button></form>
+</div>
 {{end}}

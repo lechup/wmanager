@@ -2,6 +2,16 @@
 {{define "content"}}
 {{with .Data}}
 <h1>{{.Company.Name}}</h1>
+<h2>{{t "company.chain"}}</h2>
+{{if .ChainBroken}}<p class="error" role="alert">{{t "company.chainbroken" .ChainBroken}}</p>
+{{else if .Chain}}
+<p>{{t "company.fingerprint"}} <code class="secret">{{.Chain.Fingerprint}}</code></p>
+<p class="muted">{{t "company.sequence" .Chain.Sequence}}</p>
+<table>
+  <thead><tr><th>{{t "admin.name"}}</th><th>{{t "company.keys"}}</th></tr></thead>
+  <tbody>{{range .Chain.Administrators}}<tr><td>{{.Name}}</td><td>{{range .Keys}}<code>{{keyfp .ID}}</code><br>{{end}}</td></tr>{{end}}</tbody>
+</table>
+{{else}}<p class="muted">{{t "company.nochain"}}</p>{{end}}
 <h2>{{t "company.people"}}</h2>
 <table>
   <thead><tr><th>{{t "admin.email"}}</th><th>{{t "admin.name"}}</th><th>{{t "admin.role"}}</th></tr></thead>
