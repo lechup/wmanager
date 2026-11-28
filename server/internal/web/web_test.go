@@ -3,10 +3,15 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	jsonv2 "encoding/json/v2"
@@ -29,6 +34,7 @@ import (
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/auth/authtest"
 	"github.com/lechup/wmanager/server/internal/chains"
+	"github.com/lechup/wmanager/server/internal/computers"
 	"github.com/lechup/wmanager/server/internal/signapi"
 	"github.com/lechup/wmanager/server/internal/statements"
 	"github.com/lechup/wmanager/server/internal/store/storetest"
@@ -1248,5 +1254,238 @@ func TestSlowUpload(t *testing.T) {
 	e.panel.FilesDir = ""
 	if code, _ := put(bytes.NewReader(chunk), int64(len(chunk))); code != http.StatusServiceUnavailable {
 		t.Errorf("no folder: %d", code)
+	}
+}
+
+// fakeAgent is a computer with a software key, as the agent's protocol has it (docs/agent.md).
+type fakeAgent struct {
+	e   *env
+	key *ecdsa.PrivateKey
+	id  string
+}
+
+func newAgent(t *testing.T, e *env) *fakeAgent {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spki, _ := x509.MarshalPKIXPublicKey(&k.PublicKey)
+	return &fakeAgent{e: e, key: k, id: computers.ID(spki)}
+}
+
+func (a *fakeAgent) enroll(token, name string, at time.Time) (int, []byte) {
+	spki, _ := x509.MarshalPKIXPublicKey(&a.key.PublicKey)
+	th := computers.TokenHash(token)
+	d := computers.EnrollDigest(a.e.panel.PublicURL, hex.EncodeToString(th[:]), a.id, name, at)
+	proof, _ := ecdsa.SignASN1(rand.Reader, a.key, d[:])
+	return a.e.agentCall(http.MethodPost, "enroll", "", map[string]any{"token": token, "public_key": spki, "name": name,
+		"time": at, "proof": proof})
+}
+
+func (a *fakeAgent) authorization(method, path string, at time.Time, body []byte) string {
+	ts := at.UTC().Format(time.RFC3339Nano)
+	d := computers.RequestDigest(method, path, ts, body)
+	sig, _ := ecdsa.SignASN1(rand.Reader, a.key, d[:])
+	return "WM-Agent id=" + a.id + ", time=" + ts + ", sig=" + base64.StdEncoding.EncodeToString(sig)
+}
+
+func (e *env) agentCall(method, path, authz string, body any) (int, []byte) {
+	e.t.Helper()
+	var rdr io.Reader
+	if body != nil {
+		b, _ := jsonv2.Marshal(body)
+		rdr = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, e.srv.URL+"/api/agent/v1/"+path, rdr)
+	if authz != "" {
+		req.Header.Set("Authorization", authz)
+	}
+	resp, err := e.srv.Client().Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, out
+}
+
+func (a *fakeAgent) poll(lists int, serial int64) (int, []byte) {
+	path := fmt.Sprintf("/api/agent/v1/poll?lists=%d&serial=%d", lists, serial)
+	return a.e.agentCall(http.MethodGet, strings.TrimPrefix(path, "/api/agent/v1/"), a.authorization(http.MethodGet, path, a.e.clock.now(), nil), nil)
+}
+
+func TestAgentAPI(t *testing.T) {
+	e := setup(t)
+	e.panel.PublicURL, e.panel.PollFor = "https://wm.example.com", time.Second
+	owner := e.browser()
+	owner.enroll("owner@example.com")
+	owner.get("/admin")
+	owner.post("/admin/company", url.Values{"name": {"Acme"}})
+	owner.post("/admin/company", url.Values{"name": {"Other"}})
+	acme, other, me := owner.idOf("Acme"), owner.idOf("Other"), owner.idOf("owner@example.com")
+	owner.post("/admin/member", url.Values{"company": {acme}, "account": {me}, "role": {"admin"}})
+	owner.post("/admin/member", url.Values{"company": {other}, "account": {me}, "role": {"admin"}})
+	tok, account := owner.signIn()
+	ctx := context.Background()
+	token, err := computers.CreateToken(ctx, e.panel.Store, account, acme, computers.DefaultTokenLife, 2, e.clock.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pc := newAgent(t, e)
+	now := e.clock.now()
+	for name, c := range map[string]struct {
+		token, name string
+		at          time.Time
+		want        int
+	}{
+		"a wrong token":     {"AAAAA-BBBBB-CCCCC-DDDDD-EEEEE", "PC", now, http.StatusUnauthorized},
+		"an old proof":      {token, "PC", now.Add(-time.Hour), http.StatusUnauthorized},
+		"a name with a tab": {token, "P\tC", now, http.StatusBadRequest},
+	} {
+		if code, out := pc.enroll(c.token, c.name, c.at); code != c.want {
+			t.Errorf("%s: %d %s", name, code, out)
+		}
+	}
+	code, out := pc.enroll(strings.ToLower(token), "OFFICE-03", now)
+	if code != http.StatusOK || !strings.Contains(string(out), pc.id) || !strings.Contains(string(out), acme) {
+		t.Fatalf("enroll: %d %s", code, out)
+	}
+	if code, _ := pc.enroll(token, "OFFICE-03", now); code != http.StatusOK {
+		t.Fatalf("the same computer again: %d", code)
+	}
+	// The token is for two computers; the second uses it up.
+	if code, _ := newAgent(t, e).enroll(token, "OFFICE-07", now); code != http.StatusOK {
+		t.Fatal("a second computer")
+	}
+	if code, _ := newAgent(t, e).enroll(token, "OFFICE-09", now); code != http.StatusUnauthorized {
+		t.Fatalf("a token used up: %d", code)
+	}
+	// The same key with another company's token.
+	token2, _ := computers.CreateToken(ctx, e.panel.Store, account, other, computers.DefaultTokenLife, 1, now)
+	if code, _ := pc.enroll(token2, "OFFICE-03", now); code != http.StatusConflict {
+		t.Fatalf("a computer of another company: %d", code)
+	}
+
+	// The poll: nothing yet, after its wait.
+	code, out = pc.poll(0, 0)
+	if code != http.StatusOK || !strings.Contains(string(out), `"lists":[]`) || !strings.Contains(string(out), `"state":null`) {
+		t.Fatalf("an empty poll: %d %s", code, out)
+	}
+	// A poll waiting is woken by the first admin list.
+	anna, _ := softkey.New(verify.ES256)
+	e.registerKey(tok, account, anna)
+	s1 := firstList(t, anna, now)
+	done := make(chan string)
+	go func() {
+		_, out := pc.poll(0, 0)
+		done <- string(out)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if code, _ := e.api("POST", "companies/"+acme+"/chain", tok, s1); code != http.StatusOK {
+		t.Fatal("the first list")
+	}
+	select {
+	case got := <-done:
+		if !strings.Contains(got, `"lists":[{`) {
+			t.Fatalf("the woken poll: %s", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the poll wasn't woken")
+	}
+	if code, out := pc.poll(1, 0); code != http.StatusOK || !strings.Contains(string(out), `"lists":[]`) {
+		t.Fatalf("a poll with the list held: %d %s", code, out)
+	}
+
+	// Refusals of a signed request: a replay, a time too far, another computer's key, an unknown computer.
+	path := "/api/agent/v1/poll?lists=1&serial=0"
+	authz := pc.authorization(http.MethodGet, path, e.clock.now(), nil)
+	if code, _ := e.agentCall(http.MethodGet, "poll?lists=1&serial=0", authz, nil); code != http.StatusOK {
+		t.Fatal("a signed poll")
+	}
+	if code, _ := e.agentCall(http.MethodGet, "poll?lists=1&serial=0", authz, nil); code != http.StatusUnauthorized {
+		t.Fatal("a replayed poll")
+	}
+	if code, _ := e.agentCall(http.MethodGet, "poll?lists=1&serial=0", pc.authorization(http.MethodGet, path, e.clock.now().Add(-10*time.Minute), nil), nil); code != http.StatusUnauthorized {
+		t.Fatal("a poll of 10 minutes ago")
+	}
+	if code, _ := e.agentCall(http.MethodGet, "poll?lists=0&serial=0", authz, nil); code != http.StatusUnauthorized {
+		t.Fatal("a signature over another query")
+	}
+	stranger := newAgent(t, e)
+	if code, _ := e.agentCall(http.MethodGet, "poll?lists=1&serial=0", stranger.authorization(http.MethodGet, path, e.clock.now(), nil), nil); code != http.StatusUnauthorized {
+		t.Fatal("an unknown computer")
+	}
+	forged := strings.Replace(stranger.authorization(http.MethodGet, path, e.clock.now(), nil), stranger.id, pc.id, 1)
+	if code, _ := e.agentCall(http.MethodGet, "poll?lists=1&serial=0", forged, nil); code != http.StatusUnauthorized {
+		t.Fatal("another key under the computer's id")
+	}
+	// The last contact is kept.
+	cs, err := computers.List(ctx, e.panel.Store, account, acme)
+	if err != nil || len(cs) != 2 {
+		t.Fatalf("List: %v %v", cs, err)
+	}
+	for _, c := range cs {
+		if c.ID == pc.id && c.LastContact.IsZero() {
+			t.Fatal("no last contact")
+		}
+	}
+}
+
+var tokenRe = regexp.MustCompile(`<code class="secret">([A-Z2-9]{5}(-[A-Z2-9]{5}){4})</code>`)
+
+func TestEnrollmentTokensPanel(t *testing.T) {
+	e := setup(t)
+	e.panel.PublicURL, e.panel.PollFor = "https://wm.example.com", time.Second
+	owner := e.browser()
+	owner.enroll("owner@example.com")
+	owner.get("/admin")
+	owner.post("/admin/company", url.Values{"name": {"Acme"}})
+	acme, me := owner.idOf("Acme"), owner.idOf("owner@example.com")
+	owner.post("/admin/member", url.Values{"company": {acme}, "account": {me}, "role": {"admin"}})
+
+	owner.get("/c/" + acme)
+	if !strings.Contains(owner.last, "No computer is enrolled yet") || !strings.Contains(owner.last, "No token is waiting") {
+		t.Fatal("the company page without computers or tokens")
+	}
+	_, body := owner.post("/c/"+acme+"/token", url.Values{"days": {"40"}, "uses": {"1"}})
+	if !strings.Contains(body, "valid for 1 to 30 days") {
+		t.Fatal("a token valid too long")
+	}
+	_, body = owner.post("/c/"+acme+"/token", url.Values{"days": {"7"}, "uses": {"3"}})
+	m := tokenRe.FindStringSubmatch(body)
+	if m == nil || strings.Contains(body, `hreflang`) {
+		t.Fatalf("the new token isn't shown once: %s", body)
+	}
+	// A computer enrolls with it and shows on the page.
+	pc := newAgent(t, e)
+	if code, out := pc.enroll(m[1], "OFFICE-03", e.clock.now()); code != http.StatusOK {
+		t.Fatalf("enroll with the panel's token: %d %s", code, out)
+	}
+	owner.get("/c/" + acme)
+	if !strings.Contains(owner.last, "OFFICE-03") || !strings.Contains(owner.last, pc.id[:8]) || !strings.Contains(owner.last, ">2<") {
+		t.Fatalf("the computer and the token's uses left: %s", owner.last)
+	}
+	// A person sees the computers, not the tokens.
+	person := e.person(owner, "person@example.com", acme, "person")
+	person.get("/c/" + acme)
+	if !strings.Contains(person.last, "OFFICE-03") || strings.Contains(person.last, "Enrollment tokens") {
+		t.Fatal("a person's view of the company")
+	}
+	if code, _ := person.post("/c/"+acme+"/token", url.Values{"days": {"7"}, "uses": {"1"}}); code != http.StatusForbidden {
+		t.Fatalf("a person makes a token: %d", code)
+	}
+	// The token ended: it enrolls nothing more.
+	owner.get("/c/" + acme)
+	id := regexp.MustCompile(`name="token" value="([0-9a-f-]{36})"`).FindStringSubmatch(owner.last)
+	if id == nil {
+		t.Fatal("no token to end")
+	}
+	owner.post("/c/"+acme+"/token-end", url.Values{"token": {id[1]}})
+	if !strings.Contains(owner.last, "No token is waiting") {
+		t.Fatal("the token isn't ended")
+	}
+	if code, _ := newAgent(t, e).enroll(m[1], "OFFICE-07", e.clock.now()); code != http.StatusUnauthorized {
+		t.Fatalf("an ended token: %d", code)
 	}
 }

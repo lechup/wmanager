@@ -172,7 +172,9 @@ Short trials of what could overturn the design, each on a branch of its own. The
 
 ### Stage 3: the agent and the installer
 
-- **3a, the service and enrollment:**
+- **3a, the service and enrollment** (first the server's side, done: [The agent's protocol](agent.md), enrollment
+  tokens on the company's page, the computers and their last contact, every request signed with the computer's key,
+  and the long poll woken by each statement kept):
   - the `wmanager` service as SYSTEM;
   - the computer's key in the TPM and its id;
   - enrollment with a token, the fingerprint typed at the computer, and the first 8 characters of the id shown;

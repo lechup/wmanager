@@ -53,6 +53,10 @@ party id no web page can claim.
 - **Jobs and stops** are signed the same way. The server keeps a job only with its script, under an id not used
   before, and a stop only for a job it has, on computers the job names; `wmanager-sign` fetches a job by its id to
   show it, whole, before stopping it. Computers fetch them from stage 5.
+- **Computers** enroll with a token an administrator makes on the company's page (valid for 1 to 30 days, for 1 to
+  1000 computers, shown once and ended there), and from then on sign every request with their own key
+  ([The agent's protocol](agent.md)). The page lists them with their last contact. A computer enrolled is in no
+  group until a signed state lists it. Enrolling needs `WMANAGER_PUBLIC_URL`, which each proof names.
 - **Signing keys** are registered from `wmanager-sign`, each with a proof signed by the key that its holder
   registers it for this account on this server (at most 20 an account; it needs `WMANAGER_PUBLIC_URL`). A key counts only once an administrator adds it to a
   signed admin list, after typing its fingerprint.

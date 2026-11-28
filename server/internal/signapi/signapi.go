@@ -48,6 +48,15 @@ type API struct {
 	PublicURL func() string
 	// FilesDir gives the folder of the files added with add-file (WMANAGER_FILES_DIR); "" refuses them.
 	FilesDir func() string
+	// Notify, when set, is told of each company that has a new admin list, state, job or stop: it wakes the
+	// company's computers' long polls.
+	Notify func(company string)
+}
+
+func (a *API) notify(company string) {
+	if a.Notify != nil {
+		a.Notify(company)
+	}
 }
 
 var errNoPublicURL = errors.New("registering keys and taking states needs WMANAGER_PUBLIC_URL")
@@ -296,6 +305,7 @@ func (a *API) appendList(w http.ResponseWriter, r *http.Request, account string)
 		a.failErr(w, r, err)
 		return
 	}
+	a.notify(r.PathValue("company"))
 	out(w, http.StatusOK, struct {
 		Fingerprint string `json:"fingerprint"`
 		Sequence    int64  `json:"sequence"`
@@ -434,6 +444,7 @@ func (a *API) submitState(w http.ResponseWriter, r *http.Request, account string
 		a.failErr(w, r, err)
 		return
 	}
+	a.notify(r.PathValue("company"))
 	out(w, http.StatusOK, struct {
 		Serial int64 `json:"serial"`
 	}{serial})
@@ -460,6 +471,7 @@ func (a *API) submitOne(w http.ResponseWriter, r *http.Request, account string,
 		a.failErr(w, r, err)
 		return
 	}
+	a.notify(r.PathValue("company"))
 	out(w, http.StatusOK, struct{}{})
 }
 

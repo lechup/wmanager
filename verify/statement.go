@@ -210,6 +210,10 @@ func checkHash(what, s string) error {
 
 // checkName refuses a name a screen could show differently from what it is: control characters, bidirectional
 // overrides, invisible formatting; wmanager-sign shows the rest.
+// CheckName checks a name as statements take them (of an administrator, a computer, a person): 1 to 100
+// characters, no control, formatting or invisible character, no space around it.
+func CheckName(what, s string) error { return checkName(what, s) }
+
 func checkName(what, s string) error {
 	if s == "" || len([]rune(s)) > maxName || strings.TrimSpace(s) != s {
 		return bad("%s: 1 to %d characters, no space around", what, maxName)

@@ -21,13 +21,17 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lechup/wmanager/server/internal/accounts"
+	"github.com/lechup/wmanager/server/internal/agentapi"
 	"github.com/lechup/wmanager/server/internal/audit"
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/chains"
+	"github.com/lechup/wmanager/server/internal/computers"
+	"github.com/lechup/wmanager/server/internal/notify"
 	"github.com/lechup/wmanager/server/internal/signapi"
 	"github.com/lechup/wmanager/server/internal/store"
 )
@@ -46,6 +50,8 @@ type Server struct {
 	Log            *slog.Logger
 	PublicURL      string         // e.g. https://wm.example.com; "" means the request's host
 	FilesDir       string         // where files added with wmanager-sign add-file are kept; "" refuses them
+	Hub            notify.Hub     // wakes the agents' long polls when something new is kept
+	PollFor        time.Duration  // how long an agent's poll waits (agentapi.PollFor when 0; tests shorten it)
 	TrustedProxies []netip.Prefix // whose X-Forwarded-For is believed
 
 	pages map[string]*template.Template
@@ -122,6 +128,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /c/{company}", s.full(s.company))
 	mux.HandleFunc("GET /c/{company}/audit.json", s.full(s.auditExport))
 	mux.HandleFunc("GET /c/{company}/audit.csv", s.full(s.auditExport))
+	mux.HandleFunc("POST /c/{company}/token", s.full(s.newToken))
+	mux.HandleFunc("POST /c/{company}/token-end", s.full(s.endToken))
 
 	mux.HandleFunc("GET /admin", s.owner(s.admin))
 	mux.HandleFunc("POST /admin/company", s.owner(s.newCompany))
@@ -134,8 +142,12 @@ func (s *Server) Handler() http.Handler {
 	top := http.NewServeMux()
 	top.Handle("/", cop.Handler(limitBody(mux)))
 	api := &signapi.API{Store: s.Store, Auth: s.Auth, Log: s.Log, ClientAddr: s.clientAddr,
-		PublicURL: func() string { return s.PublicURL }, FilesDir: func() string { return s.FilesDir }}
+		PublicURL: func() string { return s.PublicURL }, FilesDir: func() string { return s.FilesDir },
+		Notify: s.Hub.Notify}
 	top.Handle(signapi.Prefix, api.Handler())
+	agents := &agentapi.API{Store: s.Store, Auth: s.Auth, Log: s.Log, Hub: &s.Hub, ClientAddr: s.clientAddr,
+		PublicURL: func() string { return s.PublicURL }, PollFor: func() time.Duration { return s.PollFor }}
+	top.Handle(agentapi.Prefix, agents.Handler())
 	return s.logged(headers(top))
 }
 
@@ -638,7 +650,12 @@ type CompanyPage struct {
 	Chain       *chains.Summary
 	ChainBroken string
 	Company     accounts.Company
+	IsAdmin     bool
 	Members     []accounts.Member
+	Computers   []computers.Computer
+	Tokens      []computers.Token // for an administrator
+	NewToken    string            // an enrollment token just made, shown once
+	TokenError  string
 	Entries     []audit.Record // newest first, at most 100
 	Total       int
 	Head        string
@@ -661,6 +678,11 @@ func (s *Server) companyOf(r *http.Request, ses auth.Session) (accounts.Company,
 }
 
 func (s *Server) company(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	s.companyPage(w, r, ses, CompanyPage{})
+}
+
+// companyPage shows a company's page, with what a form of it adds (an enrollment token made, an error).
+func (s *Server) companyPage(w http.ResponseWriter, r *http.Request, ses auth.Session, p CompanyPage) {
 	c, ok, err := s.companyOf(r, ses)
 	if err != nil {
 		s.internal(w, r, err)
@@ -676,7 +698,17 @@ func (s *Server) company(w http.ResponseWriter, r *http.Request, ses auth.Sessio
 		return
 	}
 	who := store.Who{Account: ses.AccountID}
-	p := CompanyPage{Company: c, Members: members}
+	p.Company, p.Members, p.IsAdmin = c, members, c.Role == "admin"
+	if p.Computers, err = computers.List(r.Context(), s.Store, ses.AccountID, c.ID); err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	if p.IsAdmin {
+		if p.Tokens, err = computers.Tokens(r.Context(), s.Store, ses.AccountID, c.ID, s.Auth.Now()); err != nil {
+			s.internal(w, r, err)
+			return
+		}
+	}
 	p.Chain, err = chains.Summarize(r.Context(), s.Store, ses.AccountID, c.ID)
 	switch {
 	case errors.Is(err, chains.ErrBroken):
@@ -704,7 +736,49 @@ func (s *Server) company(w http.ResponseWriter, r *http.Request, ses auth.Sessio
 	for i := len(recs) - 1; i >= 0 && len(p.Entries) < 100; i-- {
 		p.Entries = append(p.Entries, recs[i])
 	}
-	s.render(w, r, http.StatusOK, "company", &ses, Page{Data: p})
+	s.render(w, r, http.StatusOK, "company", &ses, Page{Data: p, NoLang: p.NewToken != ""})
+}
+
+// newToken makes an enrollment token for the company, shown once on its page.
+func (s *Server) newToken(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	days, err1 := strconv.Atoi(r.PostFormValue("days"))
+	uses, err2 := strconv.Atoi(r.PostFormValue("uses"))
+	if err1 != nil || err2 != nil {
+		s.companyPage(w, r, ses, CompanyPage{TokenError: "company.tokenlimits"})
+		return
+	}
+	c, ok, err := s.companyOf(r, ses)
+	if err != nil || !ok {
+		s.company(w, r, ses)
+		return
+	}
+	token, err := computers.CreateToken(r.Context(), s.Store, ses.AccountID, c.ID, time.Duration(days)*24*time.Hour, uses, s.Auth.Now())
+	switch {
+	case errors.Is(err, computers.ErrTokenLimits):
+		s.companyPage(w, r, ses, CompanyPage{TokenError: "company.tokenlimits"})
+	case errors.Is(err, computers.ErrNotAdmin), errors.Is(err, computers.ErrNotMember):
+		s.fail(w, r, http.StatusForbidden, "error.forbidden")
+	case err != nil:
+		s.internal(w, r, err)
+	default:
+		s.companyPage(w, r, ses, CompanyPage{NewToken: token})
+	}
+}
+
+// endToken ends an enrollment token of the company.
+func (s *Server) endToken(w http.ResponseWriter, r *http.Request, ses auth.Session) {
+	c, ok, err := s.companyOf(r, ses)
+	if err == nil && ok {
+		err = computers.EndToken(r.Context(), s.Store, ses.AccountID, c.ID, r.PostFormValue("token"))
+	}
+	switch {
+	case errors.Is(err, computers.ErrNotAdmin), errors.Is(err, computers.ErrNotMember):
+		s.fail(w, r, http.StatusForbidden, "error.forbidden")
+	case err != nil:
+		s.internal(w, r, err)
+	default:
+		http.Redirect(w, r, "/c/"+r.PathValue("company"), http.StatusSeeOther)
+	}
 }
 
 func (s *Server) auditExport(w http.ResponseWriter, r *http.Request, ses auth.Session) {
