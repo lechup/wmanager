@@ -177,6 +177,13 @@ func (p *person) must(input string, args ...string) string {
 	return out
 }
 
+// session is the person's connection, as a command has it.
+func (p *person) session() (*session, error) {
+	a := &App{Home: p.home, HTTP: &http.Client{Transport: lying{p, p.srv.Client.Transport}},
+		Now: func() time.Time { return p.srv.Now().Add(p.skew) }, Lang: "en"}
+	return a.connected()
+}
+
 func (p *person) connect() {
 	p.t.Helper()
 	p.secrets = append(p.secrets, p.srv.SignCode(p.account))

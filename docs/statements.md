@@ -109,11 +109,27 @@ releases, and says so.
 `run_as` is `system` or `user`; `expires` is after `start_after` and `signed_at`, and at most 7 days after
 `signed_at`; `limit` is 1 second to a day; computers and secrets each once. When a job may run (the time floor, ids seen before) is stage 5.
 
+### A job's draft
+
+```json
+{"computers": ["<computer id>"], "groups": ["finance"], "script": "<hash>", "run_as": "system",
+ "secrets": ["wifi-office"], "start_after": "<optional>", "valid_for": 86400, "limit": 600}
+```
+
+`wmanager-sign` turns the groups into their computers from the state it verified (a computer added to a group
+later doesn't run the job), refuses a computer or a secret that state doesn't have, makes the job's random id, and
+counts `expires` from the time it signs (`valid_for` seconds, at most 7 days); `start_after` left out is the time
+it signs. It shows the computers by their names in that state, who the job runs as, its secrets, its times and the
+whole script, fetched by its hash.
+
 ## stop
 
 ```json
 {"format": 1, "type": "stop", "signed_at": "...", "company": "...", "job": "<job id>", "computers": ["<computer id>"]}
 ```
+
+A stop's draft is `{"job": "<job id>", "computers": ["<computer id>"]}`: `wmanager-sign` finds the job among the
+company's signed jobs and refuses a computer the job doesn't run on. The server keeps a stop only for a job it has.
 
 ## session
 

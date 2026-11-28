@@ -85,3 +85,21 @@ func (a *App) signWith(d fido.Device, pin string, raw []byte, allowed map[string
 	}
 	return verify.Signed{}, a.fail("err.nokeyhere")
 }
+
+// signAsAdmin signs a statement's bytes with a key of the newest admin list on the security key.
+func (a *App) signAsAdmin(s *session, ch *verify.Chain, raw []byte) (verify.Signed, error) {
+	d, pin, err := a.device()
+	if err != nil {
+		return verify.Signed{}, err
+	}
+	defer d.Close()
+	allowed := map[string]verify.PublicKey{}
+	for id, k := range ch.AdminKeys() {
+		allowed[id] = k.Key
+	}
+	mine, err := a.myKeys(s)
+	if err != nil {
+		return verify.Signed{}, err
+	}
+	return a.signWith(d, pin, raw, allowed, mine)
+}

@@ -140,6 +140,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		if len(args) == 1 {
 			return a.signDraft(ctx, args[0])
 		}
+	case "secret":
+		if len(args) == 3 && args[0] == "set" {
+			return a.setSecret(ctx, args[1], args[2])
+		}
 	case "help", "-h", "-help", "--help":
 		a.say("usage")
 		return nil

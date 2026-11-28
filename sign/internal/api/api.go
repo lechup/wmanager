@@ -331,3 +331,22 @@ func (c *Client) SecretHashes(ctx context.Context, company string) ([]SecretHash
 	err := c.do(ctx, http.MethodGet, companyPath(company, "secrets"), nil, &r)
 	return r.Secrets, err
 }
+
+// SubmitJob gives the server a signed job, with the draft it was signed from (or "").
+func (c *Client) SubmitJob(ctx context.Context, company string, signed verify.Signed, draft string) error {
+	return c.do(ctx, http.MethodPost, companyPath(company, "jobs"), map[string]any{"signed": signed, "draft": draft}, nil)
+}
+
+// SubmitStop gives the server a signed stop, with the draft it was signed from (or "").
+func (c *Client) SubmitStop(ctx context.Context, company string, signed verify.Signed, draft string) error {
+	return c.do(ctx, http.MethodPost, companyPath(company, "stops"), map[string]any{"signed": signed, "draft": draft}, nil)
+}
+
+// Jobs is the company's newest signed jobs, as the server has them.
+func (c *Client) Jobs(ctx context.Context, company string) ([]verify.Signed, error) {
+	var js struct {
+		Jobs []verify.Signed `json:"jobs"`
+	}
+	err := c.do(ctx, http.MethodGet, companyPath(company, "jobs"), nil, &js)
+	return js.Jobs, err
+}
