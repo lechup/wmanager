@@ -5,7 +5,8 @@
 //	servers/<host[_port]>/
 //	    token.json                 the sign API's token and when it ends
 //	    keys.json                  the signing keys made here: their ids, public keys and credential ids
-//	    companies/<id>.json        each company's fingerprint and the whole chain it verified
+//	companies/<id>.json            each company's fingerprint and the whole chain it verified, under the company's
+//	                               own id (the hash of its first admin list)
 //
 // The chains are what protect the administrator against a server that shows an older chain or another one: they
 // are written only after being checked, and only ever replaced by a longer chain that starts with them.
@@ -124,15 +125,27 @@ type Server struct {
 	dir string
 }
 
-// Server is a server's folder; its address is https://host[:port] as api.Normalize writes it.
+// Server is a server's folder; its address is https://host[:port] as api.Normalize writes it. The folder is the
+// host, "_" and the port when there is one; an IPv6 address is "ipv6_" and the address with "-" for ":".
 func (h *Home) Server(server string) (*Server, error) {
 	u, err := url.Parse(server)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" {
 		return nil, fmt.Errorf("not a server's address: %q", server)
 	}
-	name := strings.NewReplacer(":", "_", "[", "", "]", "").Replace(u.Host)
+	name := u.Hostname()
+	if strings.Contains(name, ":") {
+		name = "ipv6_" + strings.ReplaceAll(name, ":", "-")
+	}
+	if p := u.Port(); p != "" {
+		name += "_" + p
+	}
+	if !folderRe.MatchString(name) || strings.Contains(name, "..") || strings.HasPrefix(name, ".") {
+		return nil, fmt.Errorf("not a server's address: %q", server)
+	}
 	return &Server{URL: server, dir: filepath.Join(h.Dir, "servers", name)}, nil
 }
+
+var folderRe = regexp.MustCompile(`^(ipv6_[0-9a-f-]+|[a-z0-9.-]+)(_[0-9]{1,5})?$`)
 
 // Token is the sign API's token.
 type Token struct {
@@ -192,26 +205,30 @@ func (s *Server) AddKey(k Key) error {
 	return writeJSON(s.keysPath(), append(ks, k))
 }
 
-// Company is what wmanager-sign keeps of a company: its fingerprint and the whole chain it verified.
+// Company is what wmanager-sign keeps of a company: its fingerprint and the whole chain it verified, the name it
+// had when it was taken, and the id each server gives it. It is filed under the company's own id (the hash of its
+// first admin list), not under a server's id for it: a server that lists the company again under a new id still
+// meets the chain held, and can't have it taken again from an older one.
 type Company struct {
-	ID          string          `json:"id"` // the server's id of it
-	Name        string          `json:"name"`
-	Fingerprint string          `json:"fingerprint"`
-	Chain       []verify.Signed `json:"chain"`
+	Name        string            `json:"name"`
+	Fingerprint string            `json:"fingerprint"`
+	Servers     map[string]string `json:"servers"` // a server's address: its id of the company
+	Chain       []verify.Signed   `json:"chain"`
 }
 
-var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-func (s *Server) companyPath(id string) (string, error) {
-	if !uuidRe.MatchString(id) {
+func (h *Home) companyPath(id string) (string, error) {
+	if !hex64.MatchString(id) {
 		return "", fmt.Errorf("not a company's id: %q", id)
 	}
-	return filepath.Join(s.dir, "companies", id+".json"), nil
+	return filepath.Join(h.Dir, "companies", id+".json"), nil
 }
 
-// Company is a company's chain as held, checked again against its fingerprint; nil when none is held.
-func (s *Server) Company(id string) (*Company, *verify.Chain, error) {
-	p, err := s.companyPath(id)
+// Company is a company held, by its own id, with its chain checked again against its fingerprint; nil when it
+// isn't held.
+func (h *Home) Company(id string) (*Company, *verify.Chain, error) {
+	p, err := h.companyPath(id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -221,31 +238,74 @@ func (s *Server) Company(id string) (*Company, *verify.Chain, error) {
 		return nil, nil, err
 	}
 	ch, err := verify.VerifyChain(c.Fingerprint, c.Chain)
-	if err != nil {
-		return nil, nil, fmt.Errorf("the chain kept in %s doesn't check: %w", p, err)
+	if err != nil || ch.CompanyID() != id {
+		return nil, nil, fmt.Errorf("the chain kept in %s doesn't check: %v", p, err)
+	}
+	if c.Servers == nil {
+		c.Servers = map[string]string{}
 	}
 	return &c, ch, nil
 }
 
-// SetCompany keeps a company's checked chain. A chain is only ever replaced by one that starts with it: the
+// Companies is every company held.
+func (h *Home) Companies() ([]*Company, []*verify.Chain, error) {
+	names, err := filepath.Glob(filepath.Join(h.Dir, "companies", "*.json"))
+	if err != nil {
+		return nil, nil, err
+	}
+	var cs []*Company
+	var chs []*verify.Chain
+	for _, n := range names {
+		c, ch, err := h.Company(strings.TrimSuffix(filepath.Base(n), ".json"))
+		if err != nil {
+			return nil, nil, err
+		}
+		if c != nil {
+			cs, chs = append(cs, c), append(chs, ch)
+		}
+	}
+	return cs, chs, nil
+}
+
+// ByServer is the company held that a server calls by its id; nil when none.
+func (h *Home) ByServer(server, serverID string) (*Company, *verify.Chain, error) {
+	cs, chs, err := h.Companies()
+	if err != nil {
+		return nil, nil, err
+	}
+	for i, c := range cs {
+		if c.Servers[server] == serverID {
+			return c, chs[i], nil
+		}
+	}
+	return nil, nil, nil
+}
+
+// SetCompany keeps a company with its checked chain. A chain is only ever replaced by one that starts with it: the
 // caller checks that with verify.Chain.Update; this checks it again.
-func (s *Server) SetCompany(id, name string, ch *verify.Chain) error {
-	p, err := s.companyPath(id)
+func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
+	p, err := h.companyPath(ch.CompanyID())
 	if err != nil {
 		return err
 	}
-	if old, held, err := s.Company(id); err != nil {
+	if _, held, err := h.Company(ch.CompanyID()); err != nil {
 		return err
-	} else if old != nil {
-		if held.Company != ch.Company {
-			return fmt.Errorf("%w: another company's chain", verify.ErrForkedChain)
-		}
+	} else if held != nil {
 		again := &verify.Chain{Company: held.Company, Lists: held.Lists, Signed: held.Signed}
 		if err := again.Update(ch.Signed); err != nil {
 			return err
 		}
 	}
-	return writeJSON(p, Company{ID: id, Name: name, Fingerprint: verify.Fingerprint(ch.Company), Chain: ch.Signed})
+	return writeJSON(p, Company{Name: c.Name, Fingerprint: verify.Fingerprint(ch.Company), Servers: c.Servers, Chain: ch.Signed})
+}
+
+// ForgetCompany removes a company held: only for a first list the server refused, never for a chain taken.
+func (h *Home) ForgetCompany(id string) error {
+	p, err := h.companyPath(id)
+	if err != nil {
+		return err
+	}
+	return os.Remove(p)
 }
 
 // RandomHex is n random bytes in hex.

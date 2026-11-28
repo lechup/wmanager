@@ -2,9 +2,9 @@
 // with it, under the relying party id verify.RPID. The key itself is libfido2's (build tag fido2, libfido2.go);
 // tests use a software key (fidotest).
 //
-// The keys it makes are discoverable (resident): a security key signs with them on any computer, without a
-// credential id kept anywhere, and wmanager-sign finds which of its keys signed by checking the signature against
-// the keys the admin list names.
+// The keys it makes are discoverable (resident): a security key signs with them on any computer. Where a key was
+// made, wmanager-sign keeps its credential id to ask for that key only; elsewhere every key on the security key
+// signs, and wmanager-sign finds which one did by checking the signature against the keys the admin list names.
 package fido
 
 import (

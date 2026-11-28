@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/lechup/wmanager/server/servertest"
+	"github.com/lechup/wmanager/sign/internal/api"
 	"github.com/lechup/wmanager/sign/internal/fido"
 	"github.com/lechup/wmanager/sign/internal/fido/fidotest"
 	"github.com/lechup/wmanager/sign/internal/home"
@@ -32,8 +34,13 @@ type person struct {
 	skew    time.Duration
 	secrets []string
 	out     bytes.Buffer
-	// rewrite, when set, changes the server's answers to GET .../chain: a server that lies.
-	rewrite func(lists []verify.Signed) []verify.Signed
+	// A server that lies: rewrite changes its answers to GET .../chain (the path given), rewriteMe its list of
+	// companies, and alias lists a company under another id (alias[0] for alias[1]).
+	rewrite   func(lists []verify.Signed) []verify.Signed
+	rewriteMe func(me *api.Me)
+	alias     [2]string
+	// lose loses the server's answers to POSTs, after the server has them; drop loses the POSTs themselves.
+	lose, drop bool
 }
 
 func newPerson(t *testing.T, srv *servertest.Server, account string) *person {
@@ -46,19 +53,51 @@ type lying struct {
 }
 
 func (l lying) RoundTrip(r *http.Request) (*http.Response, error) {
+	if l.p.alias[0] != "" && strings.Contains(r.URL.Path, l.p.alias[0]) {
+		r = r.Clone(r.Context())
+		r.URL.Path = strings.Replace(r.URL.Path, l.p.alias[0], l.p.alias[1], 1)
+	}
+	if l.p.drop && r.Method == http.MethodPost {
+		return nil, errors.New("no route to host (the test's)")
+	}
 	resp, err := l.next.RoundTrip(r)
-	if err != nil || l.p.rewrite == nil || r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/chain") {
+	if err == nil && l.p.lose && r.Method == http.MethodPost {
+		resp.Body.Close()
+		return nil, errors.New("connection reset (the test's)")
+	}
+	if err != nil || r.Method != http.MethodGet {
 		return resp, err
 	}
-	defer resp.Body.Close()
-	var ch struct {
-		Lists []verify.Signed `json:"lists"`
+	var out any
+	switch {
+	case l.p.rewrite != nil && strings.HasSuffix(r.URL.Path, "/chain"):
+		var ch struct {
+			Lists []verify.Signed `json:"lists"`
+		}
+		if err := json.UnmarshalRead(resp.Body, &ch); err != nil {
+			return nil, err
+		}
+		ch.Lists = l.p.rewrite(ch.Lists)
+		out = ch
+	case strings.HasSuffix(r.URL.Path, "/me") && (l.p.rewriteMe != nil || l.p.alias[0] != ""):
+		var me api.Me
+		if err := json.UnmarshalRead(resp.Body, &me); err != nil {
+			return nil, err
+		}
+		for i := range me.Companies {
+			if me.Companies[i].ID == l.p.alias[1] {
+				me.Companies[i].ID = l.p.alias[0]
+			}
+		}
+		if l.p.rewriteMe != nil {
+			l.p.rewriteMe(&me)
+		}
+		out = me
+	default:
+		return resp, nil
 	}
-	if err := json.UnmarshalRead(resp.Body, &ch); err != nil {
-		return nil, err
-	}
-	ch.Lists = l.p.rewrite(ch.Lists)
-	b, _ := json.Marshal(ch)
+	resp.Body.Close()
+	b, _ := json.Marshal(out)
 	resp.Body = io.NopCloser(bytes.NewReader(b))
 	resp.ContentLength = int64(len(b))
 	resp.Header.Del("Content-Length")
@@ -123,11 +162,7 @@ func (p *person) newKey() string {
 
 func (p *person) heldLists(company string) int {
 	p.t.Helper()
-	s, err := p.home.Server(p.srv.URL)
-	if err != nil {
-		p.t.Fatal(err)
-	}
-	h, _, err := s.Company(company)
+	h, _, err := p.home.ByServer(p.srv.URL, company)
 	if err != nil {
 		p.t.Fatal(err)
 	}
@@ -374,4 +409,152 @@ func mustCOSE(t *testing.T, p *person) []byte {
 		t.Fatalf("no key made: %v", err)
 	}
 	return ks[0].COSE
+}
+
+// A server that lists a company again under a new id, with an older chain (one that still has a key removed
+// since), meets the chain held: it is found by the company's own id, and the older chain isn't taken.
+func TestServerRelabelsACompany(t *testing.T) {
+	w := setup(t)
+	w.anna.must("Bob\n"+w.bobKey+"\nyes\n", "admins", "add", "Acme")
+	w.bob.must("", "")
+	w.bob.must("1\nyes\n", "admins", "remove", "Acme") // list 3: Anna removed
+	fresh := "11111111-2222-4333-8444-555555555555"
+	w.bob.alias = [2]string{fresh, w.company}
+	w.bob.rewrite = func(l []verify.Signed) []verify.Signed { return l[:2] }
+	if _, err := w.bob.run("", "admins", "Acme"); err == nil || !strings.Contains(err.Error(), "doesn't list Acme") {
+		t.Fatalf("a held company the server lists no more: %v", err)
+	}
+	out := w.bob.must(w.fp+"\n", "company", "trust", fresh)
+	if !strings.Contains(out, "it is behind") || !strings.Contains(out, "under another id") || !strings.Contains(out, "hold the chain of Acme already") {
+		t.Fatalf("trust of a relabelled company: %s", out)
+	}
+	out = w.bob.must("", "admins", "Acme")
+	if !strings.Contains(out, "Admin list 3 of Acme") || strings.Contains(out, "  Anna:") {
+		t.Fatalf("the older chain came back: %s", out)
+	}
+
+	// Another chain under the id the server gave the company before is an alarm.
+	w.bob.alias, w.bob.rewrite = [2]string{}, nil
+	w.bob.must("", "") // back under its real id
+	k, _ := softkey.New(verify.ES256)
+	fake := firstListOf(t, k)
+	w.bob.rewrite = func(l []verify.Signed) []verify.Signed { return []verify.Signed{fake} }
+	if _, err := w.bob.run("", ""); !errors.Is(err, verify.ErrForkedChain) || !strings.Contains(err.Error(), "another chain") {
+		t.Fatalf("another chain for the company: %v", err)
+	}
+}
+
+func firstListOf(t *testing.T, k *softkey.Key) verify.Signed {
+	t.Helper()
+	raw, _ := verify.Marshal(verify.Admins{Format: 1, Type: "admins", SignedAt: time.Now().UTC().Truncate(time.Second),
+		Nonce: strings.Repeat("ef", 16), Sequence: 1,
+		Administrators: []verify.Administrator{{Name: "Mallory", Keys: []verify.Key{k.ListKey()}}}})
+	s, err := k.SignStatement(raw, softkey.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// The security key signs on a computer where none of its keys were made: every key on it signs, and the one in the
+// list is found by its signature. A security key with none of the list's keys signs nothing.
+func TestAnotherComputer(t *testing.T) {
+	w := setup(t)
+	laptop := newPerson(t, w.srv, w.anna.account)
+	laptop.dev = w.anna.dev
+	laptop.connect()
+	laptop.must(w.fp+"\n", "company", "trust", "Acme")
+	if out := laptop.must("Bob\n"+w.bobKey+"\nyes\n", "admins", "add", "Acme"); !strings.Contains(out, "Admin list 2 of Acme is signed") ||
+		!strings.Contains(out, "None of the keys made here") {
+		t.Fatalf("signing from another computer: %s", out)
+	}
+	if _, err := laptop.run("", "company", "init", "Acme"); err == nil || !strings.Contains(err.Error(), "admin list already") {
+		t.Fatalf("init of a company with a list: %v", err)
+	}
+	w.anna.dev.Forget()
+	if _, err := w.anna.run("1\nyes\n", "admins", "remove", "Acme"); err == nil || !strings.Contains(err.Error(), "holds no key") {
+		t.Fatalf("a security key reset: %v", err)
+	}
+}
+
+func TestMoreRefusals(t *testing.T) {
+	w := setup(t)
+	// A newer list the server shows that doesn't check is not taken.
+	stranger, _ := softkey.New(verify.ES256)
+	w.bob.rewrite = func(l []verify.Signed) []verify.Signed {
+		h := l[0].Hash()
+		raw, _ := verify.Marshal(verify.Admins{Format: 1, Type: "admins", SignedAt: time.Now().UTC().Truncate(time.Second),
+			Company: hex.EncodeToString(h[:]), Sequence: 2, Previous: hex.EncodeToString(h[:]),
+			Administrators: []verify.Administrator{{Name: "Mallory", Keys: []verify.Key{stranger.ListKey()}}}})
+		s, _ := stranger.SignStatement(raw, softkey.Options{})
+		return append(l, s)
+	}
+	if out, err := w.bob.run("", "admins", "Acme"); err == nil || !strings.Contains(err.Error(), "don't check") {
+		t.Fatalf("a list that doesn't check: %v\n%s", err, out)
+	}
+	w.bob.rewrite = nil
+	if n := w.bob.heldLists(w.company); n != 1 {
+		t.Fatalf("%d lists held", n)
+	}
+
+	// What the server says is shown visibly: a company's name with an escape sequence.
+	other := w.srv.Company("Other")
+	w.srv.Join(w.bob.account, other, "admin")
+	w.bob.rewriteMe = func(m *api.Me) {
+		for i := range m.Companies {
+			if m.Companies[i].ID == other {
+				m.Companies[i].Name = "Oth\x1b[2Jer\u202e"
+			}
+		}
+	}
+	if out := w.bob.must("", ""); !strings.Contains(out, "Oth<U+001B>[2Jer<U+202E>") || strings.ContainsRune(out, 0x1b) {
+		t.Fatalf("a name with an escape: %q", out)
+	}
+	w.bob.rewriteMe = nil
+
+	// The last key of an administrator, and the last administrator, can't be removed.
+	if _, err := w.anna.run("1\nyes\n", "admins", "remove-key", "Acme"); err == nil || !strings.Contains(err.Error(), "only key of Anna") {
+		t.Fatalf("the last key: %v", err)
+	}
+	if _, err := w.anna.run("1\nyes\n", "admins", "remove", "Acme"); err == nil || !strings.Contains(err.Error(), "only administrator") {
+		t.Fatalf("the last administrator: %v", err)
+	}
+	// An empty PIN.
+	w.anna.dev.PIN = "1234"
+	w.anna.secrets = []string{""}
+	if _, err := w.anna.run("Bob\n"+w.bobKey+"\nyes\n", "admins", "add", "Acme"); err == nil || !strings.Contains(err.Error(), "No PIN") {
+		t.Fatalf("an empty PIN: %v", err)
+	}
+}
+
+// The first list's answer lost on the way: the fingerprint is shown and kept all the same.
+func TestFirstListAnswerLost(t *testing.T) {
+	srv := servertest.New(t)
+	company := srv.Company("Acme")
+	anna := newPerson(t, srv, srv.Person("anna@example.com", company, "admin"))
+	anna.connect()
+	anna.newKey()
+	anna.lose = true
+	out := anna.must("Anna\nyes\n", "company", "init", "Acme")
+	fp := fpRe.FindString(out[strings.Index(out, "is set up"):])
+	if fp == "" || !strings.Contains(out, "answer didn't come") {
+		t.Fatalf("init with the answer lost: %s", out)
+	}
+	anna.lose = false
+	if out := anna.must("", "fingerprint", "Acme"); !strings.Contains(out, fp) {
+		t.Fatalf("after: %s", out)
+	}
+
+	// The list that never reached the server reaches it the next time.
+	beta := srv.Company("Beta")
+	srv.Join(anna.account, beta, "admin")
+	anna.drop = true
+	anna.must("Anna\nyes\n", "company", "init", "Beta")
+	anna.drop = false
+	if out := anna.must("", ""); !strings.Contains(out, "it is behind") || !strings.Contains(out, "lists it lacked (1)") {
+		t.Fatalf("after the list was lost: %s", out)
+	}
+	if out := anna.must("", ""); strings.Contains(out, "behind") || !strings.Contains(out, "Beta (admin)") {
+		t.Fatalf("the server has it: %s", out)
+	}
 }

@@ -201,16 +201,37 @@ func (a *App) checkClock(ctx context.Context, s *session) error {
 	return nil
 }
 
-// company finds a company of the account by its name or id.
+// company finds a company of the account: first among those held, by the name it had when it was taken (so a
+// server that swaps two companies' names doesn't swap which one is signed for), then among the server's, by its
+// name or id.
 func (a *App) company(ctx context.Context, s *session, which string) (api.Company, error) {
 	me, err := s.client.Me(ctx)
 	if err != nil {
 		return api.Company{}, a.apiErr(s, err)
 	}
-	var found []api.Company
+	byID := map[string]api.Company{}
 	for _, c := range me.Companies {
-		if c.ID == which || strings.EqualFold(c.Name, which) {
+		byID[c.ID] = c
+	}
+	held, _, err := a.Home.Companies()
+	if err != nil {
+		return api.Company{}, err
+	}
+	var found []api.Company
+	for _, h := range held {
+		if id, ok := h.Servers[s.client.Server]; ok && strings.EqualFold(h.Name, which) {
+			c, ok := byID[id]
+			if !ok {
+				return api.Company{}, a.fail("err.notlisted", show.Visible(h.Name))
+			}
 			found = append(found, c)
+		}
+	}
+	if len(found) == 0 {
+		for _, c := range me.Companies {
+			if c.ID == which || strings.EqualFold(c.Name, which) {
+				found = append(found, c)
+			}
 		}
 	}
 	switch len(found) {

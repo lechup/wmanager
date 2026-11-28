@@ -86,33 +86,26 @@ func (a *App) status(ctx context.Context) error {
 	if err != nil {
 		return a.apiErr(s, err)
 	}
-	a.say("status.server", s.client.Server)
+	a.say("status.server", show.Visible(s.client.Server))
 	if len(me.Companies) == 0 {
 		a.say("status.nocompanies")
 		return nil
 	}
 	for _, c := range me.Companies {
-		held, ch, err := s.srv.Company(c.ID)
-		if err != nil {
-			return err
-		}
 		name, role := show.Visible(c.Name), show.Visible(c.Role)
-		if held == nil {
-			if c.Fingerprint == "" {
-				a.say("status.nochain", name, role)
-			} else {
-				a.say("status.untrusted", name, role)
-			}
-			continue
-		}
-		if _, err := a.refresh(ctx, s, c, held, ch); err != nil {
-			if errors.Is(err, verify.ErrForkedChain) {
-				return err
-			}
+		held, ch, err := a.load(ctx, s, c)
+		switch {
+		case errors.Is(err, verify.ErrForkedChain):
+			return err
+		case err != nil:
 			a.say("status.error", name, err.Error())
-			continue
+		case held != nil:
+			a.say("status.held", show.Visible(held.Name), role, verify.Fingerprint(ch.Company), ch.Current().Sequence)
+		case c.Fingerprint == "":
+			a.say("status.nochain", name, role)
+		default:
+			a.say("status.untrusted", name, role)
 		}
-		a.say("status.held", name, role, verify.Fingerprint(ch.Company), ch.Current().Sequence)
 	}
 	return nil
 }

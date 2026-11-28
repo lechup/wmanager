@@ -54,7 +54,8 @@ refused.
    wmanager-sign company init Acme
    ```
 
-   It shows the company's fingerprint. **Write it down and keep it**: computers are checked against it when they
+   It shows the company's fingerprint, and keeps the list even when the server's answer is lost on the way (it
+   gives the server the list the next time). **Write it down and keep it**: computers are checked against it when they
    are installed, and other administrators type it in. The panel shows it too, but a hacked server could show
    another one there.
 
@@ -87,10 +88,10 @@ computers: install them again.
 
 ## What it refuses
 
-- **A chain that doesn't start with the one it holds.** A server showing an older chain gets the lists it lacks
-  back (from an administrator), and nothing is signed on the older one. A server showing a chain that leaves the
-  held one is an alarm (it could bring back a removed key): nothing is signed, and the other administrators should
-  know.
+- **A chain that doesn't start with the one it holds**, whatever id the server lists the company under. A server
+  showing an older chain gets the lists it lacks back (from an administrator), and nothing is signed on the older
+  one. A server showing a chain that leaves the held one, or another chain for the company, is an alarm (it could
+  bring back a removed key): nothing is signed, and the other administrators should know.
 - **A key whose fingerprint wasn't typed.** The server only says which keys its members registered; the 32
   characters typed, as the key's owner reads them out, decide which one goes into the list.
 - **A clock more than 10 minutes off the server's**, before it signs.
@@ -103,14 +104,22 @@ In a folder only you can open: `$WMANAGER_SIGN_HOME`, or `~/.config/wmanager-sig
 | File | What it is |
 | --- | --- |
 | `server` | the server connected last |
-| `servers/<host>/token.json` | the connection's token, until it ends |
-| `servers/<host>/keys.json` | the signing keys made here: their public keys and credential ids |
-| `servers/<host>/companies/<id>.json` | each company's fingerprint and the whole chain it checked |
+| `servers/<host>[_<port>]/token.json` | the connection's token, until it ends |
+| `servers/<host>[_<port>]/keys.json` | the signing keys made here: their public keys and credential ids |
+| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, and the id each server gives it |
+
+A company is kept under its own id (the hash of its first admin list), not under the id a server gives it: a
+server that lists it again under a new id meets the chain held. Commands find a company by the name it had when it
+was taken, and say so when the server now calls it otherwise.
 
 The chains are what protects you against a server that lies about them: keep the folder in your backups. The
 signing keys themselves never leave the security keys. They are discoverable (resident) credentials of the relying
 party `wmanager-sign.invalid`, which no website can claim, so the same security key also signs from another
-computer; each key made takes one of the security key's places for them.
+computer, where `wmanager-sign` finds which of its keys signed by the signature. Each key made takes one of the
+security key's places for them.
+
+Other commands: `wmanager-sign key list` lists the keys made here; `wmanager-sign disconnect` forgets the
+connection here (the panel's "Disconnect wmanager-sign everywhere" ends it on the server too).
 
 Options before the command: `-server https://...` for another server than the one connected last, and `-lang` for
 the language (or `WMANAGER_LANG`, then the system's). Its messages are in English for now; the other nine languages

@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +53,9 @@ func Status(err error) int {
 	return 0
 }
 
+// hostRe is a host name (letters, digits and "-" in labels between dots) or an IPv4 address.
+var hostRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
 // ErrBadServer refuses an address that isn't https://host[:port].
 var ErrBadServer = errors.New("the server's address is https://host or https://host:port, with nothing after it")
 
@@ -67,8 +72,14 @@ func Normalize(raw string) (string, error) {
 		return "", ErrBadServer
 	}
 	host := strings.ToLower(u.Hostname())
-	if strings.Contains(host, ":") {
+	switch {
+	case strings.Contains(host, ":"):
+		if net.ParseIP(host) == nil {
+			return "", ErrBadServer
+		}
 		host = "[" + host + "]"
+	case !hostRe.MatchString(host):
+		return "", ErrBadServer
 	}
 	out := "https://" + host
 	if p := u.Port(); p != "" {

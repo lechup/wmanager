@@ -73,8 +73,24 @@ func main() {
 			return n - 1, err
 		})
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	// Ctrl-C ends it at once, also at a prompt or while the security key waits for a touch, with the terminal as
+	// it was (a PIN is read without echo).
+	fd := int(os.Stdin.Fd())
+	var saved *term.State
+	if term.IsTerminal(fd) {
+		saved, _ = term.GetState(fd)
+	}
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	go func() {
+		<-interrupt
+		if saved != nil {
+			term.Restore(fd, saved)
+		}
+		fmt.Println()
+		os.Exit(130)
+	}()
+	ctx := context.Background()
 	err = a.Run(ctx, fs.Args())
 	switch {
 	case err == nil:

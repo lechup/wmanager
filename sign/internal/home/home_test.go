@@ -13,7 +13,7 @@ import (
 	"github.com/lechup/wmanager/verify/softkey"
 )
 
-const company = "0b0c1c39-3f7e-4f8a-9c55-2d1c8a6f0e11"
+const server, company = "https://wm.example.com:8443", "0b0c1c39-3f7e-4f8a-9c55-2d1c8a6f0e11"
 
 func lists(t *testing.T, n int) []verify.Signed {
 	t.Helper()
@@ -45,38 +45,46 @@ func lists(t *testing.T, n int) []verify.Signed {
 
 func TestCompanyChainOnlyGrows(t *testing.T) {
 	h := &Home{Dir: t.TempDir()}
-	s, err := h.Server("https://wm.example.com:8443")
-	if err != nil {
-		t.Fatal(err)
-	}
+	acme := func() *Company { return &Company{Name: "Acme", Servers: map[string]string{server: company}} }
 	all := lists(t, 3)
-	ch2, err := verify.VerifyChain(verify.Fingerprint(all[0].Hash()), all[:2])
+	id := all[0].Hash()
+	ch2, err := verify.VerifyChain(verify.Fingerprint(id), all[:2])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetCompany(company, "Acme", ch2); err != nil {
+	if err := h.SetCompany(acme(), ch2); err != nil {
 		t.Fatal(err)
 	}
-	ch1, _ := verify.VerifyChain(verify.Fingerprint(all[0].Hash()), all[:1])
-	if err := s.SetCompany(company, "Acme", ch1); !errors.Is(err, verify.ErrOlderChain) {
+	ch1, _ := verify.VerifyChain(verify.Fingerprint(id), all[:1])
+	if err := h.SetCompany(acme(), ch1); !errors.Is(err, verify.ErrOlderChain) {
 		t.Fatalf("a shorter chain: %v", err)
 	}
-	other := lists(t, 1)
-	chO, _ := verify.VerifyChain(verify.Fingerprint(other[0].Hash()), other)
-	if err := s.SetCompany(company, "Acme", chO); !errors.Is(err, verify.ErrForkedChain) {
-		t.Fatalf("another company's chain: %v", err)
-	}
-	ch3, _ := verify.VerifyChain(verify.Fingerprint(all[0].Hash()), all)
-	if err := s.SetCompany(company, "Acme", ch3); err != nil {
+	ch3, _ := verify.VerifyChain(verify.Fingerprint(id), all)
+	if err := h.SetCompany(acme(), ch3); err != nil {
 		t.Fatal(err)
 	}
-	held, ch, err := s.Company(company)
-	if err != nil || held == nil || len(ch.Signed) != 3 || held.Fingerprint != verify.Fingerprint(all[0].Hash()) {
+	held, ch, err := h.Company(hex.EncodeToString(id[:]))
+	if err != nil || held == nil || len(ch.Signed) != 3 || held.Fingerprint != verify.Fingerprint(id) || held.Name != "Acme" {
 		t.Fatalf("held: %+v %v", held, err)
+	}
+	if c, _, err := h.ByServer(server, company); err != nil || c == nil || c.Name != "Acme" {
+		t.Fatalf("ByServer: %+v %v", c, err)
+	}
+	if c, _, err := h.ByServer("https://other.example.com", company); err != nil || c != nil {
+		t.Fatalf("ByServer of another server: %+v %v", c, err)
+	}
+	// Another company is filed apart, whatever a server calls it.
+	other := lists(t, 1)
+	chO, _ := verify.VerifyChain(verify.Fingerprint(other[0].Hash()), other)
+	if err := h.SetCompany(acme(), chO); err != nil {
+		t.Fatal(err)
+	}
+	if cs, _, err := h.Companies(); err != nil || len(cs) != 2 {
+		t.Fatalf("Companies: %d %v", len(cs), err)
 	}
 
 	// The folder and files are its user's only.
-	for _, p := range []string{h.Dir + "/servers", h.Dir + "/servers/wm.example.com_8443/companies/" + company + ".json"} {
+	for _, p := range []string{h.Dir + "/companies", h.Dir + "/companies/" + hex.EncodeToString(id[:]) + ".json"} {
 		fi, err := os.Stat(p)
 		if err != nil {
 			t.Fatal(err)
@@ -86,15 +94,41 @@ func TestCompanyChainOnlyGrows(t *testing.T) {
 		}
 	}
 
-	// A file changed by hand doesn't check.
-	p := filepath.Join(h.Dir, "servers", "wm.example.com_8443", "companies", company+".json")
+	// A file changed by hand doesn't check, nor one moved to another company's name.
+	p := filepath.Join(h.Dir, "companies", hex.EncodeToString(id[:])+".json")
 	b, _ := os.ReadFile(p)
-	os.WriteFile(p, []byte(strings.Replace(string(b), verify.Fingerprint(all[0].Hash()), verify.Fingerprint(other[0].Hash()), 1)), 0o600)
-	if _, _, err := s.Company(company); err == nil {
+	os.WriteFile(p, []byte(strings.Replace(string(b), verify.Fingerprint(id), verify.Fingerprint(other[0].Hash()), 1)), 0o600)
+	if _, _, err := h.Company(hex.EncodeToString(id[:])); err == nil {
 		t.Fatal("a changed file was taken")
 	}
-	if _, _, err := s.Company("../../etc/passwd"); err == nil {
+	os.WriteFile(p, b, 0o600)
+	oid := other[0].Hash()
+	os.Rename(filepath.Join(h.Dir, "companies", hex.EncodeToString(oid[:])+".json"), filepath.Join(h.Dir, "companies", strings.Repeat("0", 64)+".json"))
+	if _, _, err := h.Company(strings.Repeat("0", 64)); err == nil {
+		t.Fatal("a chain under another company's id was taken")
+	}
+	if _, _, err := h.Company("../../etc/passwd"); err == nil {
 		t.Fatal("a path for a company id")
+	}
+}
+
+func TestServerFolders(t *testing.T) {
+	h := &Home{Dir: "/d"}
+	for in, want := range map[string]string{
+		"https://wm.example.com":      "/d/servers/wm.example.com",
+		"https://wm.example.com:8443": "/d/servers/wm.example.com_8443",
+		"https://[::1]:8443":          "/d/servers/ipv6_--1_8443",
+		"https://[::1:8443]":          "/d/servers/ipv6_--1-8443",
+	} {
+		s, err := h.Server(in)
+		if err != nil || s.dir != want {
+			t.Errorf("Server(%q): %v %v, want %s", in, s, err, want)
+		}
+	}
+	for _, in := range []string{"https://..", "https://.", "https://a_b", "http://wm.example.com", "https://wm.example.com/x", "https://WM"} {
+		if _, err := h.Server(in); err == nil {
+			t.Errorf("Server(%q) accepted", in)
+		}
 	}
 }
 

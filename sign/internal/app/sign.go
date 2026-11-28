@@ -21,6 +21,9 @@ func (a *App) device() (fido.Device, string, error) {
 		return d, "", nil
 	}
 	pin, err := a.ReadSecret(a.t("key.pin"))
+	if err == nil && pin == "" {
+		err = a.fail("err.nopin")
+	}
 	if err != nil {
 		d.Close()
 		return nil, "", err
