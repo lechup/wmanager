@@ -11,14 +11,15 @@ func TestWebAuthnLayout(t *testing.T) {
 		t.Skip("64-bit only")
 	}
 	for name, c := range map[string]struct{ got, want uintptr }{
-		"WEBAUTHN_RP_ENTITY_INFORMATION":                   {unsafe.Sizeof(rpEntity{}), 32},
-		"WEBAUTHN_USER_ENTITY_INFORMATION":                 {unsafe.Sizeof(userEntity{}), 40},
-		"WEBAUTHN_CLIENT_DATA":                             {unsafe.Sizeof(clientData{}), 24},
-		"WEBAUTHN_COSE_CREDENTIAL_PARAMETER":               {unsafe.Sizeof(coseParam{}), 24},
-		"WEBAUTHN_CREDENTIAL":                              {unsafe.Sizeof(credential{}), 24},
-		"WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS v4": {unsafe.Sizeof(makeCredentialOptions{}), 96},
-		"WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS v4":   {unsafe.Sizeof(getAssertionOptions{}), 88},
+		"WEBAUTHN_RP_ENTITY_INFORMATION":                    {unsafe.Sizeof(rpEntity{}), 32},
+		"WEBAUTHN_USER_ENTITY_INFORMATION":                  {unsafe.Sizeof(userEntity{}), 40},
+		"WEBAUTHN_CLIENT_DATA":                              {unsafe.Sizeof(clientData{}), 24},
+		"WEBAUTHN_COSE_CREDENTIAL_PARAMETER":                {unsafe.Sizeof(coseParam{}), 24},
+		"WEBAUTHN_CREDENTIAL":                               {unsafe.Sizeof(credential{}), 24},
+		"WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS v3": {unsafe.Sizeof(makeCredentialOptions{}), 80},
+		"WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS v1":   {unsafe.Sizeof(getAssertionOptions{}), 56},
 		"WEBAUTHN_CREDENTIAL_ATTESTATION: pbCredentialId":   {unsafe.Offsetof(attestation{}.credentialID), 88},
+		"WEBAUTHN_CREDENTIAL_ATTESTATION: bResidentKey":     {unsafe.Offsetof(attestation{}.residentKey), 124},
 		"WEBAUTHN_ASSERTION: Credential":                    {unsafe.Offsetof(assertion{}.credential), 32},
 	} {
 		if c.got != c.want {

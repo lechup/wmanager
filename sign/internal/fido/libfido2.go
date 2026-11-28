@@ -1,4 +1,4 @@
-//go:build fido2 && cgo
+//go:build fido2 && cgo && !windows
 
 package fido
 

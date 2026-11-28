@@ -81,25 +81,23 @@ type extensions struct {
 	list  uintptr
 }
 
-// makeCredentialOptions is WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS version 4.
+// makeCredentialOptions is WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS version 3, which every webauthn.dll knows
+// (Windows 10 1903 on). Version 4's bPreferResidentKey would make a discoverable key only preferred.
 type makeCredentialOptions struct {
-	version               uint32
-	timeout               uint32
-	credentialList        credentials
-	extensions            extensions
-	attachment            uint32
-	requireResidentKey    int32
-	userVerification      uint32
-	attestation           uint32
-	flags                 uint32
-	cancellationID        *windows.GUID
-	excludeList           uintptr
-	enterpriseAttestation uint32
-	largeBlobSupport      uint32
-	preferResidentKey     int32
+	version            uint32
+	timeout            uint32
+	credentialList     credentials
+	extensions         extensions
+	attachment         uint32
+	requireResidentKey int32
+	userVerification   uint32
+	attestation        uint32
+	flags              uint32
+	cancellationID     *windows.GUID
+	excludeList        uintptr
 }
 
-// getAssertionOptions is WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS version 4.
+// getAssertionOptions is WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS version 1.
 type getAssertionOptions struct {
 	version          uint32
 	timeout          uint32
@@ -108,10 +106,6 @@ type getAssertionOptions struct {
 	attachment       uint32
 	userVerification uint32
 	flags            uint32
-	u2fAppID         *uint16
-	usedU2fAppID     *int32
-	cancellationID   *windows.GUID
-	allowList        uintptr
 }
 
 // attestation is the start of WEBAUTHN_CREDENTIAL_ATTESTATION, as far as it is read.
@@ -128,6 +122,14 @@ type attestation struct {
 	attestationObject *byte
 	cbCredentialID    uint32
 	credentialID      *byte
+	// version 2 on
+	extensions extensions
+	// version 3 on
+	usedTransport uint32
+	// version 4 on
+	epAtt              int32
+	largeBlobSupported int32
+	residentKey        int32
 }
 
 // assertion is the start of WEBAUTHN_ASSERTION, as far as it is read.
@@ -149,7 +151,10 @@ const (
 	hashSHA256          = "SHA-256"
 	coseES256           = -7
 	errCancelled        = 0x800704C7 // HRESULT_FROM_WIN32(ERROR_CANCELLED)
+	errTimeout          = 0x800705B4 // HRESULT_FROM_WIN32(ERROR_TIMEOUT)
 	ntePermission       = 0x80090010 // NTE_PERM: the dialog was closed
+	nteUserCancelled    = 0x80090036 // NTE_USER_CANCELLED
+	nteNotFound         = 0x80090011 // NTE_NOT_FOUND: no credential of this relying party
 )
 
 type webauthnDevice struct{}
@@ -183,6 +188,8 @@ func utf16(s string) *uint16 {
 	return p
 }
 
+var errNUL = errors.New("a name with a NUL character")
+
 func bytesAt(p *byte, n uint32) []byte {
 	if p == nil || n == 0 {
 		return nil
@@ -194,7 +201,7 @@ func hresult(what string, r uintptr) error {
 	switch uint32(r) {
 	case 0:
 		return nil
-	case errCancelled, ntePermission:
+	case errCancelled, ntePermission, nteUserCancelled, errTimeout:
 		return ErrNotTouched
 	}
 	name := ""
@@ -209,13 +216,18 @@ func (webauthnDevice) MakeCredential(u User, cd []byte, _ string) (Credential, e
 	if len(u.ID) == 0 || len(cd) == 0 {
 		return Credential{}, errors.New("a credential needs a user id and client data")
 	}
+	name, err1 := windows.UTF16PtrFromString(u.Name)
+	display, err2 := windows.UTF16PtrFromString(u.DisplayName)
+	if err1 != nil || err2 != nil {
+		return Credential{}, errNUL
+	}
 	rp := rpEntity{version: 1, id: utf16(verify.RPID), name: utf16("wmanager-sign")}
-	user := userEntity{version: 1, cbID: uint32(len(u.ID)), id: &u.ID[0], name: utf16(u.Name), displayName: utf16(u.DisplayName)}
+	user := userEntity{version: 1, cbID: uint32(len(u.ID)), id: &u.ID[0], name: name, displayName: display}
 	param := coseParam{version: 1, credType: utf16(credTypePublicKey), alg: coseES256}
 	params := coseParams{count: 1, list: &param}
 	data := clientData{version: 1, cb: uint32(len(cd)), json: &cd[0], hashAlg: utf16(hashSHA256)}
-	opts := makeCredentialOptions{version: 4, timeout: timeoutMilliseconds, attachment: attachmentAny,
-		requireResidentKey: 1, userVerification: uvRequired, attestation: attestationNone, preferResidentKey: 1}
+	opts := makeCredentialOptions{version: 3, timeout: timeoutMilliseconds, attachment: attachmentAny,
+		requireResidentKey: 1, userVerification: uvRequired, attestation: attestationNone}
 	var out *attestation
 	r, _, _ := procMakeCredential.Call(window(), uintptr(unsafe.Pointer(&rp)), uintptr(unsafe.Pointer(&user)),
 		uintptr(unsafe.Pointer(&params)), uintptr(unsafe.Pointer(&data)), uintptr(unsafe.Pointer(&opts)),
@@ -225,7 +237,14 @@ func (webauthnDevice) MakeCredential(u User, cd []byte, _ string) (Credential, e
 	if err := hresult("making the key", r); err != nil {
 		return Credential{}, err
 	}
+	if out == nil {
+		return Credential{}, errors.New("making the key: Windows gave nothing back")
+	}
 	defer procFreeAttestation.Call(uintptr(unsafe.Pointer(out)))
+	// A key made but not discoverable would sign only where its id is kept: refused, where Windows says so.
+	if out.version >= 4 && out.residentKey == 0 {
+		return Credential{}, errors.New("the key made isn't discoverable (the security key may have no room left for one)")
+	}
 	authData := bytesAt(out.authData, out.cbAuthData)
 	id, cose, err := AttestedKey(authData)
 	if err != nil {
@@ -237,32 +256,27 @@ func (webauthnDevice) MakeCredential(u User, cd []byte, _ string) (Credential, e
 	return Credential{ID: id, COSE: cose, Flags: authData[32]}, nil
 }
 
-func (webauthnDevice) Assert(cd []byte, allow [][]byte, _ string) ([]Assertion, error) {
+// Assert ignores the credentials allowed: Windows' dialog waits for a key that has one of them, and a key made on
+// another computer would never do. Every key of wmanager-sign is discoverable; the person picks one, and the caller
+// finds which by its signature.
+func (webauthnDevice) Assert(cd []byte, _ [][]byte, _ string) ([]Assertion, error) {
 	if len(cd) == 0 {
 		return nil, errors.New("a signature needs client data")
 	}
 	data := clientData{version: 1, cb: uint32(len(cd)), json: &cd[0], hashAlg: utf16(hashSHA256)}
-	opts := getAssertionOptions{version: 4, timeout: timeoutMilliseconds, attachment: attachmentAny, userVerification: uvRequired}
-	list := make([]credential, 0, len(allow))
-	for _, id := range allow {
-		if len(id) > 0 {
-			list = append(list, credential{version: 1, cbID: uint32(len(id)), id: &id[0], credType: utf16(credTypePublicKey)})
-		}
-	}
-	if len(list) > 0 {
-		opts.credentialList = credentials{count: uint32(len(list)), list: &list[0]}
-	}
+	opts := getAssertionOptions{version: 1, timeout: timeoutMilliseconds, attachment: attachmentAny, userVerification: uvRequired}
 	var out *assertion
 	r, _, _ := procGetAssertion.Call(window(), uintptr(unsafe.Pointer(utf16(verify.RPID))), uintptr(unsafe.Pointer(&data)),
 		uintptr(unsafe.Pointer(&opts)), uintptr(unsafe.Pointer(&out)))
 	runtime.KeepAlive(cd)
-	runtime.KeepAlive(list)
-	runtime.KeepAlive(allow)
-	if uint32(r) == 0x80090011 { // NTE_NOT_FOUND: no credential of this relying party
+	if uint32(r) == nteNotFound {
 		return nil, ErrNoCreds
 	}
 	if err := hresult("signing", r); err != nil {
 		return nil, err
+	}
+	if out == nil {
+		return nil, errors.New("signing: Windows gave nothing back")
 	}
 	defer procFreeAssertion.Call(uintptr(unsafe.Pointer(out)))
 	return []Assertion{{
