@@ -171,8 +171,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # wmanager-sign's Windows WebAuthn: the structures' layout and that webauthn.dll is there (nothing is signed:
+      # that needs a person at Windows Hello's dialog)
       - name: Tests
-        run: go test ./internal/tpmkey/...
+        run: go test ./internal/tpmkey/... ./sign/internal/fido/...
 
   wizard-linux:
     name: Configuration wizard (PowerShell 7, Linux)

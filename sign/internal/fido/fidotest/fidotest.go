@@ -5,6 +5,7 @@ package fidotest
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"sync"
 
 	"github.com/lechup/wmanager/sign/internal/fido"
@@ -38,7 +39,7 @@ func (d *Device) NeedsPIN() bool { return d.PIN != "" }
 func (d *Device) Close() error   { return nil }
 
 // MakeCredential makes an ES256 key, as a security key does.
-func (d *Device) MakeCredential(user fido.User, clientDataHash [32]byte, pin string) (fido.Credential, error) {
+func (d *Device) MakeCredential(user fido.User, clientData []byte, pin string) (fido.Credential, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if pin != d.PIN {
@@ -67,7 +68,8 @@ func (d *Device) MakeCredential(user fido.User, clientDataHash [32]byte, pin str
 }
 
 // Assert signs with every credential, or the allowed ones.
-func (d *Device) Assert(clientDataHash [32]byte, allow [][]byte, pin string) ([]fido.Assertion, error) {
+func (d *Device) Assert(clientData []byte, allow [][]byte, pin string) ([]fido.Assertion, error) {
+	clientDataHash := sha256.Sum256(clientData)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if pin != d.PIN {

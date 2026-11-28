@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/url"
 
@@ -35,10 +36,13 @@ func (a *App) newKey(ctx context.Context) error {
 	}
 	user := fido.User{ID: make([]byte, 16), Name: "wmanager-sign " + host, DisplayName: "wmanager-sign"}
 	rand.Read(user.ID)
+	// The client data of a registration: nothing checks it (no attestation is asked for), but a key signs its hash.
 	var challenge [32]byte
 	rand.Read(challenge[:])
+	clientData := []byte(`{"type":"webauthn.create","challenge":"` + base64.RawURLEncoding.EncodeToString(challenge[:]) +
+		`","origin":"` + verify.Origin + `"}`)
 	a.say("key.touchnew")
-	cred, err := d.MakeCredential(user, sha256.Sum256(challenge[:]), pin)
+	cred, err := d.MakeCredential(user, clientData, pin)
 	if err != nil {
 		return err
 	}

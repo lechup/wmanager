@@ -50,11 +50,13 @@ type Device interface {
 	// NeedsPIN says whether the key verifies its user with a PIN (rather than with a fingerprint of its own).
 	NeedsPIN() bool
 	// MakeCredential makes a discoverable credential for verify.RPID, verifying the user (the PIN, or the key's own
-	// check) and their touch. The key's ES256 is asked for.
-	MakeCredential(user User, clientDataHash [32]byte, pin string) (Credential, error)
-	// Assert signs the client data's hash with the key's credentials for verify.RPID, or only those allowed when
-	// some are, verifying the user and their touch. A key with several credentials returns a signature from each.
-	Assert(clientDataHash [32]byte, allow [][]byte, pin string) ([]Assertion, error)
+	// check) and their touch. The key's ES256 is asked for. The key signs the SHA-256 of the client data (Windows
+	// hashes it itself).
+	MakeCredential(user User, clientData []byte, pin string) (Credential, error)
+	// Assert signs the SHA-256 of the client data with the key's credentials for verify.RPID, or only those allowed
+	// when some are, verifying the user and their touch. A key with several credentials returns a signature from
+	// each (Windows: the one the person picks).
+	Assert(clientData []byte, allow [][]byte, pin string) ([]Assertion, error)
 	Close() error
 }
 

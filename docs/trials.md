@@ -39,7 +39,8 @@ authenticator that builds the authenticator data and the signature as a security
 
 **Still open:** the same with a real security key (libfido2 on Linux) and with Windows Hello (`webauthn.dll`), once
 there is a key: that a real key signs the client data hash we give it for the relying party `wmanager-sign.invalid`,
-and reports *user verified* and *backup eligible* as expected.
+and reports *user verified* and *backup eligible* as expected. The code for both is in `sign/internal/fido`
+(stages 2b and 2c); the tries wait for a security key, and for a virtual machine with Windows Hello set up.
 
 ## Trial 2: the tag in a signed exe
 
