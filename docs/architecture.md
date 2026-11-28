@@ -147,7 +147,8 @@ One server holds many companies, and each is kept apart:
 | --- | --- | --- | --- |
 | A company administrator's signing key | a FIDO2 security key (e.g. YubiKey) or Windows Hello, tied to that device (no passkey synced between devices), used only by `wmanager-sign` | the company's admin lists, its states, its single jobs and its remote sessions | the agent, before acting |
 | The signing key of a person who is not an administrator | the same kind of key, used the same way | the single jobs and remote sessions of the computers in that person's units, and the `stop` of that person's own jobs | the agent, against the person's rights in the signed state |
-| A person's remote work key | a FIDO2 security key or Windows Hello on the device the person works from, used by the viewer of remote support, under a relying party id no web page can claim | the opening of each remote work session on the computers given to that person | the agent, against the key the signed state gives the person |
+| A person's remote work key | a FIDO2 security key or Windows Hello on the device the person works from (a touch and a PIN or biometrics, never a synced passkey), used by the viewer of remote support under the relying party id `wmanager-remote.invalid`. A key is a signing key or a remote work key, never both | the opening of each remote work session on the computers given to that person | the agent, against the key the signed state gives the person |
+| A viewer's key | made by the viewer on the device a person works from, in its TPM where there is one | with a TOTP code, the opening of each remote work session, so a code counts only from that viewer | the agent, against the viewer the signed state gives the person |
 | The release key | with the maintainer, off the server | each release's `SHA256SUMS` (every file, including the Linux `wmanager-sign`), and the Windows exe files (Authenticode) | Windows, the agent (the payload and its own updates), `wmanager-sign` (its own updates, and a version before it signs it) |
 | A computer's key | made on the computer at enrollment, in the TPM when there is one; the computer's id is the SHA-256 of its public key | the computer's sign-in to the server, and the key it makes for a remote session; each with a fixed prefix of its own, so a signature made for one use can't pass for the other | the server; for a remote session, the viewer, against the computer's id in its verified state |
 | The server's TLS certificate | Caddy (Let's Encrypt) | the connection | the agent and the browser |
@@ -361,9 +362,15 @@ What remains:
 - **A leaked key together with a hacked server** is a takeover, because the server can withhold the list that removes
   the key. A leaked key of a person who is not an administrator, with a hacked server, is a takeover of that person's
   units, for the same reason: the server can withhold the state that takes the rights away.
-- **A faulty viewer of remote support** (v2). The viewer holds the key the `session` statement names. If a link from
-  a hacked panel exploits a fault in it, it can hand that key to the server, which then drives a session the
-  technician allowed. So the link carries only a computer's id, and the viewer stays small and up to date.
+- **A faulty viewer of remote support** (v2). The viewer holds the key the `session` statement names, and in remote
+  work the person's codes, Windows password and touches pass through it. If a link from a hacked panel exploits a
+  fault in it, it can hand those to the server, which then drives a session the technician or the person allowed.
+  So the link carries only a computer's id, and the viewer stays small and up to date.
+- **A compromised device a person works from** (v2) can watch and drive that person's remote work sessions, as
+  malware can drive any session of its user. It gets no other account and no rights beyond the person's.
+- **An administrator's password known to someone in remote work** (v2). Elevation and "Run as" are off and any other
+  sign-in ends the session, but such a person may still find another way to use the password, e.g. over the
+  network. Keep administrators' passwords to administrators.
 - **A computer restored from a snapshot** forgets the jobs it ran after the snapshot. It may run one again that hasn't
   expired.
 
@@ -496,7 +503,9 @@ viewer runs are decided; the rest is to design.
 - **The viewer is a program from the release**, downloaded from GitHub and checked like `wmanager-sign`, with its
   updates checked against the release's signed `SHA256SUMS`. In the panel the technician picks a computer and clicks
   "Connect", and the panel opens the viewer by a link that carries only the computer's id. The viewer signs in with
-  the panel's accounts and rights (SSO, roles limited to groups). It signs nothing itself.
+  the panel's accounts and rights (SSO, roles limited to groups). It signs no statement: for remote support
+  `wmanager-sign` signs each session, and for [remote work](#remote-work) the viewer signs only the opening of a
+  session, with the person's remote work key or its own, under a relying party id of its own.
 - **`wmanager-sign` signs each session.** The viewer asks it, and it shows the session: the computer (its name and the
   first characters of its id, from the verified state), the person, what the session may do and how long. Then the
   key signs a `session` statement. The touch with a PIN is the second factor before every connection. One program
@@ -543,50 +552,71 @@ Requirement 43, planned for v2 with [remote support](#remote-support), whose par
 an administrator works from elsewhere on a computer given to them, as if sitting at it.
 
 - **The right** to remote work is given by an administrator in `wmanager-sign`, in the signed state, like the other
-  rights the computer checks (see [People and their rights](#people-and-their-rights)): the person, the computers,
-  and on each the person's own Windows account. The computer goes by its state, so a server can't add a computer or
-  change the account.
-- **Only an account without administrator rights.** At every connection the computer checks that the account is not
-  in the local Administrators group, directly or through another group, and refuses it if it is. A UAC prompt can't
-  be answered from afar: the secure desktop is not sent and takes no input from the session, so rights can't be
-  raised, even with an administrator's password.
-- **Started in the panel, connected through the viewer.** The person signs in to the panel, with its second factor,
-  picks the computer and clicks "Work remotely". The panel opens the viewer of remote support by a link that carries
-  only the computer's id. Not the browser: the panel's pages and scripts come from the server, so a hacked server
-  could watch a session in a browser, type into it as the person and take the Windows password typed there.
-- **A second factor the computer checks itself, before every connection.** The panel's own second factor counts
-  too, but only the server checks it, and a hacked server could skip it. The person has one of:
-  - **a key:** a FIDO2 security key or Windows Hello on the device they work from, made in the viewer. Its public key
-    goes into the state with the right, added by an administrator after typing its fingerprint, as with signing keys.
-    The viewer shows "Connect to OFFICE-03 as anna?", and the key signs the computer's challenge for this connection
-    together with the key the viewer made for the session;
-  - **a TOTP code set up at that computer:** the person, signed in to their own account at the computer itself (not
-    from afar), opens "Set up remote work" and scans the QR code shown there with an authenticator app. The secret
-    stays on that computer, sealed by its TPM; the server never has it. The viewer sends each code end to end
-    encrypted to the computer, which checks it and takes each code once. After 5 wrong codes it blocks that person's
-    remote work, for longer each time, as the panel does.
-- **No one in the middle**, as for remote support. The session is encrypted end to end. The viewer checks the
-  computer's key against the computer's id in a state it verified itself, against the company's fingerprint, which
-  it is given once: the computer shows it when remote work is set up there, and an administrator can give it too. So
-  a code, a password or a touch of the key reaches only that computer.
-- **Signing in to Windows:** the person types their Windows password at Windows' own sign-in screen, inside the
-  encrypted session. It is kept nowhere and the server never sees it.
+  rights the computer checks (see [People and their rights](#people-and-their-rights)). It names the person, the
+  computers, and on each: the person's own Windows account, the one second factor the person uses there (with no
+  falling back to the other), and whether the clipboard and files may pass. The computer goes by its state, so a
+  server can't add a computer, change the account or swap the factor.
+- **Started in the panel, connected through the viewer.** The person signs in to the panel, picks the computer and
+  clicks "Work remotely". The panel opens the viewer of remote support by a link that carries only the computer's
+  id. Not the browser: the panel's pages and scripts come from the server, so a hacked server could watch a session
+  in a browser, type into it as the person and take the Windows password typed there.
+- **The viewer is set up once** on the device the person works from:
+  - it makes a key of its own there (in the device's TPM where there is one), and an administrator adds the key to
+    the state with the right, after typing its fingerprint, as with signing keys;
+  - the person types the company's fingerprint into it, all 32 characters, read off the computer's screen when
+    remote work is set up there, or given by an administrator in person or by phone; never from a link, the panel or
+    the server. The viewer then keeps the chain and the newest state it verified, like `wmanager-sign`.
+- **A second factor the computer checks itself, before every connection**, the one the state names:
+  - **a key:** a FIDO2 security key or Windows Hello, with a touch and a PIN or biometrics, never a synced passkey,
+    under the relying party id `wmanager-remote.invalid`, not the one of `wmanager-sign`. Its public key goes into
+    the state with the right, after an administrator typed its fingerprint; a key is a signing key or a remote work
+    key, never both. The viewer shows "Connect to OFFICE-03 as anna?", and the key signs the computer's challenge
+    for this connection together with the key the viewer made for the session;
+  - **a TOTP code set up at that computer, together with the viewer's key:** the viewer signs the computer's
+    challenge with its own key and sends the code end to end encrypted. So a code counts only from the viewer the
+    state names: a hacked server that gets a code from a fake page still can't connect with it. The person sets the
+    code up at the computer itself, signed in to their own account at the console, with no remote support, remote
+    work or Remote Desktop session open, and only while the state allows a setup (an administrator allows one, or a
+    reset, for a day). They open "Set up remote work" and scan the QR code shown there with an authenticator app.
+    The secret is then in that app and on that computer, sealed by its TPM and readable by the agent only; the server
+    never has it. The computer takes each code once, and after 5 wrong codes it blocks that person's remote work,
+    for longer each time.
+
+  The panel's own second factor keeps out someone who has only the person's password. Against a hacked server it
+  counts for nothing, since only the server checks it.
+- **No one in the middle**, as for remote support. The session is encrypted end to end, and the viewer checks the
+  computer's key against the computer's id in its verified state. So a code, a password or a touch reaches only that
+  computer.
+- **Only the person's own account, without administrator rights:**
+  - the computer joins only a session of the account the state names, and refuses while another account is signed
+    in at the computer. Before the sign-in, the session shows only Windows' own sign-in screen, where the person types
+    that account's password; it is kept nowhere and the server never sees it;
+  - it checks the token of that session and of every new sign-in in it: the account must not be in the local
+    Administrators group, directly or through another group. Adding it to the group during the session ends the
+    session;
+  - a sign-in of any other account inside the session ends it and locks Windows: "Other user" or "Switch user", and
+    explicit credentials such as "Run as" (events 4624 and 4648);
+  - during remote work the elevation requests of standard users are refused without a prompt (UAC's
+    `ConsentPromptBehaviorUser` 0, with `EnableLUA` and `PromptOnSecureDesktop` on), and the Secondary Logon service
+    ("Run as different user") is stopped. A UAC prompt is never sent.
 - **A black screen at the computer** for the whole session, with "Remote work: Anna, since 9:00", and its keyboard
-  and mouse blocked. Someone at the computer can end it, with the same way out as privacy mode; Windows then locks
-  the account.
-- **Logged:** each connection and its end, wrong second factors, and the TOTP set up or reset, in the audit log and
-  the SIEM export.
+  and mouse blocked. Ctrl+Alt+Del at the computer, which Windows always lets through, is the way out: it ends the
+  remote work and locks the Windows session, so nobody at the computer types blind into it.
+- **Logged:** each connection and its end, wrong second factors, the TOTP set up or reset, and every session ended
+  by the rules above, in the audit log and the SIEM export.
 
 A hacked server can block remote work and see who works when. It can't open a session, since it has neither the
-person's key nor the TOTP secret, and it can't see one or take part in one, while the viewer is sound.
+person's key nor the viewer's, and doesn't know the TOTP secret. It can't see a session or take part in one, while
+the viewer and the device it runs on are sound (see
+[What a hacked server can and can't do](#what-a-hacked-server-can-and-cant-do)).
 
 To design:
 
-- the computer's challenge and what the key signs;
-- signing in to Windows inside the session: an account already signed in, another account signed in at the
-  computer, the Windows Hello PIN;
-- resetting a lost TOTP or key, and a computer that sleeps (Wake-on-LAN is requirement 17);
-- the clipboard, files and sound in remote work, on or off per company.
+- the computer's challenge and what each key signs;
+- an account already signed in at the computer, and the Windows Hello PIN on the sign-in screen;
+- replacing a lost key, viewer or TOTP;
+- a computer that sleeps (Wake-on-LAN is requirement 17);
+- sound and several screens.
 
 ## Updates
 
