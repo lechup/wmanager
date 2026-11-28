@@ -20,3 +20,12 @@ The internet installer's own few lines are English (`install.ps1` must stay plai
 The messages are in `lang\<code>\<area>.psd1`; English is the source, and a message missing in another language falls
 back to English. `tests\Lang.Tests.ps1` checks that every language has every message with the same placeholders.
 To add a language: copy `lang\en` to `lang\<code>`, translate it and add the code to `$WmLanguages` in `lib\Lang.ps1`.
+
+## wmanager-server's panel and wmanager-sign
+
+The panel speaks the same ten, chosen by `?lang=` (kept in a cookie) or the browser's language, its messages in
+`server/internal/web/lang/<code>.json`. `wmanager-sign` speaks them too: `-lang`, then `WMANAGER_LANG`, then the
+system's locale (`LC_ALL`, `LC_MESSAGES`, `LANG`), else English; its messages are in
+`sign/internal/app/lang/<code>.json`, checked the same way (`TestLanguages`: every message, the same arguments, the
+same lines). Signing asks for the word "yes" in the language shown (`word.yes`), or in English; an accent may be
+left out.
