@@ -1,7 +1,7 @@
 # Requirements of v1
 
 > The requirements for wmanager v1 (server and agent). The list is closed (2026-11-27): a new idea goes to a later
-> release. The design that meets them is [Architecture of v1](architecture.md), and the order of the work is the
+> release, as requirement 43 went to v2. The design that meets them is [Architecture of v1](architecture.md), and the order of the work is the
 > [Implementation plan](implementation.md), with what each release brings.
 
 ## Requirements
@@ -50,6 +50,7 @@
 | 40 | **VPN profiles per group**: the VPN built into Windows (IKEv2, SSTP, L2TP), WireGuard and OpenVPN; the programs from Chocolatey, the keys and passwords secrets. | 2026-11-26 | v1.1 | to design |
 | 41 | **A ready list of packages to choose from**, not installed by default: wmanager suggests Chocolatey packages (Chrome, LibreOffice, Adobe Acrobat Reader, 7-Zip, VLC, RustDesk, Notepad++), and an administrator picks the ones a group gets. Nothing is installed on every computer unless a package list says so. | 2026-11-26 | v1.1 | to design |
 | 42 | **Remote support built into wmanager**: our own fork of RustDesk (AGPL-3.0, under a name of its own), with the roles of its ID server and relay moved into `wmanager-server`. The part on the computer is set up by the agent and takes its password from a variable, never from a command line; the server never knows that password. A second factor before every connection. Everything is started from the web panel; technicians connect with a separate viewer that signs in with the same accounts and rights as the panel (SSO, roles limited to groups). **Privacy mode**: the computer's screen black and its keyboard and mouse blocked during a session, as a right of its own; the black screen shows who is working and since when, and turning it on is logged. | 2026-11-27 | v2 | [Remote support](architecture.md#remote-support) |
+| 43 | **Remote work for people who are not administrators**: an employee works from elsewhere on a computer given to them, in their own Windows account without administrator rights (the computer refuses an account that is an administrator, and a UAC prompt can't be answered from afar). They sign in to the panel and start from there; the connection goes through the viewer of remote support, a program from the release, not through the browser. A second factor before every connection that the computer checks itself: the person's FIDO2 security key or Windows Hello, or a TOTP code set up at that computer, whose secret only the computer has. The computer's screen is black, showing who works and since when, and its keyboard and mouse are blocked. | 2026-11-28 | v2 | [Remote work](architecture.md#remote-work) |
 
 ## Decisions so far
 
@@ -69,6 +70,10 @@
 - Remote support: the viewer is a program from the release, opened from the panel by a link. It signs nothing: it
   asks `wmanager-sign`, which shows each session and signs it with the technician's key. The computer checks that
   signature against the signed state, so the panel's sign-in alone opens no session.
+- Remote work (requirement 43) goes through the viewer, not the browser: the panel's pages and scripts come from the
+  server, so a hacked server could watch a session in a browser, type into it as the employee and take the Windows
+  password typed there. Its second factor is checked by the computer, a key in the signed state or a TOTP code set up
+  at that computer, since a hacked server could skip one only the server checks.
 - Rights of people: the units are groups and single computers. The rights the computer checks (remote sessions,
   single jobs) are in the signed state, given by an administrator in `wmanager-sign`; seeing the data and the
   actions approved in advance are checked by the server. A person's jobs may use only the secrets granted to that

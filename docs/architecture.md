@@ -82,7 +82,7 @@ The administrator works in the panel, and signs in `wmanager-sign` with a securi
 keeps everything and hands it out, but the agent acts only on what passes its checks against the company's admin
 list and the rights in its signed state, so a hacked server can't make an enrolled computer run anything. The
 computer opens every connection itself: nothing listens on it, remote support included. The dashed lines are remote
-support, which comes in v2 (requirement 42).
+support and remote work, which come in v2 (requirements 42 and 43).
 
 | Part | What it is |
 | --- | --- |
@@ -90,7 +90,7 @@ support, which comes in v2 (requirement 42).
 | `wmanager-agent` | One Go program for Windows. Started by hand it is the installer; after that it runs as the `wmanager` service as SYSTEM. It lives in `C:\Program Files\wmanager`, and its data stays in `C:\ProgramData\wmanager` with today's protection (SYSTEM and Administrators only). |
 | the payload | Today's PowerShell code (`Provision.ps1`, `lib\`, `lang\`, `Invoke-*.ps1`), released as the ZIP it is today. |
 | `wmanager-sign` | One Go program for the computer of an administrator or of a person with rights, on Linux and Windows first. It shows what is to be signed and signs it with that person's security key or Windows Hello. |
-| remote support | Our fork of RustDesk (Rust): a part on the computer, set up by the agent, and the technician's viewer, which asks `wmanager-sign` to sign each session (see [Remote support](#remote-support)). |
+| remote support | Our fork of RustDesk (Rust): a part on the computer, set up by the agent, and the technician's viewer, which asks `wmanager-sign` to sign each session (see [Remote support](#remote-support)). Employees use the same viewer for [remote work](#remote-work). |
 
 All of them come from the same release and the same repository (`server/`, `agent/`, `sign/`, with the PowerShell
 code where it is now; where the fork of RustDesk lives is to design).
@@ -147,6 +147,7 @@ One server holds many companies, and each is kept apart:
 | --- | --- | --- | --- |
 | A company administrator's signing key | a FIDO2 security key (e.g. YubiKey) or Windows Hello, tied to that device (no passkey synced between devices), used only by `wmanager-sign` | the company's admin lists, its states, its single jobs and its remote sessions | the agent, before acting |
 | The signing key of a person who is not an administrator | the same kind of key, used the same way | the single jobs and remote sessions of the computers in that person's units, and the `stop` of that person's own jobs | the agent, against the person's rights in the signed state |
+| A person's remote work key | a FIDO2 security key or Windows Hello on the device the person works from, used by the viewer of remote support, under a relying party id no web page can claim | the opening of each remote work session on the computers given to that person | the agent, against the key the signed state gives the person |
 | The release key | with the maintainer, off the server | each release's `SHA256SUMS` (every file, including the Linux `wmanager-sign`), and the Windows exe files (Authenticode) | Windows, the agent (the payload and its own updates), `wmanager-sign` (its own updates, and a version before it signs it) |
 | A computer's key | made on the computer at enrollment, in the TPM when there is one; the computer's id is the SHA-256 of its public key | the computer's sign-in to the server, and the key it makes for a remote session; each with a fixed prefix of its own, so a signature made for one use can't pass for the other | the server; for a remote session, the viewer, against the computer's id in its verified state |
 | The server's TLS certificate | Caddy (Let's Encrypt) | the connection | the agent and the browser |
@@ -309,6 +310,7 @@ Requirement 24. A company's administrators can do everything in it. Anyone else 
 | seeing the data | the inventory, reports, logs and the output of jobs, in the panel | the server |
 | actions approved in advance | starting them from the panel | the server; the computer still checks the action's own limits |
 | remote session | view, control, files or privacy mode, as given; each session signed in `wmanager-sign` with the person's own key. Control lets the person do what the signed-in user can and answer a UAC prompt, so it can be full control of the computer | the computer |
+| remote work | working on the computers given, in the person's own Windows account without administrator rights, behind a black screen; a second factor the computer checks before every connection (see [Remote work](#remote-work)) | the computer |
 | single jobs | scripts, signed with the person's own key, with only the secrets the state grants that person; that is as much as full control of those computers, including the secrets kept on them | the computer |
 
 - **Only an administrator gives rights**, and a person can't pass them on. Rights that the computer checks are part
@@ -346,7 +348,8 @@ It **can't**, on an enrolled computer:
 - add an administrator or a key to a company, or give a person rights or widen them;
 - run a single job twice, after its expiry, or on a computer it doesn't target;
 - stop a job that is running, or make a computer go back to an older agent or state;
-- open a [remote session](#remote-support), or see or take part in one, while the viewer is sound (see below);
+- open a [remote session](#remote-support) or a [remote work](#remote-work) session, or see or take part in one,
+  while the viewer is sound (see below);
 - move the computers to another server (the address is part of the signed state).
 
 What remains:
@@ -533,6 +536,57 @@ To design:
 - how long a session may wait to open and how long it may last;
 - what the person at the computer sees during a session without privacy mode;
 - whether `wmanager-server` takes code from `rustdesk-server` (see [License](#license)).
+
+## Remote work
+
+Requirement 43, planned for v2 with [remote support](#remote-support), whose parts it uses. An employee who is not
+an administrator works from elsewhere on a computer given to them, as if sitting at it.
+
+- **The right** to remote work is given by an administrator in `wmanager-sign`, in the signed state, like the other
+  rights the computer checks (see [People and their rights](#people-and-their-rights)): the person, the computers,
+  and on each the person's own Windows account. The computer goes by its state, so a server can't add a computer or
+  change the account.
+- **Only an account without administrator rights.** At every connection the computer checks that the account is not
+  in the local Administrators group, directly or through another group, and refuses it if it is. A UAC prompt can't
+  be answered from afar: the secure desktop is not sent and takes no input from the session, so rights can't be
+  raised, even with an administrator's password.
+- **Started in the panel, connected through the viewer.** The person signs in to the panel, with its second factor,
+  picks the computer and clicks "Work remotely". The panel opens the viewer of remote support by a link that carries
+  only the computer's id. Not the browser: the panel's pages and scripts come from the server, so a hacked server
+  could watch a session in a browser, type into it as the person and take the Windows password typed there.
+- **A second factor the computer checks itself, before every connection.** The panel's own second factor counts
+  too, but only the server checks it, and a hacked server could skip it. The person has one of:
+  - **a key:** a FIDO2 security key or Windows Hello on the device they work from, made in the viewer. Its public key
+    goes into the state with the right, added by an administrator after typing its fingerprint, as with signing keys.
+    The viewer shows "Connect to OFFICE-03 as anna?", and the key signs the computer's challenge for this connection
+    together with the key the viewer made for the session;
+  - **a TOTP code set up at that computer:** the person, signed in to their own account at the computer itself (not
+    from afar), opens "Set up remote work" and scans the QR code shown there with an authenticator app. The secret
+    stays on that computer, sealed by its TPM; the server never has it. The viewer sends each code end to end
+    encrypted to the computer, which checks it and takes each code once. After 5 wrong codes it blocks that person's
+    remote work, for longer each time, as the panel does.
+- **No one in the middle**, as for remote support. The session is encrypted end to end. The viewer checks the
+  computer's key against the computer's id in a state it verified itself, against the company's fingerprint, which
+  it is given once: the computer shows it when remote work is set up there, and an administrator can give it too. So
+  a code, a password or a touch of the key reaches only that computer.
+- **Signing in to Windows:** the person types their Windows password at Windows' own sign-in screen, inside the
+  encrypted session. It is kept nowhere and the server never sees it.
+- **A black screen at the computer** for the whole session, with "Remote work: Anna, since 9:00", and its keyboard
+  and mouse blocked. Someone at the computer can end it, with the same way out as privacy mode; Windows then locks
+  the account.
+- **Logged:** each connection and its end, wrong second factors, and the TOTP set up or reset, in the audit log and
+  the SIEM export.
+
+A hacked server can block remote work and see who works when. It can't open a session, since it has neither the
+person's key nor the TOTP secret, and it can't see one or take part in one, while the viewer is sound.
+
+To design:
+
+- the computer's challenge and what the key signs;
+- signing in to Windows inside the session: an account already signed in, another account signed in at the
+  computer, the Windows Hello PIN;
+- resetting a lost TOTP or key, and a computer that sleeps (Wake-on-LAN is requirement 17);
+- the clipboard, files and sound in remote work, on or off per company.
 
 ## Updates
 
