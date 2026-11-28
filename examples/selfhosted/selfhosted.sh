@@ -18,7 +18,8 @@
 #   ./selfhosted.sh list                   the companies, their tenant numbers and source addresses
 #   ./selfhosted.sh create-owner <e-mail>  the owner of wmanager-server, once it runs; asks for the password (or reads
 #                                          one line from a pipe)
-#   ./selfhosted.sh backup                 a dump of wmanager-server's database into backups/ (only you can read it)
+#   ./selfhosted.sh backup                 a dump of wmanager-server's database, and a tar of the files added with
+#                                          wmanager-sign add-file, into backups/ (only you can read them)
 #   ./selfhosted.sh restore <file>         put a dump back: stops wmanager-server, replaces its database, starts it
 #
 # A company's name is the one tools/wm.ps1 uses (letters, digits, . _ -); addresses and file names use it in lower
@@ -276,8 +277,16 @@ cmd_backup() {
         die "pg_dump failed"
     fi
     [[ -s $file.partial ]] || { rm -f "$file.partial"; die "the dump is empty"; }
+    # The files added with wmanager-sign add-file, as a tar of the volume files-data, next to the dump
+    local files=${file%.dump}.files.tar
+    if ! (umask 077; docker cp "$(docker compose ps -q wmanager)":/var/lib/wmanager/files/. - > "$files.partial"); then
+        rm -f "$file.partial" "$files.partial"
+        die "copying the files added with add-file failed"
+    fi
+    mv "$files.partial" "$files"
     mv "$file.partial" "$file"
     echo "Written $file. Keep a copy off this server (it holds the secrets' values the server keeps)."
+    echo "Written $files: the files added with wmanager-sign add-file. Keep it with the dump."
 }
 
 sql() { docker compose exec -T postgres psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres -q "$@"; }
@@ -297,6 +306,13 @@ cmd_restore() {
     docker compose stop wmanager
     sql -c "DROP DATABASE IF EXISTS wmanager_old WITH (FORCE)" -c "ALTER DATABASE wmanager RENAME TO wmanager_old" \
         -c "ALTER DATABASE wmanager_new RENAME TO wmanager"
+    # The files added with add-file, kept by their hash: those of the backup are put back next to any added since
+    # (into the volume itself: the container's own files are read-only)
+    local files=${file%.dump}.files.tar
+    if [[ -s $files ]]; then
+        docker cp -a - "$(docker compose ps -aq wmanager)":/var/lib/wmanager/files < "$files" ||
+            echo "Warning: $files didn't copy back; the database is restored, the files added with add-file may be missing." >&2
+    fi
     docker compose up -d wmanager
     echo "Restored $file; wmanager-server started again. The database before it is kept as wmanager_old until the next restore."
     echo "The audit heads in Loki newer than the dump no longer match: an older dump ends before them."

@@ -159,7 +159,9 @@ Short trials of what could overturn the design, each on a branch of its own. The
     its script whole, and makes its id and expiry; and `wmanager-sign secret set` for a secret's new value;
   - (done) the head of each company's audit log it saw last, per server: the whole history linked again each time,
     and `audit accept` after a move or restore;
-  - `add-file`;
+  - (done) `add-file`: a file from the administrator's disk, hashed there, kept on the server's disk by its hash
+    (`WMANAGER_FILES_DIR`, the kit's volume `files-data`, up to 4 GB, in `selfhosted.sh backup`), and signed in the
+    next state; a file that isn't text is signed only by the `wmanager-sign` that added it;
   - its messages in the ten languages;
   - a test by hand with a real security key, once there is one.
   - How each person's rights change moves to 4a, with the people in the state.

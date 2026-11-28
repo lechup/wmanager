@@ -195,7 +195,7 @@ func serve(ctx context.Context, cfg config.Config, s *store.Store, stderr io.Wri
 	if err != nil {
 		return err
 	}
-	panel.PublicURL, panel.TrustedProxies = cfg.PublicURL, cfg.TrustedProxies
+	panel.PublicURL, panel.TrustedProxies, panel.FilesDir = cfg.PublicURL, cfg.TrustedProxies, cfg.FilesDir
 	if cfg.LokiURL != "" {
 		p := &lokihead.Pusher{Store: s, URL: cfg.LokiURL, Tenant: cfg.LokiTenant, Every: cfg.LokiHeadEvery, Log: log}
 		go p.Run(ctx)

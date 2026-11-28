@@ -180,9 +180,16 @@ for _ in $(seq 1 30); do
     sleep 2
 done
 [[ $heads == *'\"chain\":\"server\"'* ]] && ok "the audit log's head reaches Loki" || fail "no audit head in Loki: $heads"
+# A file in the volume of the files added with add-file, as the server keeps one, to see it backed up and put back
+server_id=$(docker compose -p "$project" ps -q wmanager)
+mkdir -p filetest/c1 && echo 'a driver' > filetest/c1/f1
+tar -C filetest -cf filetest.tar . && docker cp -a - "$server_id":/var/lib/wmanager/files < filetest.tar
 ./selfhosted.sh backup > backup.txt
 dump=$(sed -n 's/^Written \(backups\/[^ ]*\.dump\)\..*/\1/p' backup.txt)
 [[ -s $dump && $(stat -c %a "$dump") == 600 ]] && ok 'a backup, readable by its owner only' || fail "backup: $(cat backup.txt)"
+files_tar=${dump%.dump}.files.tar
+[[ -s $files_tar && $(stat -c %a "$files_tar") == 600 ]] && tar -tf "$files_tar" | grep -qx './c1/f1' &&
+    ok 'the files added with add-file, backed up next to the dump' || fail "the files' backup: $(cat backup.txt)"
 head -c 2000 "$dump" > backups/broken.dump
 if ./selfhosted.sh restore backups/broken.dump > broken.txt 2>&1; then
     fail 'a broken dump restored'
@@ -193,6 +200,8 @@ fi
 if ./selfhosted.sh restore "$dump" > restore.txt 2>&1; then
     for _ in $(seq 1 60); do [[ $(panel -o /dev/null -w '%{http_code}' "$purl/healthz") == 200 ]] && break; sleep 1; done
     [[ $(signin "$owner_pw") == "303 $purl/signin/totp" ]] && ok 'after a restore the owner still signs in' || fail 'sign-in after the restore'
+    [[ $(docker cp "$(docker compose -p "$project" ps -q wmanager)":/var/lib/wmanager/files/c1/f1 - | tar -xO) == 'a driver' ]] &&
+        ok 'after a restore the files added with add-file are still there' || fail 'the files after the restore'
 else
     fail "restore: $(cat restore.txt)"
 fi

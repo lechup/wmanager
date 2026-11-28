@@ -46,6 +46,9 @@ party id no web page can claim.
   on behalf of a member. An administrator's `wmanager-sign` may ask which values the server has (their names and
   hashes, not the values or salts), to have a lacking one typed again. It needs `WMANAGER_PUBLIC_URL`: a state
   names the server, and one naming another is refused.
+- **Files from an administrator's disk** (installers, drivers) come with `wmanager-sign add-file`, up to 4 GB each,
+  checked against their hash and kept on disk in `WMANAGER_FILES_DIR`; small text files from the panel stay in the
+  database.
 - **Jobs and stops** are signed the same way. The server keeps a job only with its script, under an id not used
   before, and a stop only for a job it has, on computers the job names; `wmanager-sign` fetches a job by its id to
   show it, whole, before stopping it. Computers fetch them from stage 5.
@@ -92,6 +95,7 @@ The server reads them from the environment (the kit's `docker-compose.yml` sets 
 | `WMANAGER_PUBLIC_URL` | the panel's address, for the links it gives out (`https://host[:port]`) |
 | `WMANAGER_TRUSTED_PROXIES` | the exact address of Caddy, whose `X-Forwarded-For` it believes; not a whole network |
 | `WMANAGER_LOKI_URL`, `WMANAGER_LOKI_TENANT`, `WMANAGER_LOKI_HEAD_EVERY` | where the audit heads go (default tenant `wmanager-server`, every 5 minutes) |
+| `WMANAGER_FILES_DIR` | where the files added with `wmanager-sign add-file` are kept, by their hash (the kit's volume `files-data`); without it, add-file is refused |
 
 ## The audit log off the server
 
@@ -110,9 +114,12 @@ each company's log and checks that the history still leads to it).
 ## Backup and restore
 
 ```bash
-./selfhosted.sh backup               # backups/wmanager-<time>.dump, readable by you only
-./selfhosted.sh restore <file>       # restores it aside, then swaps it in
+./selfhosted.sh backup               # backups/wmanager-<time>.dump and .files.tar, readable by you only
+./selfhosted.sh restore <file>       # restores the dump aside, then swaps it in, and puts the files back
 ```
+
+The `.files.tar` next to each dump holds the files added with `wmanager-sign add-file` (the volume `files-data`).
+They are kept by their hash, so a restore puts those of the backup back next to any added since.
 
 `restore` restores the dump into a database of its own, as the owner of the tables and in one transaction. Only when
 that works does it stop the server, swap the two databases, and start it again; the one before stays as

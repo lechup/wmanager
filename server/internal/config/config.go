@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -36,6 +37,9 @@ type Config struct {
 	LokiURL       string
 	LokiTenant    string
 	LokiHeadEvery time.Duration
+	// FilesDir is where the files added with wmanager-sign add-file are kept, by their hash (WMANAGER_FILES_DIR,
+	// an absolute path; the kit's volume files-data). Without it, add-file is refused.
+	FilesDir string
 }
 
 // Load reads the settings. getenv is os.Getenv outside tests.
@@ -85,6 +89,12 @@ func Load(getenv func(string) string) (Config, error) {
 	c.LokiTenant, c.LokiHeadEvery = "wmanager-server", 5*time.Minute
 	if v := getenv("WMANAGER_LOKI_TENANT"); v != "" {
 		c.LokiTenant = v
+	}
+	if v := getenv("WMANAGER_FILES_DIR"); v != "" {
+		if !filepath.IsAbs(v) {
+			return Config{}, errors.New("config: WMANAGER_FILES_DIR must be an absolute path")
+		}
+		c.FilesDir = filepath.Clean(v)
 	}
 	if v := getenv("WMANAGER_LOKI_HEAD_EVERY"); v != "" {
 		d, err := time.ParseDuration(v)

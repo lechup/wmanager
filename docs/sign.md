@@ -3,8 +3,8 @@
 > The signer of wmanager v1 ([Architecture of v1](architecture.md#wmanager-sign)). It is being built
 > ([Implementation plan](implementation.md)): today it connects to the server, makes and registers signing keys,
 > keeps and signs each company's chain of admin lists, and signs its states, single jobs and stops, and new values
-> of its secrets; it checks the companies' audit logs from the newest entry it saw. `add-file` comes next; Windows
-> Hello in stage 2c.
+> of its secrets, and adds files from your own disk; it checks the companies' audit logs. Windows Hello comes in
+> stage 2c.
 
 `wmanager-sign` runs on the administrator's own computer, never on the server. A server, even a hacked one, can't
 make it sign anything it didn't show, and can't make it take an admin list that doesn't follow the one it holds.
@@ -112,8 +112,8 @@ Files:
 ```
 
 - A new file is shown whole, a changed one as its changed lines with two around each. Each is fetched by its hash
-  and checked; a file that can't be shown isn't signed. That includes a file that isn't text: such files come only
-  with `add-file`, from your own disk.
+  and checked; a file that can't be shown isn't signed. That includes a file that isn't text, unless it was added
+  here with `add-file` (see below).
 - The difference is from the newer of the state it verified and the one it signed itself, which it keeps even
   when the server doesn't show it. When the computers report a newer state than either, it signs nothing. When
   some computers may have another state (one signed by an administrator removed since, or one signed here that
@@ -157,6 +157,20 @@ The script (2 lines):
   wmanager-sign secret set Acme wifi-office
   ```
 
+## Files from your own disk
+
+A file that isn't text (an installer, a driver) can't be shown, so it is never signed from the panel. Add it from
+your own disk instead, at its path in the company's state:
+
+```bash
+wmanager-sign add-file Acme groups/office/files/printer-driver.cab ~/Downloads/driver.cab
+```
+
+`wmanager-sign` hashes the file as it reads it, gives it to the server (up to 4 GB; the server checks the hash), and
+signs the next state with it, showing it as added from that file and its size. It remembers the file as added
+here, so a later state that keeps it, or names it at another path, is shown and signed here; another
+administrator's `wmanager-sign`, which didn't add it, signs no state that adds it.
+
 ## The audit log
 
 Each time `wmanager-sign` lists your companies, it reads each company's whole audit log from the server, links it
@@ -192,7 +206,7 @@ In a folder only you can open: `$WMANAGER_SIGN_HOME`, or `~/.config/wmanager-sig
 | `server` | the server connected last |
 | `servers/<host>[_<port>]/token.json` | the connection's token, until it ends |
 | `servers/<host>[_<port>]/keys.json` | the signing keys made here: their public keys and credential ids |
-| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, one signed by an administrator removed since, and the newest audit entry it saw from each server |
+| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, one signed by an administrator removed since, the newest audit entry it saw from each server, and the files added here |
 
 A company is kept under its own id (the hash of its first admin list), not under the id a server gives it: a
 server that lists it again under a new id meets the chain held. Commands find a company by the name it had when it

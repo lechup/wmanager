@@ -39,10 +39,12 @@ func main() {
 	}
 	in := bufio.NewReader(os.Stdin)
 	a := &app.App{
-		Home:   h,
-		In:     in,
-		Out:    os.Stdout,
-		HTTP:   &http.Client{Timeout: time.Minute},
+		Home: h,
+		In:   in,
+		Out:  os.Stdout,
+		// No limit on a whole request (add-file sends large files), but on each step of it.
+		HTTP: &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, TLSHandshakeTimeout: 30 * time.Second,
+			ResponseHeaderTimeout: 2 * time.Minute, IdleConnTimeout: time.Minute, ForceAttemptHTTP2: true}},
 		Lang:   app.Language(*lang),
 		Server: *server,
 		ReadSecret: func(prompt string) (string, error) {

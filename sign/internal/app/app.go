@@ -146,6 +146,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		if len(args) == 1 {
 			return a.signDraft(ctx, args[0])
 		}
+	case "add-file":
+		if len(args) == 3 {
+			return a.addFile(ctx, args[0], args[1], args[2])
+		}
 	case "audit":
 		if len(args) == 2 && args[0] == "accept" {
 			return a.acceptAudit(ctx, args[1])
