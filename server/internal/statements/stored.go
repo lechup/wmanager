@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 
@@ -17,7 +18,7 @@ import (
 )
 
 // Limits of the files add-file adds: one file, a company's together, the room left on the disk after one, and
-// how many arrive at once on the whole server.
+// how many arrive at once on the whole server (one a company).
 const (
 	MaxStored        = 4 << 30
 	MaxStoredCompany = 64 << 30
@@ -30,11 +31,18 @@ var (
 	ErrNoStore  = errors.New("statements: files added with add-file need WMANAGER_FILES_DIR")
 	ErrFileHash = errors.New("statements: the file doesn't match its hash")
 	ErrQuota    = errors.New("statements: the company's files added with add-file would take more than 64 GB, or the disk would be nearly full")
-	ErrBusy     = errors.New("statements: too many files are arriving at once: try again in a moment")
+	ErrBusy     = errors.New("statements: too many files are arriving at once, or one of this company's already: try again later")
 )
 
-// uploads are the uploads under way, at most MaxUploads.
-var uploads = make(chan struct{}, MaxUploads)
+// The uploads under way: at most MaxUploads on the server and one a company, each holding the room it may take,
+// so uploads at the same time can't together pass the quota or the free space.
+var uploading = struct {
+	sync.Mutex
+	n        int
+	company  map[string]bool
+	reserved map[string]int64 // by company
+	total    int64
+}{company: map[string]bool{}, reserved: map[string]int64{}}
 
 // uploadsDir is where files arrive before they are checked: cleaned when the server starts, so an upload cut
 // short by a crash doesn't stay.
@@ -80,19 +88,35 @@ func StoreFile(ctx context.Context, s *store.Store, dir, accountID, companyID st
 	}); err != nil {
 		return 0, err
 	}
-	limit := min(int64(MaxStored), MaxStoredCompany-used)
-	if free, ok := freeSpace(dir); ok {
-		limit = min(limit, free-MinFree)
-	}
-	if limit <= 0 || size > limit {
-		return 0, ErrQuota
-	}
-	select {
-	case uploads <- struct{}{}:
-		defer func() { <-uploads }()
-	default:
+	uploading.Lock()
+	if uploading.n >= MaxUploads || uploading.company[companyID] {
+		uploading.Unlock()
 		return 0, ErrBusy
 	}
+	limit := min(int64(MaxStored), MaxStoredCompany-used)
+	if free, ok := freeSpace(dir); ok {
+		limit = min(limit, free-MinFree-uploading.total)
+	}
+	if size >= 0 {
+		limit = min(limit, size)
+	}
+	if limit <= 0 || size > limit {
+		uploading.Unlock()
+		return 0, ErrQuota
+	}
+	uploading.n++
+	uploading.company[companyID] = true
+	uploading.reserved[companyID] = limit
+	uploading.total += limit
+	uploading.Unlock()
+	defer func() {
+		uploading.Lock()
+		uploading.n--
+		delete(uploading.company, companyID)
+		uploading.total -= uploading.reserved[companyID]
+		delete(uploading.reserved, companyID)
+		uploading.Unlock()
+	}()
 	if err := os.MkdirAll(uploadsDir(dir), 0o700); err != nil {
 		return 0, err
 	}
@@ -118,6 +142,8 @@ func StoreFile(ctx context.Context, s *store.Store, dir, accountID, companyID st
 		return 0, err
 	case n > limit && limit == MaxStored:
 		return 0, ErrTooLarge
+	case n > limit && size >= 0:
+		return 0, ErrFileHash // more than it announced
 	case n > limit:
 		return 0, ErrQuota
 	case [32]byte(h.Sum(nil)) != want:

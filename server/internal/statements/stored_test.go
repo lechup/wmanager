@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lechup/wmanager/server/internal/store/storetest"
 )
@@ -51,6 +53,32 @@ func TestStoredFiles(t *testing.T) {
 	fi, _ := os.Stat(filepath.Join(dir, e.company))
 	if fi.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("the company's folder is %v", fi.Mode().Perm())
+	}
+	// One upload a company at a time: a second waits for the first.
+	pr, pw := io.Pipe()
+	done := make(chan error)
+	slow := []byte("slow")
+	go func() {
+		_, err := StoreFile(ctx, e.s, dir, e.admin, e.company, sha256.Sum256(slow), -1, pr)
+		done <- err
+	}()
+	pw.Write(slow[:1])
+	for range 500 {
+		uploading.Lock()
+		busy := uploading.company[e.company]
+		uploading.Unlock()
+		if busy {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := StoreFile(ctx, e.s, dir, e.admin, e.company, h, -1, bytes.NewReader(driver)); !errors.Is(err, ErrBusy) {
+		t.Fatalf("a second upload of the company at once: %v", err)
+	}
+	pw.Write(slow[1:])
+	pw.Close()
+	if err := <-done; err != nil && !errors.Is(err, ErrQuota) {
+		t.Fatalf("the first upload: %v", err)
 	}
 	// Over the limits, refused before anything is read.
 	if _, err := StoreFile(ctx, e.s, dir, e.admin, e.company, h, MaxStored+1, bytes.NewReader(driver)); !errors.Is(err, ErrTooLarge) {

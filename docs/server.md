@@ -48,7 +48,7 @@ party id no web page can claim.
   names the server, and one naming another is refused.
 - **Files from an administrator's disk** (installers, drivers) come with `wmanager-sign add-file`, up to 4 GB each,
   checked against their hash and kept on disk in `WMANAGER_FILES_DIR`; small text files from the panel stay in the
-  database. A company's files take at most 64 GB together, the disk keeps 2 GB free, at most 4 arrive at once, and
+  database. A company's files take at most 64 GB together, the disk keeps 2 GB free, at most 4 arrive at once (one a company), and
   an upload must bring 1 MB a minute (a slower one is ended). An upload cut short is removed when the server starts.
 - **Jobs and stops** are signed the same way. The server keeps a job only with its script, under an id not used
   before, and a stop only for a job it has, on computers the job names; `wmanager-sign` fetches a job by its id to
