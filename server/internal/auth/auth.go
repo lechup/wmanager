@@ -80,6 +80,10 @@ type Service struct {
 	// Log gets the failed password attempts (and, through Loki, the SIEM export).
 	Log *slog.Logger
 
+	// SignCodeCap is how many wrong codes of wmanager-sign it takes a minute, from everyone; 0 means
+	// SignCodeFailures.
+	SignCodeCap int
+
 	mu        sync.Mutex
 	addresses map[string]*window   // attempts per address in the current minute
 	passwords map[string]*slowdown // attempts per account and address that weren't (yet) right

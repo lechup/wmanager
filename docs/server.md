@@ -38,10 +38,10 @@ party id no web page can claim.
   check the hashes) or CSV, and its administrators who sign, with the company's fingerprint.
 - **wmanager-sign** connects with a code from the page "Account", made within 10 minutes of the second factor. It
   works once, for 5 minutes, and nobody else should ever see it. Wrong codes are limited per address and, together,
-  to 30 a minute for the whole server. The token lasts 12 hours and reaches only the sign API. "Disconnect
+  to 1000 a minute for the whole server. The token lasts 12 hours and reaches only the sign API. "Disconnect
   wmanager-sign everywhere" ends every token of the account and a code still waiting.
 - **Signing keys** are registered from `wmanager-sign`, each with a proof signed by the key that its holder
-  registers it for this account (at most 20 an account). A key counts only once an administrator adds it to a
+  registers it for this account on this server (at most 20 an account; it needs `WMANAGER_PUBLIC_URL`). A key counts only once an administrator adds it to a
   signed admin list, after typing its fingerprint.
 
 ## What runs

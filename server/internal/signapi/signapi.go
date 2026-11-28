@@ -34,7 +34,11 @@ type API struct {
 	Log   *slog.Logger
 	// ClientAddr gives the client's address (the panel's, which knows the trusted proxies).
 	ClientAddr func(*http.Request) string
+	// PublicURL gives the server's address (WMANAGER_PUBLIC_URL), which key proofs name; "" refuses them.
+	PublicURL func() string
 }
+
+var errNoPublicURL = errors.New("registering keys needs WMANAGER_PUBLIC_URL")
 
 // Handler is the API's routes, every answer JSON.
 func (a *API) Handler() http.Handler {
@@ -82,6 +86,8 @@ func (a *API) failErr(w http.ResponseWriter, r *http.Request, err error) {
 		fail(w, http.StatusRequestEntityTooLarge, "too large")
 	case errors.Is(err, errBadRequest):
 		fail(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, errNoPublicURL):
+		fail(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, verify.ErrKeyProof):
 		fail(w, http.StatusBadRequest, "not a signing key with a proof for this account")
 	case errors.Is(err, auth.ErrSignCode), errors.Is(err, auth.ErrSignToken):
@@ -241,8 +247,8 @@ func (a *API) appendList(w http.ResponseWriter, r *http.Request, account string)
 	}{verify.Fingerprint(c.Company), c.Current().Sequence})
 }
 
-// registerKey takes a new signing key with its proof (verify.MakeKeyProof for this account, at the server's time,
-// signed by the key).
+// registerKey takes a new signing key with its proof (verify.MakeKeyProof for this server and account, at the
+// server's time, signed by the key).
 func (a *API) registerKey(w http.ResponseWriter, r *http.Request, account string) {
 	var in struct {
 		COSE  []byte        `json:"cose"`
@@ -252,7 +258,15 @@ func (a *API) registerKey(w http.ResponseWriter, r *http.Request, account string
 		a.failErr(w, r, err)
 		return
 	}
-	id, err := chains.RegisterKey(r.Context(), a.Store, account, in.COSE, in.Proof, a.Auth.Now())
+	server := ""
+	if a.PublicURL != nil {
+		server = strings.TrimSuffix(a.PublicURL(), "/")
+	}
+	if server == "" {
+		a.failErr(w, r, errNoPublicURL)
+		return
+	}
+	id, err := chains.RegisterKey(r.Context(), a.Store, server, account, in.COSE, in.Proof, a.Auth.Now())
 	if err != nil {
 		a.failErr(w, r, err)
 		return

@@ -752,7 +752,7 @@ func (b *browser) signIn() (tok, account string) {
 // registerKey registers a software key for the account, with its proof.
 func (e *env) registerKey(tok, account string, k *softkey.Key) (int, []byte) {
 	e.t.Helper()
-	proof, err := k.SignStatement(verify.MakeKeyProof(account, e.clock.now()), softkey.Options{})
+	proof, err := k.SignStatement(verify.MakeKeyProof(e.panel.PublicURL, account, e.clock.now()), softkey.Options{})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -818,6 +818,7 @@ func nextList(t *testing.T, prev verify.Signed, seq int64, by *softkey.Key, at t
 
 func TestSignAPI(t *testing.T) {
 	e := setup(t)
+	e.panel.PublicURL = "https://wm.example.com"
 	owner := e.browser()
 	owner.enroll("owner@example.com")
 	owner.get("/admin")
@@ -927,6 +928,7 @@ func TestSignAPI(t *testing.T) {
 
 func TestSignAPIRefusals(t *testing.T) {
 	e := setup(t)
+	e.panel.PublicURL = "https://wm.example.com"
 	owner := e.browser()
 	secret := owner.enroll("owner@example.com")
 	owner.get("/admin")
@@ -974,8 +976,18 @@ func TestSignAPIRefusals(t *testing.T) {
 		t.Errorf("a person reads the chain: %d", code)
 	}
 
-	// Keys: a proof for another account, a key someone else registered, the cap.
-	proof, _ := anna.SignStatement(verify.MakeKeyProof(account, e.clock.now()), softkey.Options{})
+	// Keys: a proof for another server, for another account, a key someone else registered, the cap.
+	elsewhere, _ := anna.SignStatement(verify.MakeKeyProof("https://other.example.com", account, e.clock.now()), softkey.Options{})
+	if code, _ := e.api("POST", "keys", tok, map[string]any{"cose": anna.COSEKey(), "proof": elsewhere}); code != http.StatusBadRequest {
+		t.Errorf("a proof made for another server: %d", code)
+	}
+	url0 := e.panel.PublicURL
+	e.panel.PublicURL = ""
+	if code, _ := e.registerKey(tok, account, anna); code != http.StatusServiceUnavailable {
+		t.Errorf("a key without WMANAGER_PUBLIC_URL: %d", code)
+	}
+	e.panel.PublicURL = url0
+	proof, _ := anna.SignStatement(verify.MakeKeyProof(e.panel.PublicURL, account, e.clock.now()), softkey.Options{})
 	if code, _ := e.api("POST", "keys", ptok, map[string]any{"cose": anna.COSEKey(), "proof": proof}); code != http.StatusBadRequest {
 		t.Errorf("the owner's proof sent by a person: %d", code)
 	}
@@ -1020,12 +1032,15 @@ func TestSignAPIRefusals(t *testing.T) {
 		t.Errorf("an expired token: %d", code)
 	}
 
-	// A disabled account: its token stops working.
+	// A disabled account: its token stops working (it worked just before).
+	e.clock.add(-time.Hour) // back within the person's token
+	if code, _ := e.api("GET", "me", ptok, nil); code != http.StatusOK {
+		t.Fatalf("the person's token before disabling: %d", code)
+	}
 	db := storetest.Superuser(t, e.panel.Store)
 	if _, err := db.Exec(context.Background(), `UPDATE accounts SET disabled = true WHERE email = 'person@example.com'`); err != nil {
 		t.Fatal(err)
 	}
-	e.clock.add(-time.Hour) // back within the person's token
 	if code, _ := e.api("GET", "me", ptok, nil); code != http.StatusUnauthorized {
 		t.Errorf("a disabled account's token: %d", code)
 	}

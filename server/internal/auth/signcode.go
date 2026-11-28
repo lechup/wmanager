@@ -20,10 +20,12 @@ import (
 const (
 	SignCodeLife  = 5 * time.Minute
 	SignTokenLife = 12 * time.Hour
-	// SignCodeFailures is how many wrong codes the server takes a minute from all addresses together: a code
-	// guessed from many addresses at once would hit whichever account has one waiting. Above it, connecting waits
-	// for the next minute, for everyone.
-	SignCodeFailures = 30
+	// SignCodeFailures is how many wrong codes the server takes a minute from all addresses together (the
+	// Service's SignCodeCap, unless set): codes guessed from many addresses at once would hit whichever account has
+	// one waiting. Above it, connecting waits for the next minute, for everyone. With 50 bits a code isn't found
+	// either way; the cap keeps a flood of guesses from reaching the database, and is high so that blocking
+	// everyone's connecting takes many addresses (each is limited to PerAddress).
+	SignCodeFailures = 1000
 )
 
 // ErrSignCode means the code is unknown, used or expired; ErrSignToken that the token is.
@@ -75,20 +77,31 @@ func signCodeHash(code string) []byte {
 	return tokenHash("wmanager-sign code\x00" + norm)
 }
 
-// signCodeOpen tells whether codes may be tried now, under SignCodeFailures; failed counts a wrong one.
-func (s *Service) signCodeOpen() bool {
+// reserveSignCode counts a code as wrong before it is checked, under the cap, so codes sent side by side all count;
+// a right one gives its place back (signCodeRight).
+func (s *Service) reserveSignCode() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	limit := s.SignCodeCap
+	if limit == 0 {
+		limit = SignCodeFailures
+	}
 	if s.Now().Sub(s.signFails.start) > time.Minute {
 		s.signFails = window{start: s.Now()}
 	}
-	return s.signFails.n < SignCodeFailures
+	if s.signFails.n >= limit {
+		return false
+	}
+	s.signFails.n++
+	return true
 }
 
-func (s *Service) signCodeFailed() {
+func (s *Service) signCodeRight() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.signFails.n++
+	if s.signFails.n > 0 {
+		s.signFails.n--
+	}
 }
 
 // ExchangeSignCode turns a code into a token of the sign API. The code works once.
@@ -96,7 +109,7 @@ func (s *Service) ExchangeSignCode(ctx context.Context, addr, code string) (toke
 	if err := s.allow(addr); err != nil {
 		return "", "", time.Time{}, err
 	}
-	if !s.signCodeOpen() {
+	if !s.reserveSignCode() {
 		return "", "", time.Time{}, ErrTooMany
 	}
 	ctx = context.WithoutCancel(ctx)
@@ -129,10 +142,10 @@ func (s *Service) ExchangeSignCode(ctx context.Context, addr, code string) (toke
 		return "", "", time.Time{}, err
 	}
 	if answer != nil {
-		s.signCodeFailed()
 		s.Log.Warn("a wrong code of wmanager-sign", "address", addressKey(addr))
 		return "", "", time.Time{}, answer
 	}
+	s.signCodeRight()
 	return token, accountID, expires, nil
 }
 

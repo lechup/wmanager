@@ -192,8 +192,8 @@ type Key struct {
 // RegisterKey keeps a signing key a person made in wmanager-sign, with the key's proof that its holder registers it
 // for this account, so an administrator can add it to a list. It changes nothing by itself: a key counts only once
 // a signed list names it, after its fingerprint was typed.
-func RegisterKey(ctx context.Context, s *store.Store, accountID string, cose []byte, proof verify.Signed, now time.Time) (string, error) {
-	id, err := verify.CheckKeyProof(proof, cose, accountID, now)
+func RegisterKey(ctx context.Context, s *store.Store, server, accountID string, cose []byte, proof verify.Signed, now time.Time) (string, error) {
+	id, err := verify.CheckKeyProof(proof, cose, server, accountID, now)
 	if err != nil {
 		return "", err
 	}

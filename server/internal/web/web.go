@@ -132,7 +132,8 @@ func (s *Server) Handler() http.Handler {
 	cop := http.NewCrossOriginProtection()
 	top := http.NewServeMux()
 	top.Handle("/", cop.Handler(limitBody(mux)))
-	api := &signapi.API{Store: s.Store, Auth: s.Auth, Log: s.Log, ClientAddr: s.clientAddr}
+	api := &signapi.API{Store: s.Store, Auth: s.Auth, Log: s.Log, ClientAddr: s.clientAddr,
+		PublicURL: func() string { return s.PublicURL }}
 	top.Handle(signapi.Prefix, api.Handler())
 	return s.logged(headers(top))
 }
