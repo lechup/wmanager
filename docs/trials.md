@@ -69,8 +69,7 @@ before stage 3b relies on it; Windows 11 Pro build 26300, a virtual machine with
   "unrecognized app", tagged or not, signed by the trusted self-signed certificate or unsigned alike. SmartScreen
   judges by reputation, which a self-signed certificate never has. So a self-signed release certificate (one of the
   three the release may use, as decided) means an installer checked with `wmanager-sign check-installer` or taken
-  from GitHub.
-  copied from a USB drive carries no mark of the web and isn't checked by SmartScreen.
+  from GitHub. An installer copied from a USB drive carries no mark of the web and isn't checked by SmartScreen.
 - `Import-Certificate` is refused for the Root store on this build (also as SYSTEM); `certutil -addstore` works.
 
 ## Trial 3: the computer's key in the TPM
