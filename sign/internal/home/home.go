@@ -219,6 +219,22 @@ type Company struct {
 	Fingerprint string            `json:"fingerprint"`
 	Servers     map[string]string `json:"servers"` // a server's address: its id of the company
 	Chain       []verify.Signed   `json:"chain"`
+	// State is the newest state verified here: what the next one is shown against.
+	State *verify.Signed `json:"state,omitzero"`
+	// Signed is the highest serial signed here, so the next is higher even when the server lost the last.
+	Signed int64 `json:"signed,omitzero"`
+}
+
+// StateSerial is the serial of the state held, or 0.
+func (c *Company) StateSerial() int64 {
+	if c.State == nil {
+		return 0
+	}
+	st, err := verify.ParseState(c.State.Statement)
+	if err != nil {
+		return 0
+	}
+	return st.Serial
 }
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -311,7 +327,7 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 	if err != nil {
 		return err
 	}
-	name, servers := c.Name, maps.Clone(c.Servers)
+	name, servers, state, signed := c.Name, maps.Clone(c.Servers), c.State, c.Signed
 	if servers == nil {
 		servers = map[string]string{}
 	}
@@ -327,8 +343,14 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 				servers[k] = v
 			}
 		}
+		// A state held is only replaced by a newer one; the serial signed here only grows.
+		if old.StateSerial() > c.StateSerial() {
+			state = old.State
+		}
+		signed = max(signed, old.Signed)
 	}
-	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed})
+	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed,
+		State: state, Signed: signed})
 }
 
 // ForgetCompany removes a company held: only for a first list the server refused, never for a chain taken.

@@ -101,6 +101,25 @@ func (a *App) status(ctx context.Context) error {
 			a.say("status.error", name, err.Error())
 		case held != nil:
 			a.say("status.held", show.Visible(held.Name), role, verify.Fingerprint(ch.Company), ch.Current().Sequence)
+			st, _, err := a.loadState(ctx, s, c, held, ch)
+			if errors.Is(err, verify.ErrForkedChain) {
+				return err
+			}
+			if err != nil {
+				a.say("status.error", show.Visible(held.Name), err.Error())
+				continue
+			}
+			var serial int64
+			if st != nil {
+				serial = st.Serial
+			}
+			waiting := 0
+			if c.Role == "admin" {
+				if ds, err := s.client.Drafts(ctx, c.ID); err == nil {
+					waiting = len(ds)
+				}
+			}
+			a.say("status.state", serial, waiting)
 		case c.Fingerprint == "":
 			a.say("status.nochain", name, role)
 		default:

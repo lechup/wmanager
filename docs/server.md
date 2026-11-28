@@ -40,6 +40,11 @@ party id no web page can claim.
   works once, for 5 minutes, and nobody else should ever see it. Wrong codes are limited per address and, together,
   to 1000 a minute for the whole server. The token lasts 12 hours and reaches only the sign API. "Disconnect
   wmanager-sign everywhere" ends every token of the account and a code still waiting.
+- **States** are signed in `wmanager-sign` from drafts the panel keeps (made from stage 4a), with the files they
+  name kept by their hash and the secrets' values given with them; the server checks each against the company's
+  chain and the newest state before it keeps it. The secrets' values are read only by the server's own work, never
+  on behalf of a member. It needs `WMANAGER_PUBLIC_URL`: a state names the server, and one naming another is
+  refused.
 - **Signing keys** are registered from `wmanager-sign`, each with a proof signed by the key that its holder
   registers it for this account on this server (at most 20 an account; it needs `WMANAGER_PUBLIC_URL`). A key counts only once an administrator adds it to a
   signed admin list, after typing its fingerprint.

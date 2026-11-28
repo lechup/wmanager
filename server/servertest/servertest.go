@@ -9,6 +9,8 @@ import (
 	"crypto/sha1"
 	"encoding/base32"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json/v2"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/lechup/wmanager/server/internal/accounts"
 	"github.com/lechup/wmanager/server/internal/auth"
+	"github.com/lechup/wmanager/server/internal/statements"
 	"github.com/lechup/wmanager/server/internal/store"
 	"github.com/lechup/wmanager/server/internal/store/storetest"
 	"github.com/lechup/wmanager/server/internal/web"
@@ -171,4 +174,38 @@ func (s *Server) ForgetLists(company string, keep int64) {
 	if _, err := c.Exec(context.Background(), `DELETE FROM admin_lists WHERE company_id = $1 AND sequence > $2`, company, keep); err != nil {
 		s.t.Fatal(err)
 	}
+}
+
+// Draft makes a draft of the company as the panel will (stage 4a), by one of its administrators: body as JSON.
+func (s *Server) Draft(account, company, typ string, body any) string {
+	s.t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	id, err := statements.SaveDraft(context.Background(), s.Store, account, company, typ, b)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return id
+}
+
+// File keeps a file of the company, as the panel will, and returns its hash in hex.
+func (s *Server) File(account, company string, content []byte) string {
+	s.t.Helper()
+	h, err := statements.PutFile(context.Background(), s.Store, account, company, content)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return hex.EncodeToString(h[:])
+}
+
+// Drafts is how many drafts of the company wait.
+func (s *Server) Drafts(account, company string) int {
+	s.t.Helper()
+	ds, err := statements.Drafts(context.Background(), s.Store, account, company)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return len(ds)
 }

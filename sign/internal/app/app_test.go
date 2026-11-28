@@ -38,7 +38,10 @@ type person struct {
 	// companies, and alias lists a company under another id (alias[0] for alias[1]).
 	rewrite   func(lists []verify.Signed) []verify.Signed
 	rewriteMe func(me *api.Me)
-	alias     [2]string
+	// rewriteState changes its answers to GET .../state, rewriteFile those to GET .../files/.
+	rewriteState func(st **verify.Signed, reported *int64)
+	rewriteFile  func(content []byte) []byte
+	alias        [2]string
 	// lose loses the server's answers to POSTs, after the server has them; drop loses the POSTs themselves.
 	lose, drop bool
 	// refuse answers POSTs with a refusal: after the server has taken them, or (refuseOnly) without passing them on.
@@ -107,6 +110,25 @@ func (l lying) RoundTrip(r *http.Request) (*http.Response, error) {
 			l.p.rewriteMe(&me)
 		}
 		out = me
+	case l.p.rewriteState != nil && strings.HasSuffix(r.URL.Path, "/state"):
+		var st struct {
+			State    *verify.Signed `json:"state"`
+			Reported int64          `json:"reported"`
+		}
+		if err := json.UnmarshalRead(resp.Body, &st); err != nil {
+			return nil, err
+		}
+		l.p.rewriteState(&st.State, &st.Reported)
+		out = st
+	case l.p.rewriteFile != nil && strings.Contains(r.URL.Path, "/files/"):
+		var f struct {
+			Content []byte `json:"content"`
+		}
+		if err := json.UnmarshalRead(resp.Body, &f); err != nil {
+			return nil, err
+		}
+		f.Content = l.p.rewriteFile(f.Content)
+		out = f
 	default:
 		return resp, nil
 	}

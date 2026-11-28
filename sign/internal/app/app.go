@@ -136,6 +136,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		case len(args) == 2:
 			return a.changeAdmins(ctx, args[1], args[0])
 		}
+	case "sign":
+		if len(args) == 1 {
+			return a.signDraft(ctx, args[0])
+		}
 	case "help", "-h", "-help", "--help":
 		a.say("usage")
 		return nil
