@@ -165,7 +165,10 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - (done) its messages in the ten languages, checked like the panel's;
   - a test by hand with a real security key, once there is one.
   - How each person's rights change moves to 4a, with the people in the state.
-- **2c:** Windows Hello in `wmanager-sign`.
+- **2c:** Windows Hello in `wmanager-sign` (done in code): Windows' own WebAuthn API (`webauthn.dll`) without cgo,
+  with any relying party id and the client data `wmanager-sign` builds; the security key's interface takes the
+  client data, which Windows hashes itself. The test on a real Windows Hello (a virtual machine, with the PIN typed
+  on its screen) waits, like the one with a real security key.
 
 ### Stage 3: the agent and the installer
 

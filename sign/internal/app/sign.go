@@ -37,7 +37,6 @@ func (a *App) device() (fido.Device, string, error) {
 func (a *App) signWith(d fido.Device, pin string, raw []byte, allowed map[string]verify.PublicKey, local []home.Key) (verify.Signed, error) {
 	h := sha256.Sum256(raw)
 	clientData := verify.ClientDataJSON(h)
-	cdh := sha256.Sum256(clientData)
 	var creds [][]byte
 	for _, k := range local {
 		if _, ok := allowed[k.ID]; ok && len(k.CredentialID) > 0 {
@@ -45,11 +44,11 @@ func (a *App) signWith(d fido.Device, pin string, raw []byte, allowed map[string
 		}
 	}
 	a.say("key.touch")
-	as, err := d.Assert(cdh, creds, pin)
+	as, err := d.Assert(clientData, creds, pin)
 	if errors.Is(err, fido.ErrNoCreds) && creds != nil {
 		// The keys made here may be on another security key: try every one on this one.
 		a.say("key.touch")
-		as, err = d.Assert(cdh, nil, pin)
+		as, err = d.Assert(clientData, nil, pin)
 	}
 	if errors.Is(err, fido.ErrNoCreds) {
 		return verify.Signed{}, a.fail("err.nokeyhere")

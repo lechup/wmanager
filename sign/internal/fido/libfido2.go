@@ -19,6 +19,7 @@ static void wipe(char *p) {
 import "C"
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -122,7 +123,8 @@ func bytesOf(p *C.uchar, n C.size_t) []byte {
 	return C.GoBytes(unsafe.Pointer(p), C.int(n))
 }
 
-func (d *device) MakeCredential(u User, clientDataHash [32]byte, pin string) (Credential, error) {
+func (d *device) MakeCredential(u User, clientData []byte, pin string) (Credential, error) {
+	clientDataHash := sha256.Sum256(clientData)
 	cred := C.fido_cred_new()
 	if cred == nil {
 		return Credential{}, errors.New("libfido2: out of memory")
@@ -175,7 +177,8 @@ func (d *device) MakeCredential(u User, clientDataHash [32]byte, pin string) (Cr
 	return Credential{ID: id, COSE: cose, Flags: byte(C.fido_cred_flags(cred))}, nil
 }
 
-func (d *device) Assert(clientDataHash [32]byte, allow [][]byte, pin string) ([]Assertion, error) {
+func (d *device) Assert(clientData []byte, allow [][]byte, pin string) ([]Assertion, error) {
+	clientDataHash := sha256.Sum256(clientData)
 	a := C.fido_assert_new()
 	if a == nil {
 		return nil, errors.New("libfido2: out of memory")

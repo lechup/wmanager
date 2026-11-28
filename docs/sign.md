@@ -3,8 +3,8 @@
 > The signer of wmanager v1 ([Architecture of v1](architecture.md#wmanager-sign)). It is being built
 > ([Implementation plan](implementation.md)): today it connects to the server, makes and registers signing keys,
 > keeps and signs each company's chain of admin lists, and signs its states, single jobs and stops, and new values
-> of its secrets, and adds files from your own disk; it checks the companies' audit logs. Windows Hello comes in
-> stage 2c.
+> of its secrets, and adds files from your own disk; it checks the companies' audit logs. On Windows it signs with
+> Windows Hello or a security key through Windows' own dialog (stage 2c; not yet tried on a real Windows Hello).
 
 `wmanager-sign` runs on the administrator's own computer, never on the server. A server, even a hacked one, can't
 make it sign anything it didn't show, and can't make it take an admin list that doesn't follow the one it holds.
@@ -20,6 +20,13 @@ go build -tags fido2 -o wmanager-sign ./sign/cmd/wmanager-sign
 ```
 
 Without `-tags fido2` it builds without security keys: it connects and shows, but can't sign.
+
+On Windows, build it without cgo: it uses Windows' own WebAuthn API (`webauthn.dll`, Windows 10 1903 or newer), which
+offers Windows Hello or a security key in its own dialog and asks for the PIN or the fingerprint itself:
+
+```powershell
+go build -o wmanager-sign.exe ./sign/cmd/wmanager-sign
+```
 
 The security key must speak FIDO2 (not only U2F) and have a PIN set (`fido2-token -S <device>`, or the key maker's
 tool) or a fingerprint of its own. A phone or a password manager's passkey is synced between devices, and is
