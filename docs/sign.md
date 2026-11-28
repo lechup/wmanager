@@ -223,5 +223,4 @@ Other commands: `wmanager-sign key list` lists the keys made here; `wmanager-sig
 connection here (the panel's "Disconnect wmanager-sign everywhere" ends it on the server too).
 
 Options before the command: `-server https://...` for another server than the one connected last, and `-lang` for
-the language (or `WMANAGER_LANG`, then the system's). Its messages are in English for now; the other nine languages
-come with the rest of stage 2b.
+the language (or `WMANAGER_LANG`, then the system's locale); see [Languages](languages.md).
