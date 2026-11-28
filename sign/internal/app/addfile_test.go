@@ -24,7 +24,8 @@ func TestAddFile(t *testing.T) {
 	local := filepath.Join(t.TempDir(), "x.cab")
 	os.WriteFile(local, []byte{0x4d, 0x5a, 0, 1, 2, 3}, 0o600)
 	out := w.anna.must("yes\n", "add-file", "Acme", "drivers/x.cab", local)
-	if !strings.Contains(out, "+ drivers/x.cab (added here with add-file from "+local+", 6 bytes)") || !strings.Contains(out, "State 2 of Acme is signed") {
+	if !strings.Contains(out, "+ drivers/x.cab (added here with add-file from "+local+" on ") || !strings.Contains(out, ", 6 bytes, SHA-256 ") ||
+		!strings.Contains(out, "State 2 of Acme is signed") {
 		t.Fatalf("add-file: %s", out)
 	}
 	// The next state from the panel keeps the file: unchanged, nothing to show.
@@ -40,6 +41,19 @@ func TestAddFile(t *testing.T) {
 	if _, err := w.bob.run("1\nyes\n", "sign", "Acme"); err == nil || !strings.Contains(err.Error(), "Not every file") {
 		t.Fatalf("a file another administrator added, at a new path: %v", err)
 	}
+	// A file whose state wasn't signed here isn't taken as added here.
+	other := filepath.Join(t.TempDir(), "y.cab")
+	os.WriteFile(other, []byte{0x4d, 0x5a, 9, 9}, 0o600)
+	if out := w.anna.must("no\n", "add-file", "Acme", "drivers/y.cab", other); !strings.Contains(out, "Nothing was signed") {
+		t.Fatalf("add-file, then no: %s", out)
+	}
+	srv.ClearDrafts(acme) // Bob's, refused above
+	srv.Draft(w.anna.account, acme, "state", draft([]verify.Computer{o3}, map[string]string{
+		"drivers/x.cab": hashOf([]byte{0x4d, 0x5a, 0, 1, 2, 3}), "drivers/y.cab": hashOf([]byte{0x4d, 0x5a, 9, 9})}))
+	if _, err := w.anna.run("1\nyes\n", "sign", "Acme"); err == nil || !strings.Contains(err.Error(), "Not every file") {
+		t.Fatalf("a file refused at add-file, from the panel: %v", err)
+	}
+	srv.ClearDrafts(acme)
 	// A bad path, and something that isn't a file.
 	if _, err := w.anna.run("yes\n", "add-file", "Acme", "../x.cab", local); err == nil || !strings.Contains(err.Error(), "isn't valid") {
 		t.Fatalf("a bad path: %v", err)

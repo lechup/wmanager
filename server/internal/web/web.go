@@ -180,6 +180,9 @@ type statusWriter struct {
 
 func (w *statusWriter) WriteHeader(code int) { w.status = code; w.ResponseWriter.WriteHeader(code) }
 
+// Unwrap lets http.ResponseController reach the connection (an upload moves its deadlines on).
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // logged logs each request, without the token of a setup link in its path.
 func (s *Server) logged(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

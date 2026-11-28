@@ -96,17 +96,22 @@ func (a *App) addFile(ctx context.Context, which, path, local string) error {
 	a.say("addfile.sending", show.Visible(local), n)
 	if err := s.client.UploadFile(ctx, c.ID, hash, f, n); err != nil {
 		if api.Status(err) == 503 {
-			return a.fail("err.nofilesdir")
+			return a.fail("err.nofilesdir", err.Error())
 		}
 		return a.apiErr(s, err)
 	}
+	// Shown as added here while it is signed; kept as such only once it is (a file refused here isn't trusted).
 	if h.Added == nil {
 		h.Added = map[string]home.AddedFile{}
 	}
-	h.Added[hexHash] = home.AddedFile{From: local, Size: n}
-	if err := a.Home.SetCompany(h, ch); err != nil {
-		return err
-	}
+	_, before := h.Added[hexHash]
+	h.Added[hexHash] = home.AddedFile{From: local, Size: n, At: a.Now().UTC()}
+	keep := false
+	defer func() {
+		if !keep && !before {
+			delete(h.Added, hexHash)
+		}
+	}()
 
 	a.say("state.next", serial, show.Visible(h.Name), verify.Fingerprint(ch.Company))
 	if !a.showNext(ctx, s, c, h, b, &next) {
@@ -144,5 +149,6 @@ func (a *App) addFile(ctx context.Context, which, path, local string) error {
 	if err != nil {
 		return err
 	}
+	keep = true
 	return a.submitState(ctx, s, c, h, ch, b, signed, "", secrets)
 }

@@ -167,9 +167,10 @@ wmanager-sign add-file Acme groups/office/files/printer-driver.cab ~/Downloads/d
 ```
 
 `wmanager-sign` hashes the file as it reads it, gives it to the server (up to 4 GB; the server checks the hash), and
-signs the next state with it, showing it as added from that file and its size. It remembers the file as added
-here, so a later state that keeps it, or names it at another path, is shown and signed here; another
-administrator's `wmanager-sign`, which didn't add it, signs no state that adds it.
+signs the next state with it, showing it as added from that file, when, its size and the start of its hash. Once
+that state is signed, it remembers the file as added here, so a later state that keeps it, or names it at another
+path, is shown and signed here; a file you didn't sign the state of isn't remembered, and another administrator's
+`wmanager-sign`, which didn't add it, signs no state that adds it.
 
 ## The audit log
 

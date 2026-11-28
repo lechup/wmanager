@@ -239,10 +239,11 @@ type Company struct {
 	accepted map[string]bool // heads accepted anew in this run: they replace the one kept
 }
 
-// AddedFile is a file added here: its name on this computer and its size.
+// AddedFile is a file added here: its name on this computer, its size, and when it was signed in a state.
 type AddedFile struct {
-	From string `json:"from"`
-	Size int64  `json:"size"`
+	From string    `json:"from"`
+	Size int64     `json:"size"`
+	At   time.Time `json:"at"`
 }
 
 // AuditHead is an entry of an audit log: its number and its hash (of the one before and its own bytes).

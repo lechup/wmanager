@@ -40,6 +40,7 @@ import (
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/config"
 	"github.com/lechup/wmanager/server/internal/lokihead"
+	"github.com/lechup/wmanager/server/internal/statements"
 	"github.com/lechup/wmanager/server/internal/store"
 	"github.com/lechup/wmanager/server/internal/web"
 )
@@ -196,6 +197,9 @@ func serve(ctx context.Context, cfg config.Config, s *store.Store, stderr io.Wri
 		return err
 	}
 	panel.PublicURL, panel.TrustedProxies, panel.FilesDir = cfg.PublicURL, cfg.TrustedProxies, cfg.FilesDir
+	if err := statements.CleanUploads(cfg.FilesDir); err != nil {
+		return fmt.Errorf("WMANAGER_FILES_DIR: %w", err)
+	}
 	if cfg.LokiURL != "" {
 		p := &lokihead.Pusher{Store: s, URL: cfg.LokiURL, Tenant: cfg.LokiTenant, Every: cfg.LokiHeadEvery, Log: log}
 		go p.Run(ctx)

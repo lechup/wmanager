@@ -279,7 +279,8 @@ cmd_backup() {
     [[ -s $file.partial ]] || { rm -f "$file.partial"; die "the dump is empty"; }
     # The files added with wmanager-sign add-file, as a tar of the volume files-data, next to the dump
     local files=${file%.dump}.files.tar
-    if ! (umask 077; docker cp "$(docker compose ps -q wmanager)":/var/lib/wmanager/files/. - > "$files.partial"); then
+    # (from the container even when it is stopped, when a backup is most wanted)
+    if ! (umask 077; docker cp "$(docker compose ps -aq wmanager)":/var/lib/wmanager/files/. - > "$files.partial"); then
         rm -f "$file.partial" "$files.partial"
         die "copying the files added with add-file failed"
     fi
@@ -312,6 +313,8 @@ cmd_restore() {
     if [[ -s $files ]]; then
         docker cp -a - "$(docker compose ps -aq wmanager)":/var/lib/wmanager/files < "$files" ||
             echo "Warning: $files didn't copy back; the database is restored, the files added with add-file may be missing." >&2
+    else
+        echo "Warning: no $files next to the dump; the files added with add-file are as they were." >&2
     fi
     docker compose up -d wmanager
     echo "Restored $file; wmanager-server started again. The database before it is kept as wmanager_old until the next restore."

@@ -354,7 +354,7 @@ func (a *App) fileLines(ctx context.Context, s *session, c api.Company, h *home.
 	head := mark + " " + show.Visible(path)
 	if f, ok := h.Added[after]; ok {
 		// Added here with add-file, from the administrator's own disk: its hash is of the file read here.
-		return []string{head + " " + a.t("state.addedhere", show.Visible(f.From), f.Size)}, true
+		return []string{head + " " + a.t("state.addedhere", show.Visible(f.From), f.At.Local().Format("2006-01-02 15:04"), f.Size, after[:16])}, true
 	}
 	content, err := a.fetch(ctx, s, c, after)
 	if err != nil {

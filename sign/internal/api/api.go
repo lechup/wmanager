@@ -34,6 +34,8 @@ type Client struct {
 	Server string // https://host[:port]
 	Token  string
 	HTTP   *http.Client
+	// Upload is for add-file's uploads, which may last long (HTTP when nil).
+	Upload *http.Client
 }
 
 // Error is the server's refusal.
@@ -381,5 +383,9 @@ func (c *Client) UploadFile(ctx context.Context, company string, hash [32]byte, 
 	}
 	req.ContentLength = size
 	req.Header.Set("Content-Type", "application/octet-stream")
-	return c.send(req, nil)
+	up := *c
+	if c.Upload != nil {
+		up.HTTP = c.Upload
+	}
+	return up.send(req, nil)
 }
