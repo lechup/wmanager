@@ -81,6 +81,8 @@ changing anything.
 - [Releases](docs/releases.md): publishing a version
 - [wmanager-server](docs/server.md): the server of v1, as far as it is built (the panel, accounts, companies, the
   audit log), run with the self-hosting kit
+- [wmanager-sign](docs/sign.md): the signer of v1, as far as it is built (connecting, signing keys, the companies'
+  admin lists)
 - [Architecture of v1](docs/architecture.md): the planned wmanager-server and wmanager-agent, with signing in
   `wmanager-sign` (a design, not built yet), its [requirements](docs/requirements.md) and the
   [implementation plan](docs/implementation.md)

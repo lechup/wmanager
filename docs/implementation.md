@@ -141,11 +141,16 @@ Short trials of what could overturn the design, each on a branch of its own. The
   with `verify` (the computers check it again themselves); people register their signing keys there, each with a
   proof signed by the key (`verify.KeyProof`); the panel shows a company's fingerprint and administrators.
 - **2b, `wmanager-sign` on Linux:**
-  - the first admin list and the company's fingerprint, then the changes of the list;
-  - showing what is signed, with control characters made visible and the difference from the last verified state;
-  - `add-file`, typing secrets, the clock check against the server, the serial numbers;
-  - a new key's full fingerprint shown at registration and typed by the administrator, how each person's rights
-    change, and the head of the audit log it saw last;
+  - first (done, [wmanager-sign](sign.md)): connecting with the code, signing keys made on the security key
+    (discoverable, under `wmanager-sign.invalid`, through libfido2 with the build tag `fido2`) and registered with
+    their proof, the first admin list and the company's fingerprint, then the changes of the list, with a new key's
+    full fingerprint typed by the administrator; the whole chain kept per company, refusing an older or forked one,
+    and giving a server that is behind the lists it lacks; names shown with control characters made visible; the
+    clock check against the server. Its tests run the whole server (`server/servertest`) with a software key;
+  - its messages in the ten languages;
+  - showing what is signed with the difference from the last verified state;
+  - `add-file`, typing secrets, the serial numbers;
+  - how each person's rights change, and the head of the audit log it saw last;
   - a test by hand with a real security key, once there is one;
   - the server's side: storing statements and handing them out.
 - **2c:** Windows Hello in `wmanager-sign`.

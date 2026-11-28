@@ -132,6 +132,14 @@ jobs:
       - name: Tests
         run: go test -race ./...
 
+      # wmanager-sign with security keys: libfido2 through cgo (the tests above use a software key)
+      - name: wmanager-sign with libfido2
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libfido2-dev
+          go vet -tags fido2 ./sign/...
+          go test -tags fido2 ./sign/internal/fido/...
+          go build -tags fido2 -o /dev/null ./sign/cmd/wmanager-sign
+
       - name: Windows build
         run: GOOS=windows GOARCH=amd64 go build ./...
 
