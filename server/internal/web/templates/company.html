@@ -17,6 +17,32 @@
   <thead><tr><th>{{t "admin.email"}}</th><th>{{t "admin.name"}}</th><th>{{t "admin.role"}}</th></tr></thead>
   <tbody>{{range .Members}}<tr><td>{{.Email}}</td><td>{{.Name}}</td><td>{{t (print "role." .Role)}}</td></tr>{{end}}</tbody>
 </table>
+<h2>{{t "company.computers"}}</h2>
+{{if .Computers}}
+<table>
+  <thead><tr><th>{{t "company.computer"}}</th><th>{{t "company.computerid"}}</th><th>{{t "company.enrolled"}}</th><th>{{t "company.lastcontact"}}</th></tr></thead>
+  <tbody>{{range .Computers}}<tr><td>{{.Name}}</td><td><code>{{slice .ID 0 8}}</code></td><td>{{time .EnrolledAt}}</td><td>{{if .LastContact.IsZero}}{{t "company.notyet"}}{{else}}{{time .LastContact}}{{end}}</td></tr>{{end}}</tbody>
+</table>
+{{else}}<p class="muted">{{t "company.nocomputers"}}</p>{{end}}
+{{if .IsAdmin}}
+<h3>{{t "company.tokens"}}</h3>
+<p class="muted">{{t "company.tokenstext"}}</p>
+{{if .NewToken}}<p>{{t "company.newtoken"}} <code class="secret">{{.NewToken}}</code></p>
+<p class="muted">{{t "company.newtokenwarn"}}</p>{{end}}
+{{if .TokenError}}<p class="error" role="alert">{{t .TokenError}}</p>{{end}}
+{{if .Tokens}}
+<table>
+  <thead><tr><th>{{t "company.usesleft"}}</th><th>{{t "company.expires"}}</th><th>{{t "company.madeby"}}</th><th></th></tr></thead>
+  <tbody>{{range .Tokens}}<tr><td>{{.UsesLeft}}</td><td>{{time .Expires}}</td><td>{{.CreatedBy}}</td>
+  <td><form method="post" action="/c/{{$.Data.Company.ID}}/token-end" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="token" value="{{.ID}}"><button>{{t "company.endtoken"}}</button></form></td></tr>{{end}}</tbody>
+</table>
+{{else}}<p class="muted">{{t "company.notokens"}}</p>{{end}}
+<form method="post" action="/c/{{.Company.ID}}/token"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <label>{{t "company.days"}} <input type="number" name="days" min="1" max="30" value="7" required></label>
+  <label>{{t "company.uses"}} <input type="number" name="uses" min="1" max="1000" value="1" required></label>
+  <button>{{t "company.maketoken"}}</button>
+</form>
+{{end}}
 <h2>{{t "audit.title"}}</h2>
 {{if .Broken}}<p class="error" role="alert">{{t "audit.broken" .Broken}}</p>
 {{else}}<p class="ok">{{t "audit.whole" .Total .Head}}</p>{{end}}

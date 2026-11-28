@@ -127,6 +127,10 @@ func addressKey(addr string) string {
 	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
+// Allow counts an attempt from an address and refuses more than PerAddress a minute, for other parts of the server
+// that take something to guess (an enrollment token): ErrTooMany.
+func (s *Service) Allow(addr string) error { return s.allow(addr) }
+
 // allow counts an attempt from an address and refuses more than PerAddress a minute.
 func (s *Service) allow(addr string) error {
 	s.mu.Lock()

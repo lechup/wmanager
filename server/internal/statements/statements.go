@@ -372,3 +372,24 @@ func Member(ctx context.Context, s *store.Store, accountID, companyID string) er
 		return member(ctx, tx, accountID, companyID, false)
 	})
 }
+
+// NewestOf is the company's newest state, for the server's own work (an agent's poll), with its serial; nil and 0
+// when there is none.
+func NewestOf(ctx context.Context, s *store.Store, companyID string) (*verify.Signed, int64, error) {
+	var out *verify.Signed
+	var serial int64
+	err := s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		var raw []byte
+		err := tx.QueryRow(ctx, `SELECT signed, serial FROM statements WHERE company_id = $1 AND type = 'state'
+		                         ORDER BY serial DESC LIMIT 1`, companyID).Scan(&raw, &serial)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		out = new(verify.Signed)
+		return json.Unmarshal(raw, out)
+	})
+	return out, serial, err
+}

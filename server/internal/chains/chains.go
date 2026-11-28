@@ -272,3 +272,15 @@ func CompanyKeys(ctx context.Context, s *store.Store, accountID, companyID strin
 	})
 	return out, err
 }
+
+// Stored is the company's stored chain, for the server's own work (an agent's poll): the lists as stored, unchecked
+// here, since the computer checks them itself; nil before the first.
+func Stored(ctx context.Context, s *store.Store, companyID string) ([]verify.Signed, error) {
+	var out []verify.Signed
+	err := s.Tx(ctx, store.System, func(tx pgx.Tx) error {
+		var err error
+		out, err = load(ctx, tx, companyID, all)
+		return err
+	})
+	return out, err
+}
