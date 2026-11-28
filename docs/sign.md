@@ -110,14 +110,19 @@ Files:
          2 + Write-Output 'bye'
 ```
 
-- A new file is shown whole, a changed one as its changed lines with two around each, a file that isn't text by
-  its size. Each is fetched by its hash and checked; a file that can't be shown isn't signed.
+- A new file is shown whole, a changed one as its changed lines with two around each. Each is fetched by its hash
+  and checked; a file that can't be shown isn't signed. That includes a file that isn't text: such files come only
+  with `add-file`, from your own disk.
+- The difference is from the newer of the state it verified and the one it signed itself, which it keeps even
+  when the server doesn't show it. When the computers report a newer state than either, it signs nothing.
+- A change of wmanager's version or of the release certificate is shown with the new hashes; until stage 6
+  `wmanager-sign` doesn't check them against the signed releases, and says so.
 - **A new computer** is added only with the first 8 characters of its id typed, as its installer showed them.
 - **A new secret's value** is typed here, twice; `wmanager-sign` makes its salt and puts its hash into the state,
   and gives the value and the salt to the server.
-- The serial is one more than the highest it knows. A server reporting a serial far above that (more than 1000) is
-  refused.
-- States signed by others are shown, in short, as they arrive, checked against the newest admin list.
+- The serial is one more than the highest it knows.
+- States signed by others are shown, in short, as they arrive, checked against the newest admin list. One signed
+  by a key removed since isn't taken (the computers refuse it); its serial is passed.
 
 ## What it refuses
 
@@ -141,7 +146,7 @@ In a folder only you can open: `$WMANAGER_SIGN_HOME`, or `~/.config/wmanager-sig
 | `server` | the server connected last |
 | `servers/<host>[_<port>]/token.json` | the connection's token, until it ends |
 | `servers/<host>[_<port>]/keys.json` | the signing keys made here: their public keys and credential ids |
-| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked and the highest serial it signed |
+| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked and the newest it signed |
 
 A company is kept under its own id (the hash of its first admin list), not under the id a server gives it: a
 server that lists it again under a new id meets the chain held. Commands find a company by the name it had when it

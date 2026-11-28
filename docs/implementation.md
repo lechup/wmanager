@@ -151,7 +151,9 @@ Short trials of what could overturn the design, each on a branch of its own. The
     (read only by its own work), and checks each state against the chain; `wmanager-sign sign` shows a draft as
     the difference from the last state it verified (text files line by line, Myers' diff), asks for the start of
     each new computer's id and the values of new secrets, and makes the serial; states signed by others are
-    checked and shown as they arrive;
+    checked and shown as they arrive. The difference is from the newer of the state verified and the one signed
+    here, and a computer's report of a newer state stops signing (the review found that a server hiding a newer
+    state could otherwise have it undone unseen); a file that isn't text comes only with `add-file`;
   - jobs and stops, `add-file`, and changing a secret's value;
   - the head of the audit log it saw last;
   - its messages in the ten languages;
@@ -198,7 +200,9 @@ Short trials of what could overturn the design, each on a branch of its own. The
 - the release: a reproducible build (`-trimpath`, a fixed date), the signed `SHA256SUMS` and exe files, and the
   server's image;
 - the agent updating itself and the payload, the check on the computer, and going back;
-- `wmanager-sign` updating itself, and a new release key, named by a release signed with the old one.
+- `wmanager-sign` updating itself, and a new release key, named by a release signed with the old one;
+- `wmanager-sign` checking a state's release certificate and wmanager's version against the signed releases (until
+  then it shows their hashes and says they aren't checked).
 
 ### Stage 7: without the serverless mode
 

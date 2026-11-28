@@ -61,11 +61,11 @@ func member(ctx context.Context, tx pgx.Tx, accountID, companyID string, admin b
 	return nil
 }
 
-// Draft is a change waiting for wmanager-sign.
+// Draft is a change waiting for wmanager-sign. Drafts lists them without their bodies, which DraftBody gives.
 type Draft struct {
 	ID        string    `json:"id"`
 	Type      string    `json:"type"`
-	Body      []byte    `json:"body"` // the exact JSON the panel made
+	Body      []byte    `json:"body,omitzero"` // the exact JSON the panel made
 	CreatedBy string    `json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -97,14 +97,32 @@ func SaveDraft(ctx context.Context, s *store.Store, accountID, companyID, typ st
 	return id, err
 }
 
-// Drafts is the company's waiting drafts, oldest first, for one of its administrators.
+// DraftBody is a waiting draft whole, for one of the company's administrators.
+func DraftBody(ctx context.Context, s *store.Store, accountID, companyID, id string) (Draft, error) {
+	var d Draft
+	err := s.Tx(ctx, store.Who{Account: accountID}, func(tx pgx.Tx) error {
+		if err := member(ctx, tx, accountID, companyID, true); err != nil {
+			return err
+		}
+		err := tx.QueryRow(ctx, `SELECT d.id, d.type, d.body, coalesce(a.email, ''), d.created_at FROM drafts d
+		                         LEFT JOIN accounts a ON a.id = d.created_by WHERE d.company_id = $1 AND d.id = $2`,
+			companyID, id).Scan(&d.ID, &d.Type, &d.Body, &d.CreatedBy, &d.CreatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoDraft
+		}
+		return err
+	})
+	return d, err
+}
+
+// Drafts is the company's waiting drafts, oldest first, without their bodies, for one of its administrators.
 func Drafts(ctx context.Context, s *store.Store, accountID, companyID string) ([]Draft, error) {
 	var out []Draft
 	err := s.Tx(ctx, store.Who{Account: accountID}, func(tx pgx.Tx) error {
 		if err := member(ctx, tx, accountID, companyID, true); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT d.id, d.type, d.body, coalesce(a.email, ''), d.created_at FROM drafts d
+		rows, err := tx.Query(ctx, `SELECT d.id, d.type, coalesce(a.email, ''), d.created_at FROM drafts d
 		                            LEFT JOIN accounts a ON a.id = d.created_by
 		                            WHERE d.company_id = $1 ORDER BY d.created_at, d.id`, companyID)
 		if err != nil {
@@ -112,7 +130,7 @@ func Drafts(ctx context.Context, s *store.Store, accountID, companyID string) ([
 		}
 		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (Draft, error) {
 			var d Draft
-			return d, r.Scan(&d.ID, &d.Type, &d.Body, &d.CreatedBy, &d.CreatedAt)
+			return d, r.Scan(&d.ID, &d.Type, &d.CreatedBy, &d.CreatedAt)
 		})
 		return err
 	})

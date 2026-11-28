@@ -46,67 +46,128 @@ func parseState(s *verify.Signed) *verify.State {
 	return st
 }
 
-// loadState brings the state held up to the server's newest: a newer one is checked as a computer will (a key of
-// the newest admin list, a higher serial), its changes are shown in short, and it is kept. Another state with the
-// serial held is an alarm; an older one means the server is behind.
-func (a *App) loadState(ctx context.Context, s *session, c api.Company, h *home.Company, ch *verify.Chain) (*verify.State, int64, error) {
+// base is what the next state is built on and shown against: the newer of the state verified here and the one
+// signed here (which the server may not show, or may have refused), and the serials known.
+type base struct {
+	signed   *verify.Signed
+	st       *verify.State
+	known    int64 // the base's serial, or a newer one a key removed since signed
+	reported int64 // the highest serial the computers report, through the server
+}
+
+func baseOf(h *home.Company, reported int64) *base {
+	signed := home.Newer(h.State, h.Mine)
+	return &base{signed: signed, st: parseState(signed), known: home.Serial(signed), reported: reported}
+}
+
+// formerSigner is the name an earlier admin list of the chain gives the key that signed a statement, when its
+// signature checks with that key; "" otherwise.
+func formerSigner(ch *verify.Chain, s verify.Signed) string {
+	for i := len(ch.Lists) - 1; i >= 0; i-- {
+		for _, ad := range ch.Lists[i].Administrators {
+			for _, k := range ad.Keys {
+				if k.ID != s.Key {
+					continue
+				}
+				pk, err := k.PublicKey()
+				if err == nil && verify.CheckAssertion(s.Hash(), verify.Assertion{AuthenticatorData: s.AuthenticatorData,
+					ClientDataJSON: s.ClientDataJSON, Signature: s.Signature}, pk) == nil {
+					return ad.Name
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// loadState brings what is known of the company's state up to the server's newest: a newer one signed by a key of
+// the newest admin list is shown in short and kept. One signed by a key removed since isn't taken (the computers
+// refuse it), but its serial is counted; one that doesn't check is only said. Another state with the serial held
+// is an alarm. A server that is behind gets the newest state known here, when the account may give it.
+func (a *App) loadState(ctx context.Context, s *session, c api.Company, h *home.Company, ch *verify.Chain) (*base, error) {
 	srv, reported, err := s.client.State(ctx, c.ID)
 	if err != nil {
-		return nil, 0, a.apiErr(s, err)
+		return nil, a.apiErr(s, err)
 	}
-	held := parseState(h.State)
+	cur := baseOf(h, reported)
 	name := show.Visible(h.Name)
-	switch {
-	case srv == nil && held == nil:
-		return nil, reported, nil
-	case srv == nil:
-		a.say("state.behind", name, 0, held.Serial)
-		return held, reported, nil
+	if srv == nil {
+		if cur.st != nil {
+			a.say("state.behind", name, 0, cur.known)
+			a.pushState(ctx, s, c, cur)
+		}
+		return cur, nil
 	}
 	got := parseState(srv)
-	switch {
-	case got == nil:
-		return held, reported, a.fail("state.bad", name, "not a state")
-	case held != nil && got.Serial == held.Serial:
-		if !bytes.Equal(srv.Statement, h.State.Statement) {
-			return held, reported, a.failAs(verify.ErrForkedChain, "state.forked", name, held.Serial)
+	if got == nil || got.Company != ch.CompanyID() {
+		a.say("state.bad", name, a.t("state.notours"))
+		return cur, nil
+	}
+	if _, err := ch.VerifyState(*srv, 0); err != nil {
+		if signer := formerSigner(ch, *srv); signer != "" {
+			a.say("state.oldkey", name, got.Serial, show.Visible(signer))
+			if got.Serial > cur.known && got.Serial <= cur.known+MaxSerialJump {
+				cur.known = got.Serial
+			}
+		} else {
+			a.say("state.bad", name, err.Error())
 		}
-		return held, reported, nil
-	case held != nil && got.Serial < held.Serial:
-		a.say("state.behind", name, got.Serial, held.Serial)
-		return held, reported, nil
+		return cur, nil
 	}
-	var last int64
-	if held != nil {
-		last = held.Serial
-	}
-	st, err := ch.VerifyState(*srv, last)
-	if err != nil {
-		return held, reported, a.fail("state.bad", name, err.Error())
-	}
-	a.say("state.new", st.Serial, show.Visible(ch.AdminKeys()[srv.Key].Name), st.SignedAt.Local().Format("2006-01-02 15:04"))
-	lines, _ := a.describeState(ctx, s, c, held, st, false)
-	for _, l := range lines {
-		a.say("line", l)
+	switch {
+	case cur.st != nil && got.Serial == cur.st.Serial && !bytes.Equal(srv.Statement, cur.signed.Statement):
+		if cur.signed != h.Mine || !h.MineRefused {
+			return nil, a.failAs(verify.ErrForkedChain, "state.forked", name, got.Serial)
+		}
+		// The server refused the state signed here, and has another administrator's with its serial.
+		a.say("state.minereplaced", name, got.Serial)
+		h.DropMine()
+	case cur.st != nil && got.Serial == cur.st.Serial:
+		if h.State == nil || !bytes.Equal(h.State.Statement, srv.Statement) {
+			h.State, h.MineRefused = srv, false // the server has the state signed here
+			if err := a.Home.SetCompany(h, ch); err != nil {
+				return nil, err
+			}
+		}
+		return cur, nil
+	case cur.st != nil && got.Serial < cur.st.Serial:
+		a.say("state.behind", name, got.Serial, cur.st.Serial)
+		a.pushState(ctx, s, c, cur)
+		return cur, nil
+	default:
+		a.say("state.new", got.Serial, show.Visible(ch.AdminKeys()[srv.Key].Name), got.SignedAt.Local().Format("2006-01-02 15:04"))
+		lines, _ := a.describeState(ctx, s, c, h, cur.st, got, false)
+		for _, l := range lines {
+			a.say("line", l)
+		}
 	}
 	h.State = srv
 	if err := a.Home.SetCompany(h, ch); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return st, reported, nil
+	return baseOf(h, reported), nil
 }
 
-// nextSerial is one more than the highest serial known: the state held, the highest signed here, and the
-// computers' reports, which may not take it more than MaxSerialJump above the other two.
-func (a *App) nextSerial(h *home.Company, held *verify.State, reported int64) (int64, error) {
-	known := h.Signed
-	if held != nil {
-		known = max(known, held.Serial)
+// pushState gives a server that is behind the newest state known here; a server that refuses it (it may lack a
+// secret's value) is only said.
+func (a *App) pushState(ctx context.Context, s *session, c api.Company, b *base) {
+	if c.Role != "admin" || b.signed == nil {
+		return
 	}
-	if reported > known+MaxSerialJump {
-		return 0, a.fail("err.serialjump", reported, known)
+	if _, err := s.client.SubmitState(ctx, c.ID, *b.signed, "", nil); err != nil {
+		a.say("state.pushfailed", err.Error())
+		return
 	}
-	return max(known, reported) + 1, nil
+	a.say("state.pushed", b.known)
+}
+
+// nextSerial is one more than the highest serial known. A computer reporting a newer state than any known here is
+// a state the server doesn't show: the next one can't be shown against what the computers have, so it isn't signed.
+func (a *App) nextSerial(b *base) (int64, error) {
+	if b.reported > b.known {
+		return 0, a.fail("err.reportednewer", b.reported, b.known)
+	}
+	return b.known + 1, nil
 }
 
 func isText(b []byte) bool { return utf8.Valid(b) && !bytes.ContainsRune(b, 0) }
@@ -115,7 +176,7 @@ func isText(b []byte) bool { return utf8.Valid(b) && !bytes.ContainsRune(b, 0) }
 // every new or changed file is shown: a text file whole when new and as its changed lines otherwise, its content
 // fetched from the server and checked against its hash; without, only which files change. It is false when a
 // file couldn't be shown: such a state isn't signed.
-func (a *App) describeState(ctx context.Context, s *session, c api.Company, old, next *verify.State, full bool) ([]string, bool) {
+func (a *App) describeState(ctx context.Context, s *session, c api.Company, h *home.Company, old, next *verify.State, full bool) ([]string, bool) {
 	var out []string
 	shown := true
 	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
@@ -126,8 +187,10 @@ func (a *App) describeState(ctx context.Context, s *session, c api.Company, old,
 	if old.Server != next.Server {
 		add("%s", a.t("state.server", show.Visible(next.Server)))
 	}
+	unchecked := false
 	if old.Release != next.Release {
 		add("%s", a.t("state.release", next.Release))
+		unchecked = true
 	}
 	if old.Version.Name != next.Version.Name || !maps.Equal(old.Version.Files, next.Version.Files) {
 		if old.Version.Name == "" {
@@ -135,9 +198,13 @@ func (a *App) describeState(ctx context.Context, s *session, c api.Company, old,
 		} else {
 			add("%s", a.t("state.version", show.Visible(old.Version.Name), show.Visible(next.Version.Name)))
 		}
-		for _, l := range pathChanges(old.Version.Files, next.Version.Files) {
+		for _, l := range pathChanges(old.Version.Files, next.Version.Files, full) {
 			add("    %s", l)
 		}
+		unchecked = true
+	}
+	if unchecked && full {
+		add("%s", a.t("state.unchecked"))
 	}
 
 	// Computers, by id.
@@ -175,8 +242,8 @@ func (a *App) describeState(ctx context.Context, s *session, c api.Company, old,
 	paths := slices.Sorted(maps.Keys(next.Files))
 	var files []string
 	for _, p := range paths {
-		h, before := next.Files[p], old.Files[p]
-		if h == before {
+		hash, before := next.Files[p], old.Files[p]
+		if hash == before {
 			continue
 		}
 		mark := "~"
@@ -187,7 +254,7 @@ func (a *App) describeState(ctx context.Context, s *session, c api.Company, old,
 			files = append(files, mark+" "+show.Visible(p))
 			continue
 		}
-		lines, ok := a.fileLines(ctx, s, c, mark, p, before, h)
+		lines, ok := a.fileLines(ctx, s, c, mark, p, before, hash)
 		files, shown = append(files, lines...), shown && ok
 	}
 	for _, p := range slices.Sorted(maps.Keys(old.Files)) {
@@ -230,15 +297,22 @@ func (a *App) describeState(ctx context.Context, s *session, c api.Company, old,
 	return out, shown
 }
 
-func pathChanges(old, next map[string]string) []string {
+// pathChanges is what changes among files known by their hashes; with hashes, each new hash is shown too.
+func pathChanges(old, next map[string]string, hashes bool) []string {
 	var out []string
+	with := func(p, h string) string {
+		if hashes {
+			return show.Visible(p) + " " + h
+		}
+		return show.Visible(p)
+	}
 	for _, p := range slices.Sorted(maps.Keys(next)) {
 		switch old[p] {
 		case next[p]:
 		case "":
-			out = append(out, "+ "+show.Visible(p))
+			out = append(out, "+ "+with(p, next[p]))
 		default:
-			out = append(out, "~ "+show.Visible(p))
+			out = append(out, "~ "+with(p, next[p]))
 		}
 	}
 	for _, p := range slices.Sorted(maps.Keys(old)) {
@@ -258,7 +332,8 @@ func (a *App) fileLines(ctx context.Context, s *session, c api.Company, mark, pa
 		return []string{head, "    " + a.t("state.nofile", err.Error())}, false
 	}
 	if !isText(content) {
-		return []string{head + " " + a.t("state.binary", len(content))}, true
+		// A file that isn't text can't be shown: one comes only with add-file, from the administrator's own disk.
+		return []string{head + " " + a.t("state.binary", len(content))}, false
 	}
 	newLines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
 	if before == "" {
@@ -318,7 +393,7 @@ func (a *App) signDraft(ctx context.Context, which string) error {
 	if c.Role != "admin" {
 		return a.fail("err.notadmin", show.Visible(h.Name))
 	}
-	held, reported, err := a.loadState(ctx, s, c, h, ch)
+	b, err := a.loadState(ctx, s, c, h, ch)
 	if err != nil {
 		return err
 	}
@@ -337,10 +412,16 @@ func (a *App) signDraft(ctx context.Context, which string) error {
 	if err != nil {
 		return err
 	}
-	d := ds[n]
+	d, err := s.client.Draft(ctx, c.ID, ds[n].ID)
+	if err != nil {
+		return a.apiErr(s, err)
+	}
+	if d.ID != ds[n].ID || d.Type != ds[n].Type {
+		return a.fail("err.baddraft", "not the draft chosen")
+	}
 	switch d.Type {
 	case verify.TypeState:
-		return a.signState(ctx, s, c, h, ch, held, reported, d)
+		return a.signState(ctx, s, c, h, ch, b, d)
 	}
 	return a.fail("err.drafttype", show.Visible(d.Type))
 }
@@ -348,12 +429,13 @@ func (a *App) signDraft(ctx context.Context, which string) error {
 // signState builds the next state from a draft, shows what it changes from the state held, asks for what only the
 // administrator can give (the start of each new computer's id, the values of new secrets), and signs it.
 func (a *App) signState(ctx context.Context, s *session, c api.Company, h *home.Company, ch *verify.Chain,
-	held *verify.State, reported int64, d api.Draft) error {
+	b *base, d api.Draft) error {
 	var dr stateDraft
 	if err := json.Unmarshal(d.Body, &dr, json.RejectUnknownMembers(true)); err != nil {
 		return a.fail("err.baddraft", show.Clip(err.Error(), 200))
 	}
-	serial, err := a.nextSerial(h, held, reported)
+	held := b.st
+	serial, err := a.nextSerial(b)
 	if err != nil {
 		return err
 	}
@@ -373,7 +455,12 @@ func (a *App) signState(ctx context.Context, s *session, c api.Company, h *home.
 		next.Version.Files = map[string]string{}
 	}
 	var typed []string
+	seen := map[string]bool{}
 	for _, n := range dr.Secrets {
+		if seen[n] {
+			return a.fail("err.badstate", "a secret named twice")
+		}
+		seen[n] = true
 		if held != nil && held.Secrets[n] != "" {
 			next.Secrets[n] = held.Secrets[n]
 		} else {
@@ -393,7 +480,7 @@ func (a *App) signState(ctx context.Context, s *session, c api.Company, h *home.
 	}
 
 	a.say("state.next", serial, show.Visible(h.Name), verify.Fingerprint(ch.Company))
-	lines, shown := a.describeState(ctx, s, c, held, &next, true)
+	lines, shown := a.describeState(ctx, s, c, h, held, &next, true)
 	for _, l := range lines {
 		a.say("line", l)
 	}
@@ -466,21 +553,28 @@ func (a *App) signState(ctx context.Context, s *session, c api.Company, h *home.
 	if err != nil {
 		return err
 	}
-	var last int64
-	if held != nil {
-		last = held.Serial
-	}
-	if _, err := ch.VerifyState(signed, last); err != nil {
+	return a.submitState(ctx, s, c, h, ch, b, signed, d.ID, secrets)
+}
+
+// submitState keeps a state signed here as the base of the next one, before the server has it (the server may
+// keep it and answer otherwise), then gives it to the server.
+func (a *App) submitState(ctx context.Context, s *session, c api.Company, h *home.Company, ch *verify.Chain, b *base,
+	signed verify.Signed, draft string, secrets []api.Secret) error {
+	st, err := ch.VerifyState(signed, b.known)
+	if err != nil {
 		return err
 	}
-	// The serial counts as used once signed, whether or not the server takes the state.
-	h.Signed = max(h.Signed, serial)
+	h.Mine, h.MineRefused = &signed, false
 	if err := a.Home.SetCompany(h, ch); err != nil {
 		return err
 	}
-	if _, err := s.client.SubmitState(ctx, c.ID, signed, d.ID, secrets); err != nil {
-		if api.Status(err) == http.StatusConflict {
-			return a.fail("err.statetaken", err.Error())
+	if _, err := s.client.SubmitState(ctx, c.ID, signed, draft, secrets); err != nil {
+		if st := api.Status(err); st >= 400 && st < 500 && st != http.StatusUnauthorized {
+			h.MineRefused = true
+			if serr := a.Home.SetCompany(h, ch); serr != nil {
+				return serr
+			}
+			return a.fail("err.nottaken", err.Error())
 		}
 		return a.apiErr(s, err)
 	}
@@ -488,6 +582,6 @@ func (a *App) signState(ctx context.Context, s *session, c api.Company, h *home.
 	if err := a.Home.SetCompany(h, ch); err != nil {
 		return err
 	}
-	a.say("state.signed", serial, show.Visible(h.Name))
+	a.say("state.signed", st.Serial, show.Visible(h.Name))
 	return nil
 }

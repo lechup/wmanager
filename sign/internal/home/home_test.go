@@ -1,6 +1,7 @@
 package home
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -148,5 +149,60 @@ func TestToken(t *testing.T) {
 	s.ForgetToken()
 	if tok, _ := s.Token(now); tok != nil {
 		t.Fatal("a forgotten token")
+	}
+}
+
+func signedState(t *testing.T, k *softkey.Key, company string, serial int64, name string) *verify.Signed {
+	t.Helper()
+	raw, _ := verify.Marshal(verify.State{Format: 1, Type: "state", SignedAt: time.Now().UTC().Truncate(time.Second),
+		Company: company, Serial: serial, Server: "https://wm.example.com", Release: strings.Repeat("ab", 32),
+		Computers: []verify.Computer{}, Files: map[string]string{"a": strings.Repeat("cd", 32)},
+		Version: verify.Version{Name: name, Files: map[string]string{}}, Secrets: map[string]string{}})
+	s, err := k.SignStatement(raw, softkey.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &s
+}
+
+// The states held only move forward; one with the same serial doesn't replace the one held.
+func TestStatesOnlyMoveForward(t *testing.T) {
+	h := &Home{Dir: t.TempDir()}
+	all := lists(t, 1)
+	ch, _ := verify.VerifyChain(verify.Fingerprint(all[0].Hash()), all)
+	k, _ := softkey.New(verify.ES256)
+	id := ch.CompanyID()
+	s1, s2, s2b := signedState(t, k, id, 1, "v1"), signedState(t, k, id, 2, "v2"), signedState(t, k, id, 2, "v2b")
+	get := func() *Company {
+		c, _, err := h.Company(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	c := &Company{Name: "Acme", State: s2, Mine: s2}
+	if err := h.SetCompany(c, ch); err != nil {
+		t.Fatal(err)
+	}
+	for _, next := range []*Company{{State: s1}, {State: s2b}, {Mine: s1}, {Mine: s2b}, {}} {
+		if err := h.SetCompany(next, ch); err != nil {
+			t.Fatal(err)
+		}
+		if got := get(); !bytes.Equal(got.State.Statement, s2.Statement) || !bytes.Equal(got.Mine.Statement, s2.Statement) || got.Name != "Acme" {
+			t.Fatalf("after %+v: state %d, mine %d, name %q", next, Serial(got.State), Serial(got.Mine), got.Name)
+		}
+	}
+	// The same state, refused: the flag is kept; a state dropped is forgotten.
+	held := get()
+	held.MineRefused = true
+	h.SetCompany(held, ch)
+	if !get().MineRefused {
+		t.Fatal("the refusal wasn't kept")
+	}
+	held = get()
+	held.DropMine()
+	h.SetCompany(held, ch)
+	if got := get(); got.Mine != nil || got.MineRefused || got.State == nil {
+		t.Fatalf("after DropMine: %+v", got)
 	}
 }

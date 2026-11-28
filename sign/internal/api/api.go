@@ -309,3 +309,10 @@ func (c *Client) SubmitState(ctx context.Context, company string, signed verify.
 		map[string]any{"signed": signed, "draft": draft, "secrets": secrets}, &r)
 	return r.Serial, err
 }
+
+// Draft is one waiting draft, whole.
+func (c *Client) Draft(ctx context.Context, company, id string) (Draft, error) {
+	var d Draft
+	err := c.do(ctx, http.MethodGet, companyPath(company, "drafts/"+url.PathEscape(id)), nil, &d)
+	return d, err
+}

@@ -101,7 +101,7 @@ func (a *App) status(ctx context.Context) error {
 			a.say("status.error", name, err.Error())
 		case held != nil:
 			a.say("status.held", show.Visible(held.Name), role, verify.Fingerprint(ch.Company), ch.Current().Sequence)
-			st, _, err := a.loadState(ctx, s, c, held, ch)
+			b, err := a.loadState(ctx, s, c, held, ch)
 			if errors.Is(err, verify.ErrForkedChain) {
 				return err
 			}
@@ -109,9 +109,9 @@ func (a *App) status(ctx context.Context) error {
 				a.say("status.error", show.Visible(held.Name), err.Error())
 				continue
 			}
-			var serial int64
-			if st != nil {
-				serial = st.Serial
+			serial := b.known
+			if b.reported > b.known {
+				a.say("status.reported", b.reported)
 			}
 			waiting := 0
 			if c.Role == "admin" {

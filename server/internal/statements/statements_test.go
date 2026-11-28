@@ -119,8 +119,17 @@ func TestDrafts(t *testing.T) {
 		}
 	}
 	ds, err := Drafts(ctx, e.s, e.admin, e.company)
-	if err != nil || len(ds) != 1 || ds[0].ID != id || string(ds[0].Body) != `{"files": {}}` || ds[0].CreatedBy != "admin@example.com" {
+	if err != nil || len(ds) != 1 || ds[0].ID != id || ds[0].Body != nil || ds[0].CreatedBy != "admin@example.com" {
 		t.Fatalf("Drafts: %+v %v", ds, err)
+	}
+	if d, err := DraftBody(ctx, e.s, e.admin, e.company, id); err != nil || string(d.Body) != `{"files": {}}` || d.Type != "state" {
+		t.Fatalf("DraftBody: %+v %v", d, err)
+	}
+	if _, err := DraftBody(ctx, e.s, e.person, e.company, id); !errors.Is(err, ErrNotAdmin) {
+		t.Fatalf("a person's DraftBody: %v", err)
+	}
+	if _, err := DraftBody(ctx, e.s, e.outside, e.other, id); !errors.Is(err, ErrNoDraft) {
+		t.Fatalf("another company's draft by id: %v", err)
 	}
 	if _, err := Drafts(ctx, e.s, e.outside, e.company); !errors.Is(err, ErrNotMember) {
 		t.Fatalf("another company's drafts: %v", err)
@@ -174,6 +183,13 @@ func TestStates(t *testing.T) {
 		"a person":          {e.state(e.key, 1, server, files, nil), e.person, "", nil, ErrNotAdmin},
 		"another's company": {e.state(e.key, 1, server, files, nil), e.outside, "", nil, ErrNotMember},
 		"no such draft":     {e.state(e.key, 1, server, files, nil), e.admin, "00000000-0000-4000-8000-000000000000", nil, ErrNoDraft},
+		"another company's id": {func() verify.Signed {
+			st, _ := verify.ParseState(e.state(e.key, 1, server, files, nil).Statement)
+			st.Company = strings.Repeat("ab", 32)
+			raw, _ := verify.Marshal(st)
+			s, _ := e.key.SignStatement(raw, softkey.Options{})
+			return s
+		}(), e.admin, "", nil, verify.ErrStatement},
 	} {
 		if _, err := SubmitState(ctx, e.s, server, c.account, e.company, c.signed, c.draft, c.secrets); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)

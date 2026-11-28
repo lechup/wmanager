@@ -1083,8 +1083,15 @@ func TestStatesAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if code, out := e.api("GET", "companies/"+acme+"/drafts", tok, nil); code != http.StatusOK || !strings.Contains(string(out), draft) {
+	if code, out := e.api("GET", "companies/"+acme+"/drafts", tok, nil); code != http.StatusOK || !strings.Contains(string(out), draft) ||
+		strings.Contains(string(out), `"body"`) {
 		t.Fatalf("drafts: %d %s", code, out)
+	}
+	if code, out := e.api("GET", "companies/"+acme+"/drafts/"+draft, tok, nil); code != http.StatusOK || !strings.Contains(string(out), `"body"`) {
+		t.Fatalf("a draft: %d %s", code, out)
+	}
+	if code, _ := e.api("GET", "companies/"+acme+"/drafts/x", tok, nil); code != http.StatusNotFound {
+		t.Fatalf("a draft id that isn't one: %d", code)
 	}
 	var f struct {
 		Content []byte `json:"content"`

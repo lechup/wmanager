@@ -59,6 +59,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/keys", a.authed(a.company(a.companyKeys)))
 	mux.HandleFunc("POST "+Prefix+"keys", a.authed(a.registerKey))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/drafts", a.authed(a.company(a.drafts)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/drafts/{draft}", a.authed(a.company(a.draft)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/files/{hash}", a.authed(a.company(a.file)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/state", a.authed(a.company(a.state)))
 	mux.HandleFunc(statesRoute, a.authed(a.company(a.submitState)))
@@ -328,6 +329,20 @@ func (a *API) drafts(w http.ResponseWriter, r *http.Request, account string) {
 	out(w, http.StatusOK, struct {
 		Drafts []statements.Draft `json:"drafts"`
 	}{ds})
+}
+
+// draft is one waiting draft, whole.
+func (a *API) draft(w http.ResponseWriter, r *http.Request, account string) {
+	if !uuidRe.MatchString(r.PathValue("draft")) {
+		a.failErr(w, r, statements.ErrNoDraft)
+		return
+	}
+	d, err := statements.DraftBody(r.Context(), a.Store, account, r.PathValue("company"), r.PathValue("draft"))
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	out(w, http.StatusOK, d)
 }
 
 var hashRe = regexp.MustCompile(`^[0-9a-f]{64}$`)

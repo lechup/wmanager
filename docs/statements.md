@@ -89,10 +89,13 @@ What the panel prepares (stage 4a) and `wmanager-sign sign` reads, strictly (an 
 ```
 
 `wmanager-sign` sets the rest: the format, type, time and company; the serial, one more than the highest it knows
-(the state it holds, the highest it signed, and the computers' reports, which may raise it by at most 1000); the
+(the newest state it verified and the newest it signed; it signs nothing when the computers report a newer one); the
 server, the one it is connected to; and each secret's hash, kept from the state it holds or made from a value
-typed now. It shows every change from the state it holds, fetching each new or changed file by its hash and
-checking it, and asks for the first 8 characters of each new computer's id.
+typed now. It shows every change from the newer of the state it verified and the one it signed: each new or
+changed file fetched by its hash and checked (a file that isn't text can't be shown, so it comes only with
+`add-file`), each new hash of wmanager's version, and the release certificate's. It asks for the first 8
+characters of each new computer's id. Until stage 6 it doesn't check the release and the version against the signed
+releases, and says so.
 
 ## job
 

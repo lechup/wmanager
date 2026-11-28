@@ -209,3 +209,12 @@ func (s *Server) Drafts(account, company string) int {
 	}
 	return len(ds)
 }
+
+// ClearDrafts removes every draft of the company.
+func (s *Server) ClearDrafts(company string) {
+	s.t.Helper()
+	c := storetest.Superuser(s.t, s.Store)
+	if _, err := c.Exec(context.Background(), `DELETE FROM drafts WHERE company_id = $1`, company); err != nil {
+		s.t.Fatal(err)
+	}
+}

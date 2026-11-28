@@ -199,10 +199,13 @@ holds a random 128-bit value instead, which makes each company's id unique.
 Their JSON form is in [Statements](statements.md).
 
 `wmanager-sign` makes the serial numbers and job ids, not the server. A new state's serial is one more than the
-highest it knows of: the highest it has signed itself, the newest state it has verified, and the highest the
-computers report. So a server restored from an older backup, or a state another administrator signed, doesn't make
-the computers refuse the next one. (The computers' reports come through the server: a lie there can only make a
-serial higher.)
+highest it knows of: the newest state it has verified, and the newest it has signed itself, which it keeps and shows
+the next one against even when the server doesn't show it. So a server restored from an older backup, or one that
+hides a state signed here, doesn't make the computers refuse the next one, nor have it undo the hidden one unseen.
+The computers report the serial they have, through the server; when that is higher than any state `wmanager-sign`
+knows, it signs no state, since it can't show what changes from what the computers have (the administrator who
+signed that state gives it to the server again). A state signed by a key removed since isn't shown against, but the
+next serial passes it.
 
 `wmanager-sign` signs only when its clock is within 10 minutes of the server's. A hacked server can use that only to
 stop signing, and a wrong clock on the administrator's computer can't stamp a statement far in the future.
@@ -359,6 +362,10 @@ What remains:
   `wmanager-sign` signs. It can also
   ask the key for a signature itself, through Windows' WebAuthn API or libfido2 (where the PIN passes through the
   computer). It still needs a touch. Keep that computer clean.
+- **Another administrator's newest state, hidden.** A server that hides from one administrator a state another one
+  signed, and lies about the serial the computers report, can have them sign the next state against an older one:
+  what the hidden state changed, the next undoes, unseen. Administrators who sign for the same company should know
+  of each other's changes.
 - **A leaked key together with a hacked server** is a takeover, because the server can withhold the list that removes
   the key. A leaked key of a person who is not an administrator, with a hacked server, is a takeover of that person's
   units, for the same reason: the server can withhold the state that takes the rights away.
