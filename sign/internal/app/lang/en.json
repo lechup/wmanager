@@ -89,6 +89,7 @@
  "state.behind": "The server's newest state of %s is %d, you hold %d: it is behind (a backup restored?). Yours stays.",
  "state.binary": "(not text, %d bytes): it can't be shown, so it isn't signed. Such files come only with wmanager-sign add-file, from your own disk.",
  "state.computers": "Computers:",
+ "state.farabove": "its serial %d, signed by %s, whose key was removed since, is far above any known here, and isn't counted",
  "state.files": "Files:",
  "state.first": "The first state: everything in it is new.",
  "state.forked": "ALARM: the server now shows another state of %s with the serial %d than the one it handed out before. The server may be hacked; nothing was signed.",

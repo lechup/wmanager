@@ -115,7 +115,7 @@ func (a *App) status(ctx context.Context) error {
 				a.say("status.error", show.Visible(held.Name), err.Error())
 				continue
 			}
-			serial := b.known
+			serial := home.Serial(b.signed)
 			if b.reported > b.known {
 				a.say("status.reported", b.reported)
 			}

@@ -43,8 +43,9 @@ party id no web page can claim.
 - **States** are signed in `wmanager-sign` from drafts the panel keeps (made from stage 4a), with the files they
   name kept by their hash and the secrets' values given with them; the server checks each against the company's
   chain and the newest state before it keeps it. The secrets' values are read only by the server's own work, never
-  on behalf of a member. It needs `WMANAGER_PUBLIC_URL`: a state names the server, and one naming another is
-  refused.
+  on behalf of a member. An administrator's `wmanager-sign` may ask which values the server has (their names and
+  hashes, not the values or salts), to have a lacking one typed again. It needs `WMANAGER_PUBLIC_URL`: a state
+  names the server, and one naming another is refused.
 - **Signing keys** are registered from `wmanager-sign`, each with a proof signed by the key that its holder
   registers it for this account on this server (at most 20 an account; it needs `WMANAGER_PUBLIC_URL`). A key counts only once an administrator adds it to a
   signed admin list, after typing its fingerprint.

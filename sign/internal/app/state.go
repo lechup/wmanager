@@ -130,7 +130,10 @@ func (a *App) loadState(ctx context.Context, s *session, c api.Company, h *home.
 			a.say("state.bad", name, err.Error())
 			return cur, nil
 		}
-		if got.Serial >= cur.known && got.Serial <= cur.known+MaxSerialJump {
+		switch {
+		case got.Serial > cur.known+MaxSerialJump:
+			a.say("state.bad", name, a.t("state.farabove", got.Serial, show.Visible(signer)))
+		case got.Serial >= cur.known:
 			a.say("state.oldkey", name, got.Serial, show.Visible(signer))
 			h.Former = srv
 			if err := a.Home.SetCompany(h, ch); err != nil {
