@@ -178,7 +178,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - enrollment with a token, the fingerprint typed at the computer, and the first 8 characters of the id shown;
   - long polling and the time of last contact, with Grafana's panel of computers that are off and its alert, read
     from PostgreSQL.
-- **3b, the installer:** the installer from the panel, tagged with the company's whole admin chain,
+- **3b, the installer:** first, trial 2 again on Windows with the tag's 2.25 OID (Windows' CryptoAPI and a
+  128-bit arc); then the installer from the panel, tagged with the company's whole admin chain,
   `wmanager-sign check-installer`, and the list of computers.
 
 ### Stage 4: the company's state
@@ -207,7 +208,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
 ### Stage 6: updates
 
 - the release: a reproducible build (`-trimpath`, a fixed date), the signed `SHA256SUMS` and exe files, and the
-  server's image;
+  server's image; the exe files signed with whichever the one who builds it has: a signing service (e.g. Azure
+  Trusted Signing), a bought OV or EV certificate on its token, or a self-signed certificate;
 - the agent updating itself and the payload, the check on the computer, and going back;
 - `wmanager-sign` updating itself, and a new release key, named by a release signed with the old one;
 - `wmanager-sign` checking a state's release certificate and wmanager's version against the signed releases (until
@@ -231,6 +233,7 @@ option is the proposal.
 | Decision | Before | Options |
 | --- | --- | --- |
 | How `wmanager-sign` signs in to the server | 2b | decided: a code from the panel typed into `wmanager-sign` (it also works over SSH on another machine) |
-| How the agent proves itself to the server | 3a | every request signed with the computer's key in the TPM / TLS with a client certificate of that key, which Caddy would have to pass through |
-| The TPM library | 3a | the one trial 3 shows to work |
+| How the agent proves itself to the server | 3a | decided (2026-11-28): every request signed with the computer's key in the TPM; Caddy stays as it is |
+| The TPM library | 3a | decided by trial 3: NCrypt's Platform Crypto Provider (`internal/tpmkey`), which works as SYSTEM |
+| The installer tag's OID | 3b | decided (2026-11-28): `2.25.158821274951320701755001128286401276726`, from a UUID, which needs no registration; the tag certificate is written by hand, since Go's `crypto/x509` can't hold its 128-bit arc |
 | What the payload reads | 4b | today's `manifest.psd1` and `groups.psd1`, written by the agent / a new JSON format, with the PowerShell code changed to read it |

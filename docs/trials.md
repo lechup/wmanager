@@ -51,7 +51,9 @@ of `certtag`, which re-encoded the signature with `encoding/asn1` as Omaha does,
 SET OF, so about half of all two-certificate chains were refused. It now keeps the signature's bytes and only
 replaces its certificates, in their order. A fuzz test (`FuzzGetSet`) finds no input that crashes it.
 
-**On Windows** (2026-11-28; Windows 11 Pro build 26300, a virtual machine with a TPM 2.0 from swtpm;
+**On Windows** (2026-11-28, before the tag moved to its OID of 2.25 from a UUID, with a certificate written by
+`crypto/x509` under the example number 32473; to be done again with the 2.25 OID and the hand-written certificate
+before stage 3b relies on it; Windows 11 Pro build 26300, a virtual machine with a TPM 2.0 from swtpm;
 `trials/vm/stage0.ps1`): a Go exe signed with Authenticode by a self-signed certificate trusted on that machine.
 
 | File | Signature, padding check off | Signature, `EnableCertPaddingCheck` on |
@@ -65,9 +67,9 @@ replaces its certificates, in their order. A fuzz test (`FuzzGetSet`) finds no i
 - The tagged exe reads its own tag.
 - **SmartScreen:** an exe marked as downloaded from the internet and opened from Explorer is blocked as an
   "unrecognized app", tagged or not, signed by the trusted self-signed certificate or unsigned alike. SmartScreen
-  judges by reputation, which a self-signed certificate never has. This supports the proposal of the
-  [open question](architecture.md#open-questions) of the release certificate: a publicly trusted one. An installer
-  copied from a USB drive carries no mark of the web and isn't checked by SmartScreen.
+  judges by reputation, which a self-signed certificate never has. So a self-signed release certificate (one of the
+  three the release may use, as decided) means an installer checked with `wmanager-sign check-installer` or taken
+  from GitHub. An installer copied from a USB drive carries no mark of the web and isn't checked by SmartScreen.
 - `Import-Certificate` is refused for the Root store on this build (also as SYSTEM); `certutil -addstore` works.
 
 ## Trial 3: the computer's key in the TPM
