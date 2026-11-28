@@ -1170,4 +1170,24 @@ func TestStatesAPI(t *testing.T) {
 	if code, _ := e.api("GET", "companies/"+acme+"/state", ptok, nil); code != http.StatusOK {
 		t.Fatalf("a person reads the state: %d", code)
 	}
+
+	// The audit entries, as stored, for wmanager-sign to link.
+	var au struct {
+		Entries [][]byte `json:"entries"`
+	}
+	code, out = e.api("GET", "companies/"+acme+"/audit?after=0", ptok, nil)
+	if code != http.StatusOK || jsonv2.Unmarshal(out, &au) != nil || len(au.Entries) < 2 || !strings.Contains(string(au.Entries[0]), `"seq":1`) {
+		t.Fatalf("the audit entries: %d %s", code, out)
+	}
+	if code, out := e.api("GET", "companies/"+acme+"/audit?after=1", ptok, nil); code != http.StatusOK || strings.Contains(string(out), `"seq":1,`) {
+		t.Fatalf("the entries after 1: %d %s", code, out)
+	}
+	for _, q := range []string{"", "?after=-1", "?after=x"} {
+		if code, _ := e.api("GET", "companies/"+acme+"/audit"+q, ptok, nil); code != http.StatusBadRequest {
+			t.Errorf("audit%s: %d", q, code)
+		}
+	}
+	if code, _ := e.api("GET", "companies/"+acme+"/audit?after=0", otok, nil); code != http.StatusForbidden {
+		t.Fatalf("an outsider's audit: %d", code)
+	}
 }

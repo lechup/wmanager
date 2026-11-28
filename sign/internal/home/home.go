@@ -5,7 +5,8 @@
 //	servers/<host[_port]>/
 //	    token.json                 the sign API's token and when it ends
 //	    keys.json                  the signing keys made here: their ids, public keys and credential ids
-//	companies/<id>.json            each company's fingerprint and the whole chain it verified, under the company's
+//	companies/<id>.json            each company's fingerprint and the whole chain it verified (and its states and
+//	                               the newest audit entry seen), under the company's
 //	                               own id (the hash of its first admin list)
 //
 // The chains are what protect the administrator against a server that shows an older chain or another one: they
@@ -227,6 +228,16 @@ type Company struct {
 	// Former is the newest state seen signed by an administrator removed since: the computers that took it before
 	// the newer admin list have it, so the next state is shown against it too while it isn't older than the others.
 	Former *verify.Signed `json:"former,omitzero"`
+	// Audit is the newest entry of the company's audit log seen here: the history shown later must lead to it.
+	Audit *AuditHead `json:"audit,omitzero"`
+}
+
+// AuditHead is an entry of an audit log: its number, its hash, and the hash of the entry before, so that the
+// entry itself can be checked again when the server hands it out.
+type AuditHead struct {
+	Seq  int64    `json:"seq"`
+	Hash [32]byte `json:"hash"`
+	Prev [32]byte `json:"prev"`
 }
 
 // Serial is a state's serial, or 0 for none.
@@ -339,7 +350,7 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 	if err != nil {
 		return err
 	}
-	name, servers, state, mine, former := c.Name, maps.Clone(c.Servers), c.State, c.Mine, c.Former
+	name, servers, state, mine, former, audit := c.Name, maps.Clone(c.Servers), c.State, c.Mine, c.Former, c.Audit
 	if servers == nil {
 		servers = map[string]string{}
 	}
@@ -357,9 +368,13 @@ func (h *Home) SetCompany(c *Company, ch *verify.Chain) error {
 		}
 		// A state held is only replaced by a newer one, unless the caller drops the one signed here.
 		state, mine, former = Newer(old.State, state), Newer(old.Mine, mine), Newer(old.Former, former)
+		// The audit head seen only moves forward.
+		if old.Audit != nil && (audit == nil || audit.Seq < old.Audit.Seq) {
+			audit = old.Audit
+		}
 	}
 	return writeJSON(p, Company{Name: name, Fingerprint: verify.Fingerprint(ch.Company), Servers: servers, Chain: ch.Signed,
-		State: state, Mine: mine, Former: former})
+		State: state, Mine: mine, Former: former, Audit: audit})
 }
 
 // ForgetCompany removes a company held: only for a first list the server refused, never for a chain taken.

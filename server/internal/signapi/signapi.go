@@ -13,10 +13,12 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lechup/wmanager/server/internal/accounts"
+	"github.com/lechup/wmanager/server/internal/audit"
 	"github.com/lechup/wmanager/server/internal/auth"
 	"github.com/lechup/wmanager/server/internal/chains"
 	"github.com/lechup/wmanager/server/internal/statements"
@@ -73,6 +75,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc(jobsRoute, a.authed(a.company(a.submitJob)))
 	mux.HandleFunc(stopsRoute, a.authed(a.company(a.submitStop)))
 	mux.HandleFunc("GET "+Prefix+"companies/{company}/jobs", a.authed(a.company(a.jobs)))
+	mux.HandleFunc("GET "+Prefix+"companies/{company}/audit", a.authed(a.company(a.auditAfter)))
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusForbidden, "cross-origin request")
@@ -484,4 +487,30 @@ func (a *API) secretHashes(w http.ResponseWriter, r *http.Request, account strin
 	out(w, http.StatusOK, struct {
 		Secrets []statements.SecretHash `json:"secrets"`
 	}{hs})
+}
+
+// auditAfter is the company's audit entries after ?after=, as stored, for wmanager-sign to link from the head it
+// saw last: it checks them, not the server.
+func (a *API) auditAfter(w http.ResponseWriter, r *http.Request, account string) {
+	after, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if err != nil || after < 0 {
+		fail(w, http.StatusBadRequest, "after is the number of an entry")
+		return
+	}
+	company := r.PathValue("company")
+	if err := statements.Member(r.Context(), a.Store, account, company); err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	entries, err := audit.After(r.Context(), a.Store, store.Who{Account: account}, audit.CompanyChain(company), after)
+	if err != nil {
+		a.failErr(w, r, err)
+		return
+	}
+	if entries == nil {
+		entries = [][]byte{}
+	}
+	out(w, http.StatusOK, struct {
+		Entries [][]byte `json:"entries"`
+	}{entries})
 }

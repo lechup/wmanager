@@ -350,3 +350,12 @@ func (c *Client) Jobs(ctx context.Context, company string) ([]verify.Signed, err
 	err := c.do(ctx, http.MethodGet, companyPath(company, "jobs"), nil, &js)
 	return js.Jobs, err
 }
+
+// AuditAfter is the company's audit entries after seq, as the server stores them: wmanager-sign links them itself.
+func (c *Client) AuditAfter(ctx context.Context, company string, seq int64) ([][]byte, error) {
+	var a struct {
+		Entries [][]byte `json:"entries"`
+	}
+	err := c.do(ctx, http.MethodGet, companyPath(company, "audit")+"?after="+strconv.FormatInt(seq, 10), nil, &a)
+	return a.Entries, err
+}

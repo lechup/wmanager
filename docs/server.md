@@ -103,7 +103,8 @@ docker compose exec wmanager /usr/local/bin/wmanager-server audit verify company
 
 A head in the kit's Loki is on the same host, so it counts against a database changed by mistake or by someone
 who reached only the database; against a hack of the whole host, only a copy elsewhere counts (a Loki of its own,
-the SIEM export later, and `wmanager-sign`, which will remember the heads it saw).
+the SIEM export later, and [`wmanager-sign`](sign.md#the-audit-log), which remembers the newest entry it saw of
+each company's log and checks that the history still leads to it).
 
 ## Backup and restore
 

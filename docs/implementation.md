@@ -157,8 +157,8 @@ Short trials of what could overturn the design, each on a branch of its own. The
   - then (done) jobs and stops: the server keeps each with its script, a job's id once, a stop only for a job it
     has; `wmanager-sign` turns a job's groups into their computers from the state it verified, shows the job with
     its script whole, and makes its id and expiry; and `wmanager-sign secret set` for a secret's new value;
+  - (done) the head of each company's audit log it saw last, linked again from there each time;
   - `add-file`;
-  - the head of the audit log it saw last;
   - its messages in the ten languages;
   - a test by hand with a real security key, once there is one.
   - How each person's rights change moves to 4a, with the people in the state.

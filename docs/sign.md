@@ -3,7 +3,8 @@
 > The signer of wmanager v1 ([Architecture of v1](architecture.md#wmanager-sign)). It is being built
 > ([Implementation plan](implementation.md)): today it connects to the server, makes and registers signing keys,
 > keeps and signs each company's chain of admin lists, and signs its states, single jobs and stops, and new values
-> of its secrets. `add-file` comes next; Windows Hello in stage 2c.
+> of its secrets; it checks the companies' audit logs from the newest entry it saw. `add-file` comes next; Windows
+> Hello in stage 2c.
 
 `wmanager-sign` runs on the administrator's own computer, never on the server. A server, even a hacked one, can't
 make it sign anything it didn't show, and can't make it take an admin list that doesn't follow the one it holds.
@@ -155,6 +156,13 @@ The script (2 lines):
   wmanager-sign secret set Acme wifi-office
   ```
 
+## The audit log
+
+Each time `wmanager-sign` lists your companies, it reads the entries of each company's audit log added since it
+looked last and links them itself, from the newest entry it saw (which it checks again first). When the history
+the server shows no longer leads to that entry (changed, or restored from an older backup), it says so, and keeps
+the entry it saw. This is a head of the audit log kept off the server, next to the ones in Loki.
+
 ## What it refuses
 
 - **A chain that doesn't start with the one it holds**, whatever id the server lists the company under. A server
@@ -177,7 +185,7 @@ In a folder only you can open: `$WMANAGER_SIGN_HOME`, or `~/.config/wmanager-sig
 | `server` | the server connected last |
 | `servers/<host>[_<port>]/token.json` | the connection's token, until it ends |
 | `servers/<host>[_<port>]/keys.json` | the signing keys made here: their public keys and credential ids |
-| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, and one signed by an administrator removed since |
+| `companies/<id>.json` | each company's fingerprint, the whole chain it checked, the name it had when it was taken, the id each server gives it, the newest state it checked, the newest it signed, one signed by an administrator removed since, and the newest audit entry it saw |
 
 A company is kept under its own id (the hash of its first admin list), not under the id a server gives it: a
 server that lists it again under a new id meets the chain held. Commands find a company by the name it had when it

@@ -41,6 +41,7 @@ type person struct {
 	// rewriteState changes its answers to GET .../state, rewriteFile those to GET .../files/.
 	rewriteState func(st **verify.Signed, reported *int64)
 	rewriteFile  func(content []byte) []byte
+	rewriteAudit func(after string, entries [][]byte) [][]byte
 	alias        [2]string
 	// lose loses the server's answers to POSTs, after the server has them; drop loses the POSTs themselves.
 	lose, drop bool
@@ -120,6 +121,18 @@ func (l lying) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 		l.p.rewriteState(&st.State, &st.Reported)
 		out = st
+	case l.p.rewriteAudit != nil && strings.HasSuffix(r.URL.Path, "/audit"):
+		var au struct {
+			Entries [][]byte `json:"entries"`
+		}
+		if err := json.UnmarshalRead(resp.Body, &au); err != nil {
+			return nil, err
+		}
+		au.Entries = l.p.rewriteAudit(r.URL.Query().Get("after"), au.Entries)
+		if au.Entries == nil {
+			au.Entries = [][]byte{}
+		}
+		out = au
 	case l.p.rewriteFile != nil && strings.Contains(r.URL.Path, "/files/"):
 		var f struct {
 			Content []byte `json:"content"`
