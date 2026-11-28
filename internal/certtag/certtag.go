@@ -8,35 +8,37 @@
 //
 // After Omaha's https://github.com/google/omaha/blob/main/common/certificate_tag/certificate_tag.go
 // (Copyright 2015 Google Inc., Apache License 2.0), keeping only PE files and the superfluous certificate.
-// Changes: an OID of our own; the signature's structure kept byte for byte, its certificates in their own order
+// Changes: an OID of our own (2.25, from a UUID; the tag certificate written by hand for it); the signature's structure kept byte for byte, its certificates in their own order
 // (Omaha re-encodes them, which sorts them); stricter checks of the PE headers; no appended data, which the
 // padding check refuses; and a strict reader for the agent.
 package certtag
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/big"
 	"time"
 
 	"golang.org/x/crypto/cryptobyte"
 	cbasn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
 
-// OID is the extension that holds the tag.
-//
-// For the trials it is under 1.3.6.1.4.1.32473, the enterprise number set aside for examples (RFC 5612). Before
-// installers are made for real computers (stage 3) it moves to an enterprise number of wmanager's own, registered
-// with IANA (free). Go's encoding/asn1 can't hold the 128-bit component of a UUID-based OID (2.25), so that way is
-// closed.
-var OID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1}
+// OID is the extension that holds the tag: 2.25.158821274951320701755001128286401276726, the UUID
+// 777bdd6b-9f8e-49e7-bef7-ffca86332b36 as an OID (ITU-T X.667), which needs no registration. Go's crypto/x509
+// can't hold its 128-bit arc, so the tag certificate is written and read here with cryptobyte, and the OID is kept
+// as its DER content.
+const OID = "2.25.158821274951320701755001128286401276726"
+
+// oidDER is OID's DER content (without its tag and length).
+var oidDER = []byte{0x69, 0x81, 0xee, 0xfb, 0xee, 0xda, 0xf3, 0xf8, 0xf2, 0xa7, 0xcf, 0xbe, 0xfb, 0xff, 0xf9, 0xa8, 0xb1,
+	0xcc, 0xd6, 0x36}
 
 // MaxTag is the largest tag accepted, well above a company's admin chain.
 const MaxTag = 1 << 20
@@ -136,52 +138,134 @@ func allZero(b []byte) bool {
 	return true
 }
 
-// tagExtension returns the value of the tag extension of a certificate, if it has one.
+var errCert = errors.New("certtag: a certificate of the signature is malformed")
+
+// tagExtension returns the value of the tag extension of a certificate, if it has one. The certificate is read with
+// cryptobyte, as far as its extensions: crypto/x509 refuses the tag's OID.
 func tagExtension(der []byte) ([]byte, bool, error) {
-	c, err := x509.ParseCertificate(der)
-	if err != nil {
-		return nil, false, fmt.Errorf("certtag: a certificate of the signature: %w", err)
+	in := cryptobyte.String(der)
+	var cert, tbs cryptobyte.String
+	if !in.ReadASN1(&cert, cbasn1.SEQUENCE) || !in.Empty() || !cert.ReadASN1(&tbs, cbasn1.SEQUENCE) {
+		return nil, false, errCert
 	}
-	for _, ext := range c.Extensions {
-		if ext.Id.Equal(OID) {
-			if ext.Critical {
-				return nil, false, errors.New("certtag: the tag extension is marked critical")
-			}
-			return ext.Value, true, nil
+	if !tbs.SkipOptionalASN1(cbasn1.Tag(0).Constructed().ContextSpecific()) || // version
+		!tbs.SkipASN1(cbasn1.INTEGER) || // serial number
+		!tbs.SkipASN1(cbasn1.SEQUENCE) || // signature algorithm
+		!tbs.SkipASN1(cbasn1.SEQUENCE) || // issuer
+		!tbs.SkipASN1(cbasn1.SEQUENCE) || // validity
+		!tbs.SkipASN1(cbasn1.SEQUENCE) || // subject
+		!tbs.SkipASN1(cbasn1.SEQUENCE) || // subject public key info
+		!tbs.SkipOptionalASN1(cbasn1.Tag(1).ContextSpecific()) || // issuer unique id
+		!tbs.SkipOptionalASN1(cbasn1.Tag(2).ContextSpecific()) { // subject unique id
+		return nil, false, errCert
+	}
+	var exts cryptobyte.String
+	var has bool
+	if !tbs.ReadOptionalASN1(&exts, &has, cbasn1.Tag(3).Constructed().ContextSpecific()) {
+		return nil, false, errCert
+	}
+	if !has {
+		return nil, false, nil
+	}
+	var list cryptobyte.String
+	if !exts.ReadASN1(&list, cbasn1.SEQUENCE) || !exts.Empty() {
+		return nil, false, errCert
+	}
+	var value []byte
+	found := false
+	for !list.Empty() {
+		var ext, oid, val cryptobyte.String
+		var critical bool
+		if !list.ReadASN1(&ext, cbasn1.SEQUENCE) || !ext.ReadASN1(&oid, cbasn1.OBJECT_IDENTIFIER) ||
+			!ext.ReadOptionalASN1Boolean(&critical, cbasn1.BOOLEAN, false) || !ext.ReadASN1(&val, cbasn1.OCTET_STRING) ||
+			!ext.Empty() {
+			return nil, false, errCert
 		}
+		if !bytes.Equal(oid, oidDER) {
+			continue
+		}
+		if critical {
+			return nil, false, errors.New("certtag: the tag extension is marked critical")
+		}
+		if found {
+			return nil, false, errors.New("certtag: the tag extension twice")
+		}
+		found, value = true, append([]byte(nil), val...)
 	}
-	return nil, false, nil
+	return value, found, nil
 }
 
-// tagCertificate makes the extra certificate. It is expired and its issuer doesn't exist, so it can't be used for
-// anything; Windows doesn't look at it when it checks the signature.
+var (
+	oidCommonName = asn1.ObjectIdentifier{2, 5, 4, 3}
+	oidSHA256RSA  = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
+)
+
+func addName(b *cryptobyte.Builder, cn string) {
+	b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+		b.AddASN1(cbasn1.SET, func(b *cryptobyte.Builder) {
+			b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+				b.AddASN1ObjectIdentifier(oidCommonName)
+				b.AddASN1(cbasn1.UTF8String, func(b *cryptobyte.Builder) { b.AddBytes([]byte(cn)) })
+			})
+		})
+	})
+}
+
+func addSHA256RSA(b *cryptobyte.Builder) {
+	b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+		b.AddASN1ObjectIdentifier(oidSHA256RSA)
+		b.AddASN1NULL()
+	})
+}
+
+// tagCertificate makes the extra certificate, written by hand for its OID. It is expired and its issuer doesn't
+// exist, so it can't be used for anything; Windows doesn't look at it when it checks the signature.
 func tagCertificate(tag []byte) ([]byte, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
 	}
-	notBefore := time.Date(2013, 1, 1, 10, 0, 0, 0, time.UTC)
-	notAfter := time.Date(2013, 4, 1, 10, 0, 0, 0, time.UTC)
-	issuer := x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Unknown issuer"},
-		NotBefore:             notBefore,
-		NotAfter:              notAfter,
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
+	spki, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		return nil, err
 	}
-	template := x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "wmanager tag"},
-		NotBefore:             notBefore,
-		NotAfter:              notAfter,
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		BasicConstraintsValid: true,
-		SignatureAlgorithm:    x509.SHA256WithRSA,
-		ExtraExtensions:       []pkix.Extension{{Id: OID, Value: tag}},
+	var tb cryptobyte.Builder
+	tb.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+		b.AddASN1(cbasn1.Tag(0).Constructed().ContextSpecific(), func(b *cryptobyte.Builder) { b.AddASN1Int64(2) }) // v3
+		b.AddASN1Int64(1)
+		addSHA256RSA(b)
+		addName(b, "Unknown issuer")
+		b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+			b.AddASN1UTCTime(time.Date(2013, 1, 1, 10, 0, 0, 0, time.UTC))
+			b.AddASN1UTCTime(time.Date(2013, 4, 1, 10, 0, 0, 0, time.UTC))
+		})
+		addName(b, "wmanager tag")
+		b.AddBytes(spki)
+		b.AddASN1(cbasn1.Tag(3).Constructed().ContextSpecific(), func(b *cryptobyte.Builder) {
+			b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+				b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+					b.AddASN1(cbasn1.OBJECT_IDENTIFIER, func(b *cryptobyte.Builder) { b.AddBytes(oidDER) })
+					b.AddASN1OctetString(tag)
+				})
+			})
+		})
+	})
+	tbs, err := tb.Bytes()
+	if err != nil {
+		return nil, err
 	}
-	return x509.CreateCertificate(rand.Reader, &template, &issuer, &key.PublicKey, key)
+	h := sha256.Sum256(tbs)
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, h[:])
+	if err != nil {
+		return nil, err
+	}
+	var cb cryptobyte.Builder
+	cb.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
+		b.AddBytes(tbs)
+		addSHA256RSA(b)
+		b.AddASN1BitString(sig)
+	})
+	return cb.Bytes()
 }
 
 // signedData is a PKCS#7 ContentInfo with SignedData (RFC 2315), its parts kept as the exact bytes they were,

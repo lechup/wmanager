@@ -291,3 +291,47 @@ func FuzzGetSet(f *testing.F) {
 		}
 	})
 }
+
+// The OID's DER content is the OID: 2.25 and the UUID's 128 bits, in base 128.
+func TestOID(t *testing.T) {
+	n := new(big.Int)
+	if oidDER[0] != 2*40+25 {
+		t.Fatalf("the first arcs: %d", oidDER[0])
+	}
+	for i, c := range oidDER[1:] {
+		n.Lsh(n, 7).Or(n, big.NewInt(int64(c&0x7f)))
+		if last := i == len(oidDER)-2; (c&0x80 == 0) != last {
+			t.Fatalf("byte %d of the arc: %#x", i, c)
+		}
+	}
+	if want := strings.TrimPrefix(OID, "2.25."); n.String() != want {
+		t.Fatalf("the arc is %s, OID says %s", n, want)
+	}
+	u, _ := new(big.Int).SetString("777bdd6b9f8e49e7bef7ffca86332b36", 16)
+	if n.Cmp(u) != 0 {
+		t.Fatal("the arc isn't the UUID")
+	}
+}
+
+// The tag certificate is read back, a certificate with other extensions isn't taken for one, and crypto/x509
+// can't read it (which is why it is written by hand).
+func TestTagCertificate(t *testing.T) {
+	der, err := tagCertificate([]byte("the chain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, ok, err := tagExtension(der)
+	if err != nil || !ok || string(v) != "the chain" {
+		t.Fatalf("read back: %q %v %v", v, ok, err)
+	}
+	if _, err := x509.ParseCertificate(der); err == nil {
+		t.Log("crypto/x509 reads the tag certificate now: it could write it too")
+	}
+	other := unsorted(t)[0]
+	if _, ok, err := tagExtension(other); err != nil || ok {
+		t.Fatalf("an ordinary certificate: %v %v", ok, err)
+	}
+	if _, _, err := tagExtension(der[:len(der)-1]); err == nil {
+		t.Fatal("a cut certificate")
+	}
+}

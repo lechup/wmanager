@@ -756,12 +756,12 @@ Each will be asked before the stage it belongs to. The first option is the propo
 
 | Question | Options |
 | --- | --- |
-| The release certificate (stage 3) | publicly trusted (a paid certificate or signing service): Windows shows the name on the certificate, so a false installer stands out / self-signed: free, but Windows warns about an unknown publisher at every install, so a new computer is safe only with an exe checked in `wmanager-sign check-installer` or taken from GitHub |
+| The release certificate (stage 3) | decided (2026-11-28): all three are supported, the one who builds a release chooses: a signing service (e.g. Azure Trusted Signing), a bought OV or EV certificate, or a self-signed one. A publicly trusted one makes Windows show the publisher's name, so a false installer stands out; with a self-signed one Windows warns about an unknown publisher at every install, so a new computer is safe only with an exe checked in `wmanager-sign check-installer` or taken from GitHub |
 | Where releases are signed (stage 6) | by the maintainer, after checking that the CI build is reproducible / in CI, with the key or a signing service reached from GitHub |
 | Automatic updates (stage 6) | an administrator signs each version (a reminder when one comes out) / a signed rule "follow the releases, N days after the pilot group", which lets the release key reach the computers alone |
-| New computers (stage 3) | a new computer gets the content of the default groups (`Default`) until a signed state lists it / it gets nothing until then |
+| New computers (stage 3) | decided (2026-11-28): a new computer gets the content of the default groups (`Default`), all of it signed already, until a signed state lists it |
 | Logs (stage 4) | through the server / straight to Loki as today |
-| Signing keys (stage 2) | trust what the key reports (*backup eligible*) / also check its attestation against a list of allowed models, which keeps out passkey managers that lie about it but needs that list kept up to date |
+| Signing keys (stage 2) | done in stage 2 as the proposal: trust what the key reports (*backup eligible*). Checking its attestation against a list of allowed models, which keeps out passkey managers that lie about it but needs that list kept up to date, can come later |
 
 ## License
 
